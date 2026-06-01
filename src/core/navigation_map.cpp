@@ -426,6 +426,36 @@ bool NavigationMap::stairCellsSlopeCompatible(const GridIndex & from, const Grid
   return true;
 }
 
+bool NavigationMap::isStairSegmentBridgeAllowed(const GridIndex & from, const GridIndex & to) const
+{
+  if (!isStairTraversable(from) || !isStairTraversable(to) || from.z == to.z) {
+    return false;
+  }
+
+  double from_x = 0.0;
+  double from_y = 0.0;
+  double to_x = 0.0;
+  double to_y = 0.0;
+  if (!stairSlope(from, from_x, from_y) || !stairSlope(to, to_x, to_y)) {
+    return false;
+  }
+  if (from_x * to_x + from_y * to_y < 0.20) {
+    return false;
+  }
+
+  const double move_x = static_cast<double>(to.x - from.x);
+  const double move_y = static_cast<double>(to.y - from.y);
+  const double move_norm = std::hypot(move_x, move_y);
+  if (move_norm <= 1.0e-9) {
+    return false;
+  }
+
+  const double direction = to.z > from.z ? 1.0 : -1.0;
+  const double align =
+    direction * (move_x / move_norm * from_x + move_y / move_norm * from_y);
+  return align >= 0.45;
+}
+
 bool NavigationMap::stairSideDirection(const GridIndex & idx, int & side_dx, int & side_dy) const
 {
   side_dx = 0;
@@ -706,7 +736,7 @@ bool NavigationMap::isStairTransitionAllowed(const GridIndex & from, const GridI
   const int from_segment = stairSegmentId(from);
   const int to_segment = stairSegmentId(to);
   if (from_segment >= 0 && to_segment >= 0) {
-    return from_segment == to_segment;
+    return from_segment == to_segment || isStairSegmentBridgeAllowed(from, to);
   }
 
   int from_axis_x = 0;
