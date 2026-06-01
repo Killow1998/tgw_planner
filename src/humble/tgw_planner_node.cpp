@@ -93,6 +93,8 @@ public:
       "/nav_map/occupied_cloud", latched_qos);
     traversable_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/nav_map/traversable_cloud", latched_qos);
+    forbidden_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/forbidden_cloud", latched_qos);
     blocked_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/nav_map/blocked_cloud", latched_qos);
     risk_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -180,6 +182,8 @@ private:
     RCLCPP_INFO(
       get_logger(), "[NavMapBuilder] accepted_stair_cells: %zu",
       map_.acceptedStairCells().size());
+    RCLCPP_INFO(
+      get_logger(), "[NavMapBuilder] forbidden_cells: %zu", map_.forbiddenCells().size());
     RCLCPP_INFO(
       get_logger(), "[NavMapBuilder] rejected_ceiling_cells: %zu",
       map_.rejectedCeilingCells().size());
@@ -481,6 +485,7 @@ private:
     publishCellSetMarker(map_.blockedCells(), blocked_marker_pub_, "blocked", 0.95F, 0.1F, 0.1F, 0.8F);
     publishCellSetCloud(map_.occupiedCells(), occupied_cloud_pub_, 1.0F);
     publishCellSetCloud(map_.traversableCells(), traversable_cloud_pub_, 2.0F);
+    publishCellSetCloud(map_.forbiddenCells(), forbidden_cloud_pub_, 3.0F);
     publishCellSetCloud(map_.blockedCells(), blocked_cloud_pub_, 3.0F);
     publishCellSetCloud(map_.surfaceCandidateCells(), surface_candidates_cloud_pub_, 4.0F);
     publishCellSetCloud(map_.acceptedFloorCells(), accepted_floor_cloud_pub_, 5.0F);
@@ -662,6 +667,7 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr blocked_marker_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr occupied_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr traversable_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr forbidden_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr blocked_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr risk_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr surface_candidates_cloud_pub_;

@@ -141,6 +141,7 @@ public:
 
   const std::unordered_set<GridIndex, GridIndexHash> & occupiedCells() const;
   const std::unordered_set<GridIndex, GridIndexHash> & traversableCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & forbiddenCells() const;
   const std::unordered_set<GridIndex, GridIndexHash> & surfaceCandidateCells() const;
   const std::unordered_set<GridIndex, GridIndexHash> & acceptedFloorCells() const;
   const std::unordered_set<GridIndex, GridIndexHash> & acceptedStairCells() const;
@@ -172,6 +173,7 @@ private:
   std::shared_ptr<octomap::OcTree> octree_;
   std::unordered_set<GridIndex, GridIndexHash> occupied_cells_;
   std::unordered_set<GridIndex, GridIndexHash> traversable_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> forbidden_cells_;
   std::unordered_set<GridIndex, GridIndexHash> surface_candidate_cells_;
   std::unordered_set<GridIndex, GridIndexHash> accepted_floor_cells_;
   std::unordered_set<GridIndex, GridIndexHash> accepted_stair_cells_;

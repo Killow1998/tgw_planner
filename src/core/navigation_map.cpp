@@ -69,6 +69,7 @@ bool NavigationMap::loadFromPcd(
 
   occupied_cells_.clear();
   traversable_cells_.clear();
+  forbidden_cells_.clear();
   surface_candidate_cells_.clear();
   accepted_floor_cells_.clear();
   accepted_stair_cells_.clear();
@@ -386,6 +387,7 @@ int NavigationMap::maxStepCells() const
 void NavigationMap::rebuildTraversableLayer()
 {
   traversable_cells_.clear();
+  forbidden_cells_.clear();
   surface_candidate_cells_.clear();
   accepted_floor_cells_.clear();
   accepted_stair_cells_.clear();
@@ -404,6 +406,7 @@ void NavigationMap::rebuildTraversableLayer()
     std::max(1, static_cast<int>(std::ceil(0.30 / resolution_m_)));
 
   auto reject_candidate = [&](const GridIndex & idx, SurfaceRejectReason reason) {
+    forbidden_cells_.insert(idx);
     if (reason == SurfaceRejectReason::Clearance) {
       rejected_clearance_cells_.insert(idx);
     } else if (reason == SurfaceRejectReason::Collision) {
@@ -608,10 +611,16 @@ void NavigationMap::rebuildTraversableLayer()
       } else if (kind == SurfaceKind::CeilingLike) {
         candidate.reject_reason = SurfaceRejectReason::CeilingLike;
         rejected_ceiling_cells_.insert(candidate.stand);
+        forbidden_cells_.insert(candidate.stand);
       } else {
         candidate.reject_reason = SurfaceRejectReason::Noise;
+        forbidden_cells_.insert(candidate.stand);
       }
     }
+  }
+
+  for (const auto & blocked : blocked_cells_) {
+    forbidden_cells_.insert(blocked);
   }
 }
 
@@ -737,6 +746,11 @@ const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::occupiedCell
 const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::traversableCells() const
 {
   return traversable_cells_;
+}
+
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::forbiddenCells() const
+{
+  return forbidden_cells_;
 }
 
 const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::surfaceCandidateCells() const
