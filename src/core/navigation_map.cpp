@@ -69,8 +69,15 @@ bool NavigationMap::loadFromPcd(
 
   occupied_cells_.clear();
   traversable_cells_.clear();
+  surface_candidate_cells_.clear();
+  accepted_floor_cells_.clear();
+  accepted_stair_cells_.clear();
+  rejected_ceiling_cells_.clear();
+  rejected_clearance_cells_.clear();
+  rejected_collision_cells_.clear();
   blocked_cells_.clear();
   risk_cost_.clear();
+  columns_.clear();
   has_bounds_ = false;
   ready_ = false;
   octree_ = std::make_shared<octomap::OcTree>(resolution_m_);
@@ -82,6 +89,7 @@ bool NavigationMap::loadFromPcd(
       updateGridBounds(idx);
     }
   }
+  buildColumns();
 
   for (const auto & idx : occupied_cells_) {
     const Point3 center = gridToWorld(idx);
@@ -181,6 +189,42 @@ bool NavigationMap::saveToMapPackage(
   return true;
 }
 
+void NavigationMap::buildColumns()
+{
+  columns_.clear();
+  columns_.reserve(occupied_cells_.size() / 4U);
+
+  std::unordered_map<XYIndex, std::vector<int>, XYIndexHash> z_by_column;
+  z_by_column.reserve(occupied_cells_.size() / 4U);
+  for (const auto & cell : occupied_cells_) {
+    z_by_column[{cell.x, cell.y}].push_back(cell.z);
+  }
+
+  for (auto & entry : z_by_column) {
+    auto & z_values = entry.second;
+    std::sort(z_values.begin(), z_values.end());
+    z_values.erase(std::unique(z_values.begin(), z_values.end()), z_values.end());
+    if (z_values.empty()) {
+      continue;
+    }
+
+    ColumnInfo column;
+    column.xy = entry.first;
+    ZRun current{z_values.front(), z_values.front()};
+    for (std::size_t i = 1; i < z_values.size(); ++i) {
+      const int z = z_values[i];
+      if (z == current.z_max + 1) {
+        current.z_max = z;
+        continue;
+      }
+      column.occupied_runs.push_back(current);
+      current = {z, z};
+    }
+    column.occupied_runs.push_back(current);
+    columns_[entry.first] = std::move(column);
+  }
+}
+
 GridIndex NavigationMap::worldToGrid(const Point3 & point) const
 {
   return {
@@ -230,6 +274,53 @@ bool NavigationMap::isInsideHorizontalRadius(int dx, int dy, int radius_cells) c
   return distance <= robot_radius_m_ + 1.0e-9;
 }
 
+const ColumnInfo * NavigationMap::findColumn(int x, int y) const
+{
+  const auto it = columns_.find({x, y});
+  return it == columns_.end() ? nullptr : &it->second;
+}
+
+bool NavigationMap::hasHeadClearanceInColumn(const GridIndex & idx, int height_cells) const
+{
+  const ColumnInfo * column = findColumn(idx.x, idx.y);
+  if (!column) {
+    return true;
+  }
+
+  const int z_min = idx.z;
+  const int z_max = idx.z + height_cells;
+  for (const auto & run : column->occupied_runs) {
+    if (run.z_max < z_min) {
+      continue;
+    }
+    if (run.z_min > z_max) {
+      return true;
+    }
+    return false;
+  }
+  return true;
+}
+
+int NavigationMap::overheadDistanceCells(
+  const GridIndex & idx, int height_cells, bool & overhead_known) const
+{
+  overhead_known = false;
+  const ColumnInfo * column = findColumn(idx.x, idx.y);
+  if (!column) {
+    return 0;
+  }
+
+  const int head_top_z = idx.z + height_cells;
+  for (const auto & run : column->occupied_runs) {
+    if (run.z_max <= head_top_z) {
+      continue;
+    }
+    overhead_known = true;
+    return std::max(0, run.z_min - head_top_z - 1);
+  }
+  return 0;
+}
+
 bool NavigationMap::isCollisionFreeForRobot(const GridIndex & idx) const
 {
   const int radius_cells = std::max(1, static_cast<int>(std::ceil(robot_radius_m_ / resolution_m_)));
@@ -268,116 +359,257 @@ bool NavigationMap::isTraversable(const GridIndex & idx) const
   return traversable_cells_.find(idx) != traversable_cells_.end() && !isBlocked(idx);
 }
 
+bool NavigationMap::isStairTraversable(const GridIndex & idx) const
+{
+  return accepted_stair_cells_.find(idx) != accepted_stair_cells_.end() && !isBlocked(idx);
+}
+
+bool NavigationMap::hasContinuousSupport(const GridIndex & idx) const
+{
+  int support_count = 0;
+  for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      if (isOccupied({idx.x + dx, idx.y + dy, idx.z - 1})) {
+        ++support_count;
+      }
+    }
+  }
+  return support_count >= 3;
+}
+
+int NavigationMap::maxStepCells() const
+{
+  const double max_step_height_m = std::max(0.25, 0.5 * robot_radius_m_);
+  return std::max(1, static_cast<int>(std::ceil(max_step_height_m / resolution_m_)));
+}
+
 void NavigationMap::rebuildTraversableLayer()
 {
   traversable_cells_.clear();
-  traversable_cells_.reserve(occupied_cells_.size() / 4U);
-  std::unordered_set<GridIndex, GridIndexHash> candidates;
-  candidates.reserve(occupied_cells_.size() / 4U);
-  int min_candidate_z = std::numeric_limits<int>::max();
+  surface_candidate_cells_.clear();
+  accepted_floor_cells_.clear();
+  accepted_stair_cells_.clear();
+  rejected_ceiling_cells_.clear();
+  rejected_clearance_cells_.clear();
+  rejected_collision_cells_.clear();
 
-  for (const auto & support : occupied_cells_) {
-    const GridIndex candidate{support.x, support.y, support.z + 1};
-    if (!isInsideBounds(candidate) || isOccupied(candidate) || isBlocked(candidate)) {
-      continue;
+  std::vector<SurfaceCandidate> candidates;
+  candidates.reserve(columns_.size() * 2U);
+  std::unordered_map<GridIndex, std::size_t, GridIndexHash> candidate_index;
+  candidate_index.reserve(columns_.size() * 2U);
+
+  const int height_cells =
+    std::max(1, static_cast<int>(std::ceil(robot_height_m_ / resolution_m_)));
+  const int min_overhead_cells =
+    std::max(1, static_cast<int>(std::ceil(0.30 / resolution_m_)));
+
+  auto reject_candidate = [&](const GridIndex & idx, SurfaceRejectReason reason) {
+    if (reason == SurfaceRejectReason::Clearance) {
+      rejected_clearance_cells_.insert(idx);
+    } else if (reason == SurfaceRejectReason::Collision) {
+      rejected_collision_cells_.insert(idx);
+    } else if (reason == SurfaceRejectReason::CeilingLike) {
+      rejected_ceiling_cells_.insert(idx);
     }
-    if (!hasGroundSupport(candidate) || !isCollisionFreeForRobot(candidate)) {
-      continue;
+  };
+
+  for (const auto & entry : columns_) {
+    const ColumnInfo & column = entry.second;
+    for (const auto & run : column.occupied_runs) {
+      SurfaceCandidate candidate;
+      candidate.stand = {column.xy.x, column.xy.y, run.z_max + 1};
+      candidate.support_z_min = run.z_min;
+      candidate.support_z_max = run.z_max;
+      bool overhead_known = false;
+      candidate.overhead_distance_cells =
+        overheadDistanceCells(candidate.stand, height_cells, overhead_known);
+      candidate.overhead_known = overhead_known;
+      candidate.overhead_clear =
+        overhead_known && candidate.overhead_distance_cells >= min_overhead_cells;
+      surface_candidate_cells_.insert(candidate.stand);
+
+      if (!isInsideBounds(candidate.stand) || isOccupied(candidate.stand) ||
+        isBlocked(candidate.stand))
+      {
+        candidate.reject_reason = SurfaceRejectReason::Collision;
+        reject_candidate(candidate.stand, candidate.reject_reason);
+        continue;
+      }
+      if (!hasHeadClearanceInColumn(candidate.stand, height_cells)) {
+        candidate.reject_reason = SurfaceRejectReason::Clearance;
+        reject_candidate(candidate.stand, candidate.reject_reason);
+        continue;
+      }
+      if (!isCollisionFreeForRobot(candidate.stand)) {
+        candidate.reject_reason = SurfaceRejectReason::Collision;
+        reject_candidate(candidate.stand, candidate.reject_reason);
+        continue;
+      }
+
+      const std::size_t index = candidates.size();
+      candidate_index[candidate.stand] = index;
+      candidates.push_back(candidate);
     }
-    candidates.insert(candidate);
-    min_candidate_z = std::min(min_candidate_z, candidate.z);
   }
 
   if (candidates.empty()) {
     return;
   }
 
-  const int seed_band_cells = std::max(1, static_cast<int>(std::ceil(0.6 / resolution_m_)));
-  const int max_step_cells = std::max(1, static_cast<int>(std::ceil(0.45 / resolution_m_)));
-  std::deque<GridIndex> queue;
-  for (const auto & candidate : candidates) {
-    if (candidate.z <= min_candidate_z + seed_band_cells) {
-      traversable_cells_.insert(candidate);
-      queue.push_back(candidate);
-    }
-  }
+  const int max_step_cells = maxStepCells();
+  const int flat_z_range_cells =
+    std::max(1, static_cast<int>(std::ceil(0.25 / resolution_m_)));
+  const std::size_t min_flat_component_size = 25U;
+  const std::size_t min_stair_component_size = 12U;
+  const double min_floor_overhead_ratio = 0.55;
+  const double min_stair_overhead_ratio = 0.35;
 
-  while (!queue.empty()) {
-    const GridIndex current = queue.front();
-    queue.pop_front();
-
-    for (int dx = -1; dx <= 1; ++dx) {
-      for (int dy = -1; dy <= 1; ++dy) {
-        for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
-          if (dx == 0 && dy == 0 && dz == 0) {
-            continue;
-          }
-          const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
-          if (candidates.find(neighbor) == candidates.end()) {
-            continue;
-          }
-          if (traversable_cells_.find(neighbor) != traversable_cells_.end()) {
-            continue;
-          }
-          traversable_cells_.insert(neighbor);
-          queue.push_back(neighbor);
-        }
-      }
-    }
-  }
-
-  if (traversable_cells_.empty()) {
-    for (const auto & candidate : candidates) {
-      traversable_cells_.insert(candidate);
-    }
-    return;
-  }
-
-  const std::size_t min_component_size = 20U;
-  std::unordered_set<GridIndex, GridIndexHash> visited = traversable_cells_;
-  for (const auto & seed : candidates) {
-    if (visited.find(seed) != visited.end()) {
+  std::vector<std::vector<std::size_t>> components;
+  std::vector<bool> visited(candidates.size(), false);
+  for (std::size_t seed = 0; seed < candidates.size(); ++seed) {
+    if (visited[seed]) {
       continue;
     }
 
-    std::vector<GridIndex> component;
-    std::deque<GridIndex> component_queue;
-    visited.insert(seed);
-    component_queue.push_back(seed);
-    while (!component_queue.empty()) {
-      const GridIndex current = component_queue.front();
-      component_queue.pop_front();
-      component.push_back(current);
+    std::vector<std::size_t> component;
+    std::deque<std::size_t> queue;
+    visited[seed] = true;
+    queue.push_back(seed);
+    while (!queue.empty()) {
+      const std::size_t current_index = queue.front();
+      queue.pop_front();
+      component.push_back(current_index);
+      const GridIndex current = candidates[current_index].stand;
 
       for (int dx = -1; dx <= 1; ++dx) {
         for (int dy = -1; dy <= 1; ++dy) {
+          if (dx == 0 && dy == 0) {
+            continue;
+          }
           for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
-            if (dx == 0 && dy == 0 && dz == 0) {
-              continue;
-            }
             const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
-            if (candidates.find(neighbor) == candidates.end() ||
-              visited.find(neighbor) != visited.end())
-            {
+            const auto neighbor_it = candidate_index.find(neighbor);
+            if (neighbor_it == candidate_index.end() || visited[neighbor_it->second]) {
               continue;
             }
-            visited.insert(neighbor);
-            component_queue.push_back(neighbor);
+            visited[neighbor_it->second] = true;
+            queue.push_back(neighbor_it->second);
+          }
+        }
+      }
+    }
+    components.push_back(std::move(component));
+  }
+
+  std::vector<SurfaceKind> component_kind(components.size(), SurfaceKind::Unknown);
+  for (std::size_t component_id = 0; component_id < components.size(); ++component_id) {
+    const auto & component = components[component_id];
+    int z_min = std::numeric_limits<int>::max();
+    int z_max = std::numeric_limits<int>::min();
+    std::size_t overhead_clear_count = 0U;
+    std::unordered_map<int, std::size_t> z_histogram;
+    z_histogram.reserve(component.size());
+
+    for (const std::size_t index : component) {
+      const auto & candidate = candidates[index];
+      z_min = std::min(z_min, candidate.stand.z);
+      z_max = std::max(z_max, candidate.stand.z);
+      if (candidate.overhead_clear) {
+        ++overhead_clear_count;
+      }
+      ++z_histogram[candidate.stand.z];
+    }
+
+    const int z_range = z_max - z_min;
+    const double overhead_ratio =
+      static_cast<double>(overhead_clear_count) / static_cast<double>(component.size());
+    std::size_t largest_z_slice = 0U;
+    for (const auto & z_entry : z_histogram) {
+      largest_z_slice = std::max(largest_z_slice, z_entry.second);
+    }
+    const bool has_landing =
+      largest_z_slice >= std::max<std::size_t>(8U, component.size() / 5U);
+
+    SurfaceKind kind = SurfaceKind::Noise;
+    if (component.size() >= min_flat_component_size && z_range <= flat_z_range_cells) {
+      kind = overhead_ratio >= min_floor_overhead_ratio ?
+        SurfaceKind::Floor : SurfaceKind::CeilingLike;
+    } else if (
+      component.size() >= min_stair_component_size && z_range > flat_z_range_cells &&
+      overhead_ratio >= min_stair_overhead_ratio && has_landing)
+    {
+      kind = SurfaceKind::Stair;
+    }
+    component_kind[component_id] = kind;
+  }
+
+  for (std::size_t component_id = 0; component_id < components.size(); ++component_id) {
+    if (component_kind[component_id] != SurfaceKind::Floor) {
+      continue;
+    }
+    for (const std::size_t index : components[component_id]) {
+      accepted_floor_cells_.insert(candidates[index].stand);
+    }
+  }
+
+  for (std::size_t component_id = 0; component_id < components.size(); ++component_id) {
+    if (component_kind[component_id] != SurfaceKind::Stair) {
+      continue;
+    }
+
+    bool touches_floor = false;
+    for (const std::size_t index : components[component_id]) {
+      const GridIndex current = candidates[index].stand;
+      for (int dx = -1; dx <= 1 && !touches_floor; ++dx) {
+        for (int dy = -1; dy <= 1 && !touches_floor; ++dy) {
+          if (dx == 0 && dy == 0) {
+            continue;
+          }
+          for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
+            const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
+            if (accepted_floor_cells_.find(neighbor) != accepted_floor_cells_.end()) {
+              touches_floor = true;
+              break;
+            }
           }
         }
       }
     }
 
-    if (component.size() >= min_component_size) {
-      const auto minmax_z = std::minmax_element(
-        component.begin(), component.end(),
-        [](const GridIndex & lhs, const GridIndex & rhs) {return lhs.z < rhs.z;});
-      const int component_height_cells = minmax_z.second->z - minmax_z.first->z;
-      if (component_height_cells >= max_step_cells * 2) {
-        for (const auto & idx : component) {
-          traversable_cells_.insert(idx);
+    if (!touches_floor) {
+      bool has_internal_landing = false;
+      std::unordered_map<int, std::size_t> z_histogram;
+      for (const std::size_t index : components[component_id]) {
+        ++z_histogram[candidates[index].stand.z];
+      }
+      for (const auto & z_entry : z_histogram) {
+        if (z_entry.second >= 8U) {
+          has_internal_landing = true;
+          break;
         }
-        continue;
+      }
+      if (!has_internal_landing) {
+        component_kind[component_id] = SurfaceKind::Noise;
+      }
+    }
+  }
+
+  for (std::size_t component_id = 0; component_id < components.size(); ++component_id) {
+    const SurfaceKind kind = component_kind[component_id];
+    for (const std::size_t index : components[component_id]) {
+      SurfaceCandidate & candidate = candidates[index];
+      candidate.kind = kind;
+      if (kind == SurfaceKind::Floor) {
+        accepted_floor_cells_.insert(candidate.stand);
+        traversable_cells_.insert(candidate.stand);
+      } else if (kind == SurfaceKind::Stair) {
+        accepted_stair_cells_.insert(candidate.stand);
+        traversable_cells_.insert(candidate.stand);
+      } else if (kind == SurfaceKind::CeilingLike) {
+        candidate.reject_reason = SurfaceRejectReason::CeilingLike;
+        rejected_ceiling_cells_.insert(candidate.stand);
+      } else {
+        candidate.reject_reason = SurfaceRejectReason::Noise;
       }
     }
   }
@@ -505,6 +737,36 @@ const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::occupiedCell
 const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::traversableCells() const
 {
   return traversable_cells_;
+}
+
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::surfaceCandidateCells() const
+{
+  return surface_candidate_cells_;
+}
+
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::acceptedFloorCells() const
+{
+  return accepted_floor_cells_;
+}
+
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::acceptedStairCells() const
+{
+  return accepted_stair_cells_;
+}
+
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::rejectedCeilingCells() const
+{
+  return rejected_ceiling_cells_;
+}
+
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::rejectedClearanceCells() const
+{
+  return rejected_clearance_cells_;
+}
+
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::rejectedCollisionCells() const
+{
+  return rejected_collision_cells_;
 }
 
 const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::blockedCells() const

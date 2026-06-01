@@ -41,6 +41,69 @@ struct BuildStats
   MapCounts counts;
 };
 
+struct XYIndex
+{
+  int x{0};
+  int y{0};
+
+  bool operator==(const XYIndex & other) const
+  {
+    return x == other.x && y == other.y;
+  }
+};
+
+struct XYIndexHash
+{
+  std::size_t operator()(const XYIndex & idx) const
+  {
+    std::size_t seed = std::hash<int>{}(idx.x);
+    seed ^= std::hash<int>{}(idx.y) + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
+    return seed;
+  }
+};
+
+struct ZRun
+{
+  int z_min{0};
+  int z_max{0};
+};
+
+struct ColumnInfo
+{
+  XYIndex xy;
+  std::vector<ZRun> occupied_runs;
+};
+
+enum class SurfaceKind
+{
+  Unknown,
+  Floor,
+  Stair,
+  CeilingLike,
+  Noise
+};
+
+enum class SurfaceRejectReason
+{
+  None,
+  Clearance,
+  Collision,
+  CeilingLike,
+  Noise
+};
+
+struct SurfaceCandidate
+{
+  GridIndex stand;
+  int support_z_min{0};
+  int support_z_max{0};
+  int overhead_distance_cells{0};
+  bool overhead_known{false};
+  bool overhead_clear{false};
+  SurfaceKind kind{SurfaceKind::Unknown};
+  SurfaceRejectReason reject_reason{SurfaceRejectReason::None};
+};
+
 class NavigationMap
 {
 public:
@@ -62,6 +125,9 @@ public:
   bool hasGroundSupport(const GridIndex & idx) const;
   bool isCollisionFreeForRobot(const GridIndex & idx) const;
   bool isTraversable(const GridIndex & idx) const;
+  bool isStairTraversable(const GridIndex & idx) const;
+  bool hasContinuousSupport(const GridIndex & idx) const;
+  int maxStepCells() const;
 
   void rebuildTraversableLayer();
   void rebuildRiskLayer();
@@ -75,6 +141,12 @@ public:
 
   const std::unordered_set<GridIndex, GridIndexHash> & occupiedCells() const;
   const std::unordered_set<GridIndex, GridIndexHash> & traversableCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & surfaceCandidateCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & acceptedFloorCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & acceptedStairCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & rejectedCeilingCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & rejectedClearanceCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & rejectedCollisionCells() const;
   const std::unordered_set<GridIndex, GridIndexHash> & blockedCells() const;
   const std::unordered_map<GridIndex, double, GridIndexHash> & riskCosts() const;
 
@@ -89,15 +161,26 @@ public:
   bool ready() const;
 
 private:
+  void buildColumns();
   void updateGridBounds(const GridIndex & idx);
   void refreshMetricBounds();
   bool isInsideHorizontalRadius(int dx, int dy, int radius_cells) const;
+  const ColumnInfo * findColumn(int x, int y) const;
+  bool hasHeadClearanceInColumn(const GridIndex & idx, int height_cells) const;
+  int overheadDistanceCells(const GridIndex & idx, int height_cells, bool & overhead_known) const;
 
   std::shared_ptr<octomap::OcTree> octree_;
   std::unordered_set<GridIndex, GridIndexHash> occupied_cells_;
   std::unordered_set<GridIndex, GridIndexHash> traversable_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> surface_candidate_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> accepted_floor_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> accepted_stair_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> rejected_ceiling_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> rejected_clearance_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> rejected_collision_cells_;
   std::unordered_set<GridIndex, GridIndexHash> blocked_cells_;
   std::unordered_map<GridIndex, double, GridIndexHash> risk_cost_;
+  std::unordered_map<XYIndex, ColumnInfo, XYIndexHash> columns_;
 
   double resolution_m_{0.20};
   double robot_radius_m_{0.35};

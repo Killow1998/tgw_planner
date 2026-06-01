@@ -105,18 +105,26 @@ PlanResult VoxelAstarPlanner::plan(
     }
     ++result.metrics.expanded_nodes;
 
+    const int max_step_cells = map.maxStepCells();
     for (int dx = -1; dx <= 1; ++dx) {
       for (int dy = -1; dy <= 1; ++dy) {
-        for (int dz = -1; dz <= 1; ++dz) {
-          if (dx == 0 && dy == 0 && dz == 0) {
+        for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
+          if (dx == 0 && dy == 0) {
             continue;
           }
           const GridIndex neighbor{current.idx.x + dx, current.idx.y + dy, current.idx.z + dz};
           if (!map.isTraversable(neighbor)) {
             continue;
           }
+          if (std::abs(dz) > 1 && !map.isStairTraversable(neighbor) &&
+            !map.hasContinuousSupport(neighbor))
+          {
+            continue;
+          }
+          const double vertical_penalty =
+            std::abs(dz) > 1 ? 0.05 * static_cast<double>(std::abs(dz) - 1) : 0.0;
           const double step_cost = std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz)) *
-            map.resolution();
+            map.resolution() + vertical_penalty;
           const double tentative_g = current.g + step_cost + map.getRiskCost(neighbor);
           const auto old_g = g_score.find(neighbor);
           if (old_g != g_score.end() && tentative_g >= old_g->second) {

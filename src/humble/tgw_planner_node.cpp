@@ -97,6 +97,18 @@ public:
       "/nav_map/blocked_cloud", latched_qos);
     risk_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/nav_map/risk_cloud", latched_qos);
+    surface_candidates_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/surface_candidates_cloud", latched_qos);
+    accepted_floor_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/accepted_floor_cloud", latched_qos);
+    accepted_stair_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/accepted_stair_cloud", latched_qos);
+    rejected_ceiling_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/rejected_ceiling_cloud", latched_qos);
+    rejected_clearance_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/rejected_clearance_cloud", latched_qos);
+    rejected_collision_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/rejected_collision_cloud", latched_qos);
     path_pub_ = create_publisher<nav_msgs::msg::Path>("/planned_path", latched_qos);
     start_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>("/start_marker", latched_qos);
     goal_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>("/goal_marker", latched_qos);
@@ -159,6 +171,24 @@ private:
     RCLCPP_INFO(get_logger(), "[NavMapBuilder] resolution_m: %.3f", map_.resolution());
     RCLCPP_INFO(get_logger(), "[NavMapBuilder] occupied_cells: %u", stats.counts.occupied_cells);
     RCLCPP_INFO(get_logger(), "[NavMapBuilder] traversable_cells: %u", stats.counts.traversable_cells);
+    RCLCPP_INFO(
+      get_logger(), "[NavMapBuilder] surface_candidates: %zu",
+      map_.surfaceCandidateCells().size());
+    RCLCPP_INFO(
+      get_logger(), "[NavMapBuilder] accepted_floor_cells: %zu",
+      map_.acceptedFloorCells().size());
+    RCLCPP_INFO(
+      get_logger(), "[NavMapBuilder] accepted_stair_cells: %zu",
+      map_.acceptedStairCells().size());
+    RCLCPP_INFO(
+      get_logger(), "[NavMapBuilder] rejected_ceiling_cells: %zu",
+      map_.rejectedCeilingCells().size());
+    RCLCPP_INFO(
+      get_logger(), "[NavMapBuilder] rejected_clearance_cells: %zu",
+      map_.rejectedClearanceCells().size());
+    RCLCPP_INFO(
+      get_logger(), "[NavMapBuilder] rejected_collision_cells: %zu",
+      map_.rejectedCollisionCells().size());
     RCLCPP_INFO(get_logger(), "[NavMapBuilder] blocked_cells: %u", stats.counts.blocked_cells);
     RCLCPP_INFO(get_logger(), "[NavMapBuilder] risk_cells: %u", stats.counts.risk_cells);
     RCLCPP_INFO(get_logger(), "[NavMapBuilder] build_time_ms: %.3f", stats.build_time_ms);
@@ -452,6 +482,12 @@ private:
     publishCellSetCloud(map_.occupiedCells(), occupied_cloud_pub_, 1.0F);
     publishCellSetCloud(map_.traversableCells(), traversable_cloud_pub_, 2.0F);
     publishCellSetCloud(map_.blockedCells(), blocked_cloud_pub_, 3.0F);
+    publishCellSetCloud(map_.surfaceCandidateCells(), surface_candidates_cloud_pub_, 4.0F);
+    publishCellSetCloud(map_.acceptedFloorCells(), accepted_floor_cloud_pub_, 5.0F);
+    publishCellSetCloud(map_.acceptedStairCells(), accepted_stair_cloud_pub_, 6.0F);
+    publishCellSetCloud(map_.rejectedCeilingCells(), rejected_ceiling_cloud_pub_, 7.0F);
+    publishCellSetCloud(map_.rejectedClearanceCells(), rejected_clearance_cloud_pub_, 8.0F);
+    publishCellSetCloud(map_.rejectedCollisionCells(), rejected_collision_cloud_pub_, 9.0F);
     publishRiskCloud();
   }
 
@@ -628,6 +664,12 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr traversable_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr blocked_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr risk_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr surface_candidates_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr accepted_floor_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr accepted_stair_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_ceiling_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_clearance_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_collision_cloud_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_marker_pub_;
