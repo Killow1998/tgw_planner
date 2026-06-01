@@ -11,6 +11,7 @@
 #include "rviz_common/viewport_mouse_event.hpp"
 #include "rviz_common/ros_integration/ros_node_abstraction_iface.hpp"
 #include "rviz_default_plugins/tools/pose/pose_tool.hpp"
+#include "visualization_msgs/msg/marker.hpp"
 
 namespace tgw_planner::rviz_plugins
 {
@@ -40,7 +41,15 @@ public:
     node_ = node_abstraction->get_raw_node();
     publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
       topic_, rclcpp::QoS(1).transient_local().reliable());
+    preview_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
+      "/tgw_pose_tool_preview", rclcpp::QoS(10).reliable());
     updateStatus();
+  }
+
+  void deactivate() override
+  {
+    clearPreview();
+    PoseTool::deactivate();
   }
 
   int processMouseEvent(rviz_common::ViewportMouseEvent & event) override
@@ -52,9 +61,12 @@ public:
         z_property_->setFloat(static_cast<float>(current_z_));
       }
       updateStatus();
+      publishPreview();
       return Render;
     }
-    return PoseTool::processMouseEvent(event);
+    const int result = PoseTool::processMouseEvent(event);
+    publishPreview();
+    return result;
   }
 
 protected:
@@ -72,10 +84,86 @@ protected:
     pose.pose.position.z = current_z_;
     pose.pose.orientation = orientationAroundZAxis(theta);
     publisher_->publish(pose);
+    clearPreview();
     updateStatus();
   }
 
 private:
+  static geometry_msgs::msg::Point makePoint(double x, double y, double z)
+  {
+    geometry_msgs::msg::Point point;
+    point.x = x;
+    point.y = y;
+    point.z = z;
+    return point;
+  }
+
+  void publishPreview()
+  {
+    if (!preview_pub_ || !node_ || !context_) {
+      return;
+    }
+
+    const auto frame = context_->getFixedFrame().toStdString();
+    const double x = arrow_position_.x;
+    const double y = arrow_position_.y;
+    const double ground_z = 0.0;
+    const double marker_z = current_z_;
+    const bool is_goal = topic_.find("goal") != std::string::npos;
+    const float r = is_goal ? 1.0F : 0.0F;
+    const float g = is_goal ? 0.82F : 0.95F;
+    const float b = is_goal ? 0.0F : 1.0F;
+
+    visualization_msgs::msg::Marker line;
+    line.header.stamp = node_->now();
+    line.header.frame_id = frame;
+    line.ns = "tgw_pose_preview";
+    line.id = 0;
+    line.type = visualization_msgs::msg::Marker::LINE_LIST;
+    line.action = visualization_msgs::msg::Marker::ADD;
+    line.pose.orientation.w = 1.0;
+    line.scale.x = 0.08;
+    line.color.r = r;
+    line.color.g = g;
+    line.color.b = b;
+    line.color.a = 1.0;
+    line.points.push_back(makePoint(x, y, ground_z));
+    line.points.push_back(makePoint(x, y, marker_z));
+    preview_pub_->publish(line);
+
+    visualization_msgs::msg::Marker sphere = line;
+    sphere.id = 1;
+    sphere.type = visualization_msgs::msg::Marker::SPHERE;
+    sphere.points.clear();
+    sphere.pose.position = makePoint(x, y, marker_z);
+    sphere.scale.x = 0.7;
+    sphere.scale.y = 0.7;
+    sphere.scale.z = 0.7;
+    preview_pub_->publish(sphere);
+
+    visualization_msgs::msg::Marker text = line;
+    text.id = 2;
+    text.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    text.points.clear();
+    text.pose.position = makePoint(x, y, marker_z + 0.75);
+    text.scale.z = 0.45;
+    text.text = label_ + " z=" + std::to_string(marker_z).substr(0, 4) + "m";
+    preview_pub_->publish(text);
+  }
+
+  void clearPreview()
+  {
+    if (!preview_pub_ || !node_ || !context_) {
+      return;
+    }
+    visualization_msgs::msg::Marker marker;
+    marker.header.stamp = node_->now();
+    marker.header.frame_id = context_->getFixedFrame().toStdString();
+    marker.ns = "tgw_pose_preview";
+    marker.action = visualization_msgs::msg::Marker::DELETEALL;
+    preview_pub_->publish(marker);
+  }
+
   void updateStatus()
   {
     setStatus(
@@ -92,6 +180,7 @@ private:
   rviz_common::properties::FloatProperty * z_property_{nullptr};
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr publisher_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr preview_pub_;
 };
 
 class Tgw3DStartTool : public Tgw3DPoseTool

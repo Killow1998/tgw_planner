@@ -86,6 +86,7 @@ ament_target_dependencies(tgw_planner_rviz_plugins
   rclcpp
   rviz_common
   rviz_default_plugins
+  visualization_msgs
 )
 pluginlib_export_plugin_description_file(rviz_common plugins/plugin_description.xml)
 

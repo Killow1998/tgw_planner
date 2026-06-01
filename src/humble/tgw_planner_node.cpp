@@ -112,6 +112,8 @@ public:
     rejected_collision_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/nav_map/rejected_collision_cloud", latched_qos);
     path_pub_ = create_publisher<nav_msgs::msg::Path>("/planned_path", latched_qos);
+    path_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/planned_path_marker", latched_qos);
     start_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>("/start_marker", latched_qos);
     goal_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>("/goal_marker", latched_qos);
     stats_pub_ = create_publisher<tgw_planner::msg::PlannerStats>(
@@ -246,7 +248,7 @@ private:
   {
     start_pose_ = snapPoseForDisplay(normalizedPose(pose), "start");
     has_start_ = true;
-    publishPoseMarker(start_pose_, start_marker_pub_, "start", 0.1F, 0.85F, 0.2F);
+    publishPoseMarker(start_pose_, start_marker_pub_, "start", 0.0F, 0.95F, 1.0F);
     planIfReady();
   }
 
@@ -254,7 +256,7 @@ private:
   {
     goal_pose_ = snapPoseForDisplay(normalizedPose(pose), "goal");
     has_goal_ = true;
-    publishPoseMarker(goal_pose_, goal_marker_pub_, "goal", 0.95F, 0.25F, 0.1F);
+    publishPoseMarker(goal_pose_, goal_marker_pub_, "goal", 1.0F, 0.82F, 0.0F);
     planIfReady();
   }
 
@@ -375,6 +377,7 @@ private:
     publishSnappedPoseMarkers(result, start, goal);
     const nav_msgs::msg::Path path_msg = toPathMsg(result, goal.pose.orientation);
     path_pub_->publish(path_msg);
+    publishPathMarker(result);
     auto stats_msg = toStatsMsg(result.metrics);
     stats_pub_->publish(stats_msg);
     std_msgs::msg::String json_msg;
@@ -391,13 +394,13 @@ private:
       auto snapped_start = start;
       snapped_start.header.frame_id = map_.mapFrame();
       snapped_start.pose.position = toRosPoint(map_.gridToWorld(result.start_cell));
-      publishPoseMarker(snapped_start, start_marker_pub_, "start", 0.1F, 0.85F, 0.2F);
+      publishPoseMarker(snapped_start, start_marker_pub_, "start", 0.0F, 0.95F, 1.0F);
     }
     if (result.goal_snap_success) {
       auto snapped_goal = goal;
       snapped_goal.header.frame_id = map_.mapFrame();
       snapped_goal.pose.position = toRosPoint(map_.gridToWorld(result.goal_cell));
-      publishPoseMarker(snapped_goal, goal_marker_pub_, "goal", 0.95F, 0.25F, 0.1F);
+      publishPoseMarker(snapped_goal, goal_marker_pub_, "goal", 1.0F, 0.82F, 0.0F);
     }
   }
 
@@ -594,28 +597,82 @@ private:
     risk_cloud_pub_->publish(cloud);
   }
 
+  void publishPathMarker(const PlanResult & result)
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.stamp = now();
+    marker.header.frame_id = map_.mapFrame();
+    marker.ns = "planned_path";
+    marker.id = 0;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+    marker.pose.orientation.w = 1.0;
+    marker.scale.x = 0.32;
+    marker.color.r = 1.0F;
+    marker.color.g = 0.62F;
+    marker.color.b = 0.0F;
+    marker.color.a = 1.0F;
+    marker.points.reserve(result.path.size());
+    for (const auto & point : result.path) {
+      marker.points.push_back(toRosPoint(point));
+    }
+    if (marker.points.empty()) {
+      marker.action = visualization_msgs::msg::Marker::DELETE;
+    }
+    path_marker_pub_->publish(marker);
+  }
+
   void publishPoseMarker(
     const geometry_msgs::msg::PoseStamped & pose,
     const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr & publisher,
     const std::string & ns, float r, float g, float b)
   {
-    visualization_msgs::msg::Marker marker;
-    marker.header.stamp = now();
-    marker.header.frame_id = map_.mapFrame();
-    marker.ns = ns;
-    marker.id = 0;
-    marker.type = visualization_msgs::msg::Marker::SPHERE;
-    marker.action = visualization_msgs::msg::Marker::ADD;
-    marker.pose.position = pose.pose.position;
-    marker.pose.orientation.w = 1.0;
-    marker.scale.x = 0.35;
-    marker.scale.y = 0.35;
-    marker.scale.z = 0.35;
-    marker.color.r = r;
-    marker.color.g = g;
-    marker.color.b = b;
-    marker.color.a = 1.0;
-    publisher->publish(marker);
+    auto make_point = [](double x, double y, double z) {
+      geometry_msgs::msg::Point point;
+      point.x = x;
+      point.y = y;
+      point.z = z;
+      return point;
+    };
+
+    visualization_msgs::msg::Marker base;
+    base.header.stamp = now();
+    base.header.frame_id = map_.mapFrame();
+    base.ns = ns;
+    base.action = visualization_msgs::msg::Marker::ADD;
+    base.pose.orientation.w = 1.0;
+    base.color.r = r;
+    base.color.g = g;
+    base.color.b = b;
+    base.color.a = 1.0;
+
+    visualization_msgs::msg::Marker height_line = base;
+    height_line.id = 0;
+    height_line.type = visualization_msgs::msg::Marker::LINE_LIST;
+    height_line.scale.x = 0.10;
+    height_line.points.push_back(make_point(pose.pose.position.x, pose.pose.position.y, 0.0));
+    height_line.points.push_back(pose.pose.position);
+    publisher->publish(height_line);
+
+    visualization_msgs::msg::Marker sphere = base;
+    sphere.id = 1;
+    sphere.type = visualization_msgs::msg::Marker::SPHERE;
+    sphere.pose.position = pose.pose.position;
+    sphere.scale.x = 0.75;
+    sphere.scale.y = 0.75;
+    sphere.scale.z = 0.75;
+    publisher->publish(sphere);
+
+    visualization_msgs::msg::Marker text = base;
+    text.id = 2;
+    text.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    text.pose.position =
+      make_point(pose.pose.position.x, pose.pose.position.y, pose.pose.position.z + 0.8);
+    text.scale.z = 0.48;
+    std::ostringstream label;
+    label << ns << " z=" << std::fixed << std::setprecision(2) << pose.pose.position.z << "m";
+    text.text = label.str();
+    publisher->publish(text);
   }
 
   void logPlanResult(
@@ -677,6 +734,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_clearance_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_collision_cloud_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr path_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_marker_pub_;
   rclcpp::Publisher<tgw_planner::msg::PlannerStats>::SharedPtr stats_pub_;
