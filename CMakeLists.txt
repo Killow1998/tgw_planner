@@ -108,7 +108,7 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
-install(DIRECTORY config launch rviz
+install(DIRECTORY config launch rviz scripts
   DESTINATION share/${PROJECT_NAME}
 )
 

@@ -428,7 +428,7 @@ void NavigationMap::rebuildTraversableLayer()
         overheadDistanceCells(candidate.stand, height_cells, overhead_known);
       candidate.overhead_known = overhead_known;
       candidate.overhead_clear =
-        overhead_known && candidate.overhead_distance_cells >= min_overhead_cells;
+        !overhead_known || candidate.overhead_distance_cells >= min_overhead_cells;
       surface_candidate_cells_.insert(candidate.stand);
 
       if (!isInsideBounds(candidate.stand) || isOccupied(candidate.stand) ||
@@ -599,6 +599,26 @@ void NavigationMap::rebuildTraversableLayer()
 
   for (std::size_t component_id = 0; component_id < components.size(); ++component_id) {
     const SurfaceKind kind = component_kind[component_id];
+    auto has_vertical_neighbor = [&](const GridIndex & current) {
+      for (int dx = -1; dx <= 1; ++dx) {
+        for (int dy = -1; dy <= 1; ++dy) {
+          if (dx == 0 && dy == 0) {
+            continue;
+          }
+          for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
+            if (dz == 0) {
+              continue;
+            }
+            const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
+            if (candidate_index.find(neighbor) != candidate_index.end()) {
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    };
+
     for (const std::size_t index : components[component_id]) {
       SurfaceCandidate & candidate = candidates[index];
       candidate.kind = kind;
@@ -606,7 +626,13 @@ void NavigationMap::rebuildTraversableLayer()
         accepted_floor_cells_.insert(candidate.stand);
         traversable_cells_.insert(candidate.stand);
       } else if (kind == SurfaceKind::Stair) {
-        accepted_stair_cells_.insert(candidate.stand);
+        if (has_vertical_neighbor(candidate.stand)) {
+          candidate.kind = SurfaceKind::Stair;
+          accepted_stair_cells_.insert(candidate.stand);
+        } else {
+          candidate.kind = SurfaceKind::Floor;
+          accepted_floor_cells_.insert(candidate.stand);
+        }
         traversable_cells_.insert(candidate.stand);
       } else if (kind == SurfaceKind::CeilingLike) {
         candidate.reject_reason = SurfaceRejectReason::CeilingLike;
