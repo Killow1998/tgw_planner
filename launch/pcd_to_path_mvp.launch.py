@@ -26,13 +26,13 @@ def generate_launch_description():
         [
             DeclareLaunchArgument(
                 "pcd_file",
-                default_value="/home/user/ros_ws/to_migrate_ws/src/n3mapping/map/global_map.pcd",
+                default_value="",
             ),
             DeclareLaunchArgument("robot_radius_m", default_value="0.35"),
             DeclareLaunchArgument("robot_height_m", default_value="0.80"),
             DeclareLaunchArgument("map_resolution_m", default_value="0.20"),
             DeclareLaunchArgument("map_frame", default_value="map"),
-            DeclareLaunchArgument("map_id", default_value="n3mapping_global_map"),
+            DeclareLaunchArgument("map_id", default_value="tgw_nav_map"),
             DeclareLaunchArgument("save_map_dir", default_value=""),
             DeclareLaunchArgument("max_iterations", default_value="250000"),
             DeclareLaunchArgument("max_marker_cells", default_value="120000"),

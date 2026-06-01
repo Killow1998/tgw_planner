@@ -1,8 +1,8 @@
 tgw_planner_node:
   ros__parameters:
-    pcd_file: "/home/user/ros_ws/to_migrate_ws/src/n3mapping/map/global_map.pcd"
+    pcd_file: ""
     map_frame: "map"
-    map_id: "n3mapping_global_map"
+    map_id: "tgw_nav_map"
     robot_radius_m: 0.35
     robot_height_m: 0.80
     map_resolution_m: 0.20

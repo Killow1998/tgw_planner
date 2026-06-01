@@ -7,7 +7,7 @@ The package keeps the planner core ROS-free under `include/tgw_planner/core` and
 ## Build
 
 ```bash
-cd /home/user/ros_ws/to_migrate_ws
+cd $ROS_WS
 source /opt/ros/humble/setup.bash
 colcon build --packages-select tgw_planner --symlink-install
 ```
@@ -15,9 +15,9 @@ colcon build --packages-select tgw_planner --symlink-install
 ## Run
 
 ```bash
-source /home/user/ros_ws/to_migrate_ws/install/setup.bash
+source $ROS_WS/install/setup.bash
 ros2 launch tgw_planner pcd_to_path_mvp.launch.py \
-  pcd_file:=/home/user/ros_ws/to_migrate_ws/src/n3mapping/map/global_map.pcd \
+  pcd_file:=/absolute/path/to/global_map.pcd \
   robot_radius_m:=0.35 \
   robot_height_m:=0.80 \
   map_resolution_m:=0.20
