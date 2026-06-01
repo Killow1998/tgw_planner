@@ -378,6 +378,117 @@ bool NavigationMap::hasContinuousSupport(const GridIndex & idx) const
   return support_count >= 3;
 }
 
+bool NavigationMap::stairAxis(const GridIndex & idx, int & axis_x, int & axis_y) const
+{
+  axis_x = 0;
+  axis_y = 0;
+  if (!isStairTraversable(idx)) {
+    return false;
+  }
+
+  int x_score = 0;
+  int y_score = 0;
+  const int max_step_cells = maxStepCells();
+  for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      if (dx == 0 && dy == 0) {
+        continue;
+      }
+      for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
+        if (dz == 0) {
+          continue;
+        }
+        const GridIndex neighbor{idx.x + dx, idx.y + dy, idx.z + dz};
+        if (!isStairTraversable(neighbor)) {
+          continue;
+        }
+        const int weight = std::abs(dz);
+        x_score += std::abs(dx) * weight;
+        y_score += std::abs(dy) * weight;
+      }
+    }
+  }
+
+  if (x_score == 0 && y_score == 0) {
+    return false;
+  }
+  if (x_score >= y_score) {
+    axis_x = 1;
+  } else {
+    axis_y = 1;
+  }
+  return true;
+}
+
+bool NavigationMap::isStairTransitionAllowed(const GridIndex & from, const GridIndex & to) const
+{
+  const bool from_stair = isStairTraversable(from);
+  const bool to_stair = isStairTraversable(to);
+  if (!from_stair && !to_stair) {
+    return true;
+  }
+
+  int axis_x = 0;
+  int axis_y = 0;
+  const GridIndex stair_cell = from_stair ? from : to;
+  if (!stairAxis(stair_cell, axis_x, axis_y)) {
+    return true;
+  }
+
+  const int dx = clampValue(to.x - from.x, -1, 1);
+  const int dy = clampValue(to.y - from.y, -1, 1);
+  const bool along_axis =
+    (axis_x != 0 && std::abs(dx) == 1 && dy == 0) ||
+    (axis_y != 0 && std::abs(dy) == 1 && dx == 0);
+  const bool changes_height = to.z != from.z;
+  const bool enters_or_exits_stair = from_stair != to_stair;
+
+  if (changes_height || enters_or_exits_stair) {
+    return along_axis;
+  }
+  return true;
+}
+
+int NavigationMap::stairSideRunLength(const GridIndex & idx, int side_dx, int side_dy) const
+{
+  int length = 0;
+  const int max_width_cells = std::max(1, static_cast<int>(std::ceil(2.0 / resolution_m_)));
+  for (int step = 1; step <= max_width_cells; ++step) {
+    const GridIndex probe{idx.x + side_dx * step, idx.y + side_dy * step, idx.z};
+    if (!isStairTraversable(probe)) {
+      break;
+    }
+    ++length;
+  }
+  return length;
+}
+
+double NavigationMap::getStairCenterCost(const GridIndex & idx) const
+{
+  int axis_x = 0;
+  int axis_y = 0;
+  if (!stairAxis(idx, axis_x, axis_y)) {
+    return 0.0;
+  }
+
+  const int side_dx = axis_x != 0 ? 0 : 1;
+  const int side_dy = axis_x != 0 ? 1 : 0;
+  const int left = stairSideRunLength(idx, side_dx, side_dy);
+  const int right = stairSideRunLength(idx, -side_dx, -side_dy);
+  const int side_sum = left + right;
+  if (side_sum == 0) {
+    return 2.0;
+  }
+
+  const int min_side = std::min(left, right);
+  const int desired_margin_cells =
+    std::max(1, static_cast<int>(std::ceil(robot_radius_m_ / resolution_m_)));
+  const int edge_shortfall = std::max(0, desired_margin_cells - min_side);
+  const double imbalance =
+    static_cast<double>(std::abs(left - right)) / static_cast<double>(side_sum + 1);
+  return 0.35 * static_cast<double>(edge_shortfall) + 0.45 * imbalance;
+}
+
 int NavigationMap::maxStepCells() const
 {
   const double max_step_height_m = std::max(0.25, 0.5 * robot_radius_m_);

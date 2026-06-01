@@ -127,6 +127,8 @@ public:
   bool isTraversable(const GridIndex & idx) const;
   bool isStairTraversable(const GridIndex & idx) const;
   bool hasContinuousSupport(const GridIndex & idx) const;
+  bool isStairTransitionAllowed(const GridIndex & from, const GridIndex & to) const;
+  double getStairCenterCost(const GridIndex & idx) const;
   int maxStepCells() const;
 
   void rebuildTraversableLayer();
@@ -169,6 +171,8 @@ private:
   const ColumnInfo * findColumn(int x, int y) const;
   bool hasHeadClearanceInColumn(const GridIndex & idx, int height_cells) const;
   int overheadDistanceCells(const GridIndex & idx, int height_cells, bool & overhead_known) const;
+  bool stairAxis(const GridIndex & idx, int & axis_x, int & axis_y) const;
+  int stairSideRunLength(const GridIndex & idx, int side_dx, int side_dy) const;
 
   std::shared_ptr<octomap::OcTree> octree_;
   std::unordered_set<GridIndex, GridIndexHash> occupied_cells_;

@@ -121,10 +121,19 @@ PlanResult VoxelAstarPlanner::plan(
           {
             continue;
           }
+          if (!map.isStairTransitionAllowed(current.idx, neighbor)) {
+            continue;
+          }
           const double vertical_penalty =
             std::abs(dz) > 1 ? 0.05 * static_cast<double>(std::abs(dz) - 1) : 0.0;
+          const bool touches_stair =
+            map.isStairTraversable(current.idx) || map.isStairTraversable(neighbor);
+          const double stair_diagonal_penalty =
+            touches_stair && dx != 0 && dy != 0 ? 0.4 : 0.0;
+          const double stair_center_cost =
+            0.5 * (map.getStairCenterCost(current.idx) + map.getStairCenterCost(neighbor));
           const double step_cost = std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz)) *
-            map.resolution() + vertical_penalty;
+            map.resolution() + vertical_penalty + stair_diagonal_penalty + stair_center_cost;
           const double tentative_g = current.g + step_cost + map.getRiskCost(neighbor);
           const auto old_g = g_score.find(neighbor);
           if (old_g != g_score.end() && tentative_g >= old_g->second) {
