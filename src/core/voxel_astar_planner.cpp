@@ -121,6 +121,9 @@ PlanResult VoxelAstarPlanner::plan(
           {
             continue;
           }
+          if (!map.isStairTransitionAllowed(current.idx, neighbor)) {
+            continue;
+          }
           const double vertical_penalty =
             std::abs(dz) > 1 ? 0.05 * static_cast<double>(std::abs(dz) - 1) : 0.0;
           const bool touches_stair =

@@ -172,6 +172,7 @@ private:
   bool hasHeadClearanceInColumn(const GridIndex & idx, int height_cells) const;
   int overheadDistanceCells(const GridIndex & idx, int height_cells, bool & overhead_known) const;
   bool stairAxis(const GridIndex & idx, int & axis_x, int & axis_y) const;
+  bool isStairCenterCell(const GridIndex & idx, int min_side_cells) const;
   int stairSideRunLength(const GridIndex & idx, int side_dx, int side_dy) const;
 
   std::shared_ptr<octomap::OcTree> octree_;

@@ -412,7 +412,12 @@ bool NavigationMap::stairAxis(const GridIndex & idx, int & axis_x, int & axis_y)
   if (x_score == 0 && y_score == 0) {
     return false;
   }
-  if (x_score >= y_score) {
+  const int max_score = std::max(x_score, y_score);
+  const int min_score = std::min(x_score, y_score);
+  if (min_score > 0 && min_score * 2 >= max_score) {
+    axis_x = 1;
+    axis_y = 1;
+  } else if (x_score > y_score) {
     axis_x = 1;
   } else {
     axis_y = 1;
@@ -428,25 +433,44 @@ bool NavigationMap::isStairTransitionAllowed(const GridIndex & from, const GridI
     return true;
   }
 
+  const int center_side_cells =
+    std::max(1, static_cast<int>(std::ceil(0.5 * robot_radius_m_ / resolution_m_)));
+  if (from_stair != to_stair) {
+    const GridIndex stair_cell = from_stair ? from : to;
+    return isStairCenterCell(stair_cell, center_side_cells);
+  }
+
+  int from_axis_x = 0;
+  int from_axis_y = 0;
+  int to_axis_x = 0;
+  int to_axis_y = 0;
+  if (!stairAxis(from, from_axis_x, from_axis_y) || !stairAxis(to, to_axis_x, to_axis_y)) {
+    return true;
+  }
+  const bool compatible_axis = from_axis_x == to_axis_x && from_axis_y == to_axis_y;
+  if (!compatible_axis && from.z != to.z && !isStairCenterCell(from, 1) && !isStairCenterCell(to, 1)) {
+    return false;
+  }
+
+  return true;
+}
+
+bool NavigationMap::isStairCenterCell(const GridIndex & idx, int min_side_cells) const
+{
   int axis_x = 0;
   int axis_y = 0;
-  const GridIndex stair_cell = from_stair ? from : to;
-  if (!stairAxis(stair_cell, axis_x, axis_y)) {
+  if (!stairAxis(idx, axis_x, axis_y)) {
     return true;
   }
 
-  const int dx = clampValue(to.x - from.x, -1, 1);
-  const int dy = clampValue(to.y - from.y, -1, 1);
-  const bool along_axis =
-    (axis_x != 0 && std::abs(dx) == 1 && dy == 0) ||
-    (axis_y != 0 && std::abs(dy) == 1 && dx == 0);
-  const bool changes_height = to.z != from.z;
-  const bool enters_or_exits_stair = from_stair != to_stair;
-
-  if (changes_height || enters_or_exits_stair) {
-    return along_axis;
+  const int side_dx = axis_x != 0 && axis_y != 0 ? 1 : (axis_x != 0 ? 0 : 1);
+  const int side_dy = axis_x != 0 && axis_y != 0 ? -1 : (axis_x != 0 ? 1 : 0);
+  const int left = stairSideRunLength(idx, side_dx, side_dy);
+  const int right = stairSideRunLength(idx, -side_dx, -side_dy);
+  if (std::max(left, right) < min_side_cells) {
+    return true;
   }
-  return true;
+  return std::min(left, right) >= min_side_cells;
 }
 
 int NavigationMap::stairSideRunLength(const GridIndex & idx, int side_dx, int side_dy) const
@@ -471,8 +495,8 @@ double NavigationMap::getStairCenterCost(const GridIndex & idx) const
     return 0.0;
   }
 
-  const int side_dx = axis_x != 0 ? 0 : 1;
-  const int side_dy = axis_x != 0 ? 1 : 0;
+  const int side_dx = axis_x != 0 && axis_y != 0 ? 1 : (axis_x != 0 ? 0 : 1);
+  const int side_dy = axis_x != 0 && axis_y != 0 ? -1 : (axis_x != 0 ? 1 : 0);
   const int left = stairSideRunLength(idx, side_dx, side_dy);
   const int right = stairSideRunLength(idx, -side_dx, -side_dy);
   const int side_sum = left + right;
