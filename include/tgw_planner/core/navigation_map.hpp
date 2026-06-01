@@ -144,11 +144,15 @@ public:
   bool isFootprintCollisionFreeAt(
     const GridIndex & idx, double heading_x, double heading_y) const;
   bool isFootprintTransitionSafe(const GridIndex & from, const GridIndex & to) const;
+  bool isFootprintSupportedAt(
+    const GridIndex & idx, double heading_x, double heading_y) const;
+  bool isFootprintTransitionSupported(const GridIndex & from, const GridIndex & to) const;
   bool isTraversable(const GridIndex & idx) const;
   bool isStairTraversable(const GridIndex & idx) const;
   bool hasContinuousSupport(const GridIndex & idx) const;
   bool isStairTransitionAllowed(const GridIndex & from, const GridIndex & to) const;
   double getStairCenterCost(const GridIndex & idx) const;
+  std::vector<std::vector<Point3>> stairCenterlines() const;
   int maxStepCells() const;
 
   void rebuildTraversableLayer();
@@ -199,6 +203,7 @@ private:
   bool stairAxis(const GridIndex & idx, int & axis_x, int & axis_y) const;
   int stairSegmentId(const GridIndex & idx) const;
   bool stairCellsSlopeCompatible(const GridIndex & from, const GridIndex & to) const;
+  bool isStairFlightEdgeAllowed(const GridIndex & from, const GridIndex & to) const;
   bool isStairSegmentBridgeAllowed(const GridIndex & from, const GridIndex & to) const;
   bool isStairSameHeightTransferAllowed(const GridIndex & from, const GridIndex & to) const;
   bool stairSideDirection(const GridIndex & idx, int & side_dx, int & side_dy) const;
@@ -206,6 +211,10 @@ private:
   bool isStairEndpointCell(const GridIndex & idx) const;
   bool hasNearbyAcceptedFloor(const GridIndex & idx) const;
   int stairSideRunLength(const GridIndex & idx, int side_dx, int side_dy) const;
+  bool isStairFlightWideEnough(const StairSegmentInfo & segment) const;
+  bool hasTraversableSupportNearColumn(int x, int y, int z, int max_dz) const;
+  bool isFootprintSupportedAtPoint(
+    const Point3 & origin, int stand_z, double heading_x, double heading_y) const;
 
   std::shared_ptr<octomap::OcTree> octree_;
   std::unordered_set<GridIndex, GridIndexHash> occupied_cells_;

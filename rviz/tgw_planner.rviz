@@ -171,6 +171,16 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
+      Name: Stair Centerlines
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /nav_map/stair_centerline_markers
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
       Name: 3D Pose Preview
       Topic:
         Depth: 5

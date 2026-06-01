@@ -117,6 +117,8 @@ public:
     path_pub_ = create_publisher<nav_msgs::msg::Path>("/planned_path", latched_qos);
     path_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
       "/planned_path_marker", latched_qos);
+    stair_centerline_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/nav_map/stair_centerline_markers", latched_qos);
     start_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>("/start_marker", latched_qos);
     goal_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>("/goal_marker", latched_qos);
     stats_pub_ = create_publisher<tgw_planner::msg::PlannerStats>(
@@ -192,6 +194,9 @@ private:
     RCLCPP_INFO(
       get_logger(), "[NavMapBuilder] accepted_stair_cells: %zu",
       map_.acceptedStairCells().size());
+    RCLCPP_INFO(
+      get_logger(), "[NavMapBuilder] stair_centerlines: %zu",
+      map_.stairCenterlines().size());
     RCLCPP_INFO(
       get_logger(), "[NavMapBuilder] forbidden_cells: %zu", map_.forbiddenCells().size());
     RCLCPP_INFO(
@@ -505,6 +510,7 @@ private:
     publishCellSetCloud(map_.rejectedClearanceCells(), rejected_clearance_cloud_pub_, 8.0F);
     publishCellSetCloud(map_.rejectedCollisionCells(), rejected_collision_cloud_pub_, 9.0F);
     publishRiskCloud();
+    publishStairCenterlineMarkers();
   }
 
   void publishCellSetMarker(
@@ -603,6 +609,38 @@ private:
       ++iter_i;
     }
     risk_cloud_pub_->publish(cloud);
+  }
+
+  void publishStairCenterlineMarkers()
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.stamp = now();
+    marker.header.frame_id = map_.mapFrame();
+    marker.ns = "stair_centerlines";
+    marker.id = 0;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.type = visualization_msgs::msg::Marker::LINE_LIST;
+    marker.pose.orientation.w = 1.0;
+    marker.scale.x = 0.18;
+    marker.color.r = 0.0F;
+    marker.color.g = 0.95F;
+    marker.color.b = 1.0F;
+    marker.color.a = 1.0F;
+
+    const auto centerlines = map_.stairCenterlines();
+    for (const auto & centerline : centerlines) {
+      if (centerline.size() < 2U) {
+        continue;
+      }
+      for (std::size_t i = 1; i < centerline.size(); ++i) {
+        marker.points.push_back(toRosPoint(centerline[i - 1]));
+        marker.points.push_back(toRosPoint(centerline[i]));
+      }
+    }
+    if (marker.points.empty()) {
+      marker.action = visualization_msgs::msg::Marker::DELETE;
+    }
+    stair_centerline_marker_pub_->publish(marker);
   }
 
   void publishPathMarker(const PlanResult & result)
@@ -743,6 +781,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_collision_cloud_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr path_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr stair_centerline_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_marker_pub_;
   rclcpp::Publisher<tgw_planner::msg::PlannerStats>::SharedPtr stats_pub_;

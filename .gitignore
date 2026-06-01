@@ -10,3 +10,6 @@ __pycache__/
 
 # Local diagnostic handoff notes. Keep out of the public GitHub repo.
 CURRENT_NAVIGATION_ISSUES.md
+
+# Local large reference maps. Keep ignored; upload externally when needed.
+/test_data/pcd/*.pcd

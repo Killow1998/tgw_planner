@@ -34,6 +34,14 @@ Point3 orderedMax(const Point3 & a, const Point3 & b)
   return {std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z)};
 }
 
+double pointDistance3d(const Point3 & a, const Point3 & b)
+{
+  const double dx = a.x - b.x;
+  const double dy = a.y - b.y;
+  const double dz = a.z - b.z;
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
 }  // namespace
 
 bool NavigationMap::loadFromPcd(
@@ -431,6 +439,124 @@ bool NavigationMap::isFootprintTransitionSafe(const GridIndex & from, const Grid
          isFootprintCollisionFreeAt(to, heading_x, heading_y);
 }
 
+bool NavigationMap::hasTraversableSupportNearColumn(int x, int y, int z, int max_dz) const
+{
+  for (int dz = 0; dz <= max_dz; ++dz) {
+    if (isTraversable({x, y, z + dz}) || isTraversable({x, y, z - dz})) {
+      return true;
+    }
+    if (isOccupied({x, y, z + dz - 1}) || isOccupied({x, y, z - dz - 1})) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool NavigationMap::isFootprintSupportedAt(
+  const GridIndex & idx, double heading_x, double heading_y) const
+{
+  return isFootprintSupportedAtPoint(gridToWorld(idx), idx.z, heading_x, heading_y);
+}
+
+bool NavigationMap::isFootprintSupportedAtPoint(
+  const Point3 & origin, int stand_z, double heading_x, double heading_y) const
+{
+  const double heading_norm = std::hypot(heading_x, heading_y);
+  if (heading_norm <= 1.0e-9) {
+    return hasTraversableSupportNearColumn(
+      worldToGrid(origin).x, worldToGrid(origin).y, stand_z, maxStepCells());
+  }
+
+  const double forward_x = heading_x / heading_norm;
+  const double forward_y = heading_y / heading_norm;
+  const double side_x = -forward_y;
+  const double side_y = forward_x;
+  const double front_m = base_to_front_m_;
+  const double rear_m = std::max(0.01, robot_length_m_ - base_to_front_m_);
+  const double half_width_m = 0.5 * robot_width_m_;
+  const double length_m = front_m + rear_m;
+  const double sample_step_m = std::max(0.05, 0.5 * resolution_m_);
+
+  std::unordered_map<GridIndex, int, GridIndexHash> column_band_mask;
+  column_band_mask.reserve(64U);
+  for (double local_x = -rear_m; local_x <= front_m + 1.0e-9; local_x += sample_step_m) {
+    const double along_ratio = clampValue((local_x + rear_m) / length_m, 0.0, 1.0);
+    const int band = along_ratio < (1.0 / 3.0) ? 0 : (along_ratio < (2.0 / 3.0) ? 1 : 2);
+    for (double local_y = -half_width_m; local_y <= half_width_m + 1.0e-9; local_y += sample_step_m) {
+      const Point3 sample{
+        origin.x + local_x * forward_x + local_y * side_x,
+        origin.y + local_x * forward_y + local_y * side_y,
+        origin.z};
+      column_band_mask[worldToGrid(sample)] |= (1 << band);
+    }
+  }
+
+  if (column_band_mask.empty()) {
+    return false;
+  }
+
+  const int support_z_tolerance = maxStepCells();
+  int supported_columns = 0;
+  int band_total[3] = {0, 0, 0};
+  int band_supported[3] = {0, 0, 0};
+  for (const auto & entry : column_band_mask) {
+    const GridIndex & column = entry.first;
+    const bool supported =
+      hasTraversableSupportNearColumn(column.x, column.y, stand_z, support_z_tolerance);
+    if (supported) {
+      ++supported_columns;
+    }
+    for (int band = 0; band < 3; ++band) {
+      if ((entry.second & (1 << band)) == 0) {
+        continue;
+      }
+      ++band_total[band];
+      if (supported) {
+        ++band_supported[band];
+      }
+    }
+  }
+
+  const double support_ratio =
+    static_cast<double>(supported_columns) / static_cast<double>(column_band_mask.size());
+  if (support_ratio < 0.35) {
+    return false;
+  }
+
+  for (int band = 0; band < 3; ++band) {
+    if (band_total[band] == 0) {
+      return false;
+    }
+    const double band_ratio =
+      static_cast<double>(band_supported[band]) / static_cast<double>(band_total[band]);
+    if (band_ratio < 0.10) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool NavigationMap::isFootprintTransitionSupported(
+  const GridIndex & from, const GridIndex & to) const
+{
+  const double heading_x = static_cast<double>(to.x - from.x);
+  const double heading_y = static_cast<double>(to.y - from.y);
+  if (std::hypot(heading_x, heading_y) <= 1.0e-9) {
+    return false;
+  }
+  const Point3 from_point = gridToWorld(from);
+  const Point3 to_point = gridToWorld(to);
+  const Point3 midpoint{
+    0.5 * (from_point.x + to_point.x),
+    0.5 * (from_point.y + to_point.y),
+    0.5 * (from_point.z + to_point.z)};
+  const int midpoint_z =
+    static_cast<int>(std::floor(midpoint.z / resolution_m_));
+  return isFootprintSupportedAtPoint(from_point, from.z, heading_x, heading_y) &&
+         isFootprintSupportedAtPoint(midpoint, midpoint_z, heading_x, heading_y) &&
+         isFootprintSupportedAtPoint(to_point, to.z, heading_x, heading_y);
+}
+
 bool NavigationMap::isTraversable(const GridIndex & idx) const
 {
   return traversable_cells_.find(idx) != traversable_cells_.end() && !isBlocked(idx);
@@ -497,6 +623,52 @@ bool NavigationMap::stairCellsSlopeCompatible(const GridIndex & from, const Grid
     return from_has_slope || to_has_slope;
   }
   return true;
+}
+
+bool NavigationMap::isStairFlightEdgeAllowed(const GridIndex & from, const GridIndex & to) const
+{
+  if (!isStairTraversable(from) || !isStairTraversable(to)) {
+    return false;
+  }
+  const int dx = to.x - from.x;
+  const int dy = to.y - from.y;
+  const int dz = to.z - from.z;
+  if (dx == 0 && dy == 0) {
+    return false;
+  }
+
+  double from_x = 0.0;
+  double from_y = 0.0;
+  double to_x = 0.0;
+  double to_y = 0.0;
+  if (!stairSlope(from, from_x, from_y) || !stairSlope(to, to_x, to_y)) {
+    return false;
+  }
+
+  const double slope_dot = from_x * to_x + from_y * to_y;
+  if (slope_dot < 0.55) {
+    return false;
+  }
+
+  const double move_x = static_cast<double>(dx);
+  const double move_y = static_cast<double>(dy);
+  const double move_norm = std::hypot(move_x, move_y);
+  if (move_norm <= 1.0e-9) {
+    return false;
+  }
+
+  const double along_from = (move_x / move_norm) * from_x + (move_y / move_norm) * from_y;
+  const double along_to = (move_x / move_norm) * to_x + (move_y / move_norm) * to_y;
+  constexpr double along_threshold = 0.35;
+  if (dz == 0) {
+    // Same-height cells belong to one flight only across tread width. Walking along the
+    // stair axis at constant height is a landing/platform bridge and must split flights.
+    return std::abs(along_from) <= along_threshold && std::abs(along_to) <= along_threshold;
+  }
+
+  const double vertical_direction = dz > 0 ? 1.0 : -1.0;
+  return vertical_direction * along_from >= along_threshold &&
+         vertical_direction * along_to >= along_threshold;
 }
 
 bool NavigationMap::isStairSegmentBridgeAllowed(const GridIndex & from, const GridIndex & to) const
@@ -692,18 +864,20 @@ void NavigationMap::rebuildStairSegments()
     stair_slopes_[cell] = slope;
   }
 
+  std::unordered_set<GridIndex, GridIndexHash> visited_stair_cells;
+  visited_stair_cells.reserve(accepted_stair_cells_.size());
+
   for (const auto & seed : accepted_stair_cells_) {
-    if (stair_segment_by_cell_.find(seed) != stair_segment_by_cell_.end()) {
+    if (visited_stair_cells.find(seed) != visited_stair_cells.end()) {
       continue;
     }
 
     StairSegmentInfo segment;
-    segment.id = static_cast<int>(stair_segments_.size());
     segment.z_min = seed.z;
     segment.z_max = seed.z;
 
     std::deque<GridIndex> queue;
-    stair_segment_by_cell_[seed] = segment.id;
+    visited_stair_cells.insert(seed);
     queue.push_back(seed);
     while (!queue.empty()) {
       const GridIndex current = queue.front();
@@ -720,35 +894,47 @@ void NavigationMap::rebuildStairSegments()
           for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
             const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
             if (accepted_stair_cells_.find(neighbor) == accepted_stair_cells_.end() ||
-              stair_segment_by_cell_.find(neighbor) != stair_segment_by_cell_.end())
+              visited_stair_cells.find(neighbor) != visited_stair_cells.end())
             {
               continue;
             }
-            if (!stairCellsSlopeCompatible(current, neighbor)) {
+            if (!isStairFlightEdgeAllowed(current, neighbor)) {
               continue;
             }
-            stair_segment_by_cell_[neighbor] = segment.id;
+            visited_stair_cells.insert(neighbor);
             queue.push_back(neighbor);
           }
         }
       }
     }
 
+    std::unordered_set<GridIndex, GridIndexHash> segment_cell_set;
+    segment_cell_set.reserve(segment.cells.size());
+    for (const auto & cell : segment.cells) {
+      segment_cell_set.insert(cell);
+    }
+
     int turning_edges = 0;
     int comparable_edges = 0;
+    double slope_sum_x = 0.0;
+    double slope_sum_y = 0.0;
+    std::size_t slope_count = 0U;
     for (const auto & cell : segment.cells) {
       double cell_x = 0.0;
       double cell_y = 0.0;
       if (!stairSlope(cell, cell_x, cell_y)) {
         continue;
       }
+      slope_sum_x += cell_x;
+      slope_sum_y += cell_y;
+      ++slope_count;
       for (int dx = -1; dx <= 1; ++dx) {
         for (int dy = -1; dy <= 1; ++dy) {
           if (dx == 0 && dy == 0) {
             continue;
           }
           const GridIndex neighbor{cell.x + dx, cell.y + dy, cell.z};
-          if (stairSegmentId(neighbor) != segment.id) {
+          if (segment_cell_set.find(neighbor) == segment_cell_set.end()) {
             continue;
           }
           double neighbor_x = 0.0;
@@ -763,7 +949,19 @@ void NavigationMap::rebuildStairSegments()
         }
       }
     }
-    segment.spiral_like = comparable_edges > 0 && turning_edges * 4 > comparable_edges;
+    const double average_slope_norm = slope_count == 0U ?
+      0.0 : std::hypot(slope_sum_x, slope_sum_y) / static_cast<double>(slope_count);
+    segment.spiral_like =
+      average_slope_norm < 0.65 && comparable_edges > 0 && turning_edges * 4 > comparable_edges;
+
+    if (!isStairFlightWideEnough(segment)) {
+      continue;
+    }
+
+    segment.id = static_cast<int>(stair_segments_.size());
+    for (const auto & cell : segment.cells) {
+      stair_segment_by_cell_[cell] = segment.id;
+    }
     stair_segments_.push_back(std::move(segment));
   }
 }
@@ -905,6 +1103,67 @@ int NavigationMap::stairSideRunLength(const GridIndex & idx, int side_dx, int si
   return length;
 }
 
+bool NavigationMap::isStairFlightWideEnough(const StairSegmentInfo & segment) const
+{
+  if (segment.cells.empty()) {
+    return false;
+  }
+
+  const int required_width_cells = std::max(
+    2, static_cast<int>(std::ceil((robot_width_m_ + std::max(0.10, resolution_m_)) /
+      resolution_m_)));
+  const int required_center_side_cells = 1;
+  const int max_width_cells = std::max(1, static_cast<int>(std::ceil(2.0 / resolution_m_)));
+  const int z_tolerance = std::max(1, maxStepCells() / 2);
+
+  auto has_stair_near = [&](int x, int y, int z) {
+    for (int dz = -z_tolerance; dz <= z_tolerance; ++dz) {
+      if (accepted_stair_cells_.find({x, y, z + dz}) != accepted_stair_cells_.end()) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  std::size_t wide_cells = 0U;
+  std::size_t center_cells = 0U;
+  for (const auto & cell : segment.cells) {
+    int side_dx = 0;
+    int side_dy = 0;
+    if (!stairSideDirection(cell, side_dx, side_dy)) {
+      continue;
+    }
+
+    int left = 0;
+    for (int step = 1; step <= max_width_cells; ++step) {
+      if (!has_stair_near(cell.x + side_dx * step, cell.y + side_dy * step, cell.z)) {
+        break;
+      }
+      ++left;
+    }
+
+    int right = 0;
+    for (int step = 1; step <= max_width_cells; ++step) {
+      if (!has_stair_near(cell.x - side_dx * step, cell.y - side_dy * step, cell.z)) {
+        break;
+      }
+      ++right;
+    }
+
+    const int width_cells = left + right + 1;
+    if (width_cells >= required_width_cells) {
+      ++wide_cells;
+    }
+    if (std::min(left, right) >= required_center_side_cells) {
+      ++center_cells;
+    }
+  }
+
+  const std::size_t min_supported_cells =
+    std::max<std::size_t>(3U, segment.cells.size() / 20U);
+  return wide_cells >= min_supported_cells && center_cells >= min_supported_cells;
+}
+
 double NavigationMap::getStairCenterCost(const GridIndex & idx) const
 {
   int side_dx = 0;
@@ -927,6 +1186,255 @@ double NavigationMap::getStairCenterCost(const GridIndex & idx) const
   const double imbalance =
     static_cast<double>(std::abs(left - right)) / static_cast<double>(side_sum + 1);
   return 0.35 * static_cast<double>(edge_shortfall) + 0.45 * imbalance;
+}
+
+std::vector<std::vector<Point3>> NavigationMap::stairCenterlines() const
+{
+  std::vector<std::vector<Point3>> raw_centerlines;
+  raw_centerlines.reserve(stair_segments_.size());
+  const int max_step_cells = maxStepCells();
+  const int min_z_range_cells = std::max(1, max_step_cells / 2);
+  const std::size_t min_centerline_cells = 8U;
+  constexpr double min_centerline_length_m = 1.30;
+  constexpr double min_spiral_height_m = 1.50;
+
+  for (const auto & segment : stair_segments_) {
+    if (segment.cells.size() < min_centerline_cells ||
+      segment.z_max - segment.z_min < min_z_range_cells)
+    {
+      continue;
+    }
+
+    if (!segment.spiral_like) {
+      const int terminal_window = std::max(1, max_step_cells);
+      auto average_terminal = [&](bool high_end) {
+        Point3 sum;
+        std::size_t count = 0U;
+        for (const auto & cell : segment.cells) {
+          if (high_end && cell.z < segment.z_max - terminal_window) {
+            continue;
+          }
+          if (!high_end && cell.z > segment.z_min + terminal_window) {
+            continue;
+          }
+          const Point3 point = gridToWorld(cell);
+          sum.x += point.x;
+          sum.y += point.y;
+          sum.z += point.z;
+          ++count;
+        }
+        if (count == 0U) {
+          return gridToWorld(segment.cells.front());
+        }
+        const double scale = 1.0 / static_cast<double>(count);
+        return Point3{sum.x * scale, sum.y * scale, sum.z * scale};
+      };
+
+      std::vector<Point3> centerline{average_terminal(false), average_terminal(true)};
+      const double line_dx = centerline.front().x - centerline.back().x;
+      const double line_dy = centerline.front().y - centerline.back().y;
+      const double line_dz = centerline.front().z - centerline.back().z;
+      if (std::sqrt(line_dx * line_dx + line_dy * line_dy + line_dz * line_dz) >=
+        min_centerline_length_m)
+      {
+        raw_centerlines.push_back(std::move(centerline));
+      }
+      continue;
+    }
+
+    if (static_cast<double>(segment.z_max - segment.z_min) * resolution_m_ < min_spiral_height_m) {
+      continue;
+    }
+
+    std::unordered_map<int, std::vector<GridIndex>> cells_by_z;
+    cells_by_z.reserve(static_cast<std::size_t>(segment.z_max - segment.z_min + 1));
+    for (const auto & cell : segment.cells) {
+      cells_by_z[cell.z].push_back(cell);
+    }
+
+    std::vector<std::pair<int, Point3>> ordered_points;
+    ordered_points.reserve(cells_by_z.size());
+    for (const auto & entry : cells_by_z) {
+      Point3 sum;
+      for (const auto & cell : entry.second) {
+        const Point3 point = gridToWorld(cell);
+        sum.x += point.x;
+        sum.y += point.y;
+        sum.z += point.z;
+      }
+      const double scale = 1.0 / static_cast<double>(entry.second.size());
+      ordered_points.push_back({entry.first, {sum.x * scale, sum.y * scale, sum.z * scale}});
+    }
+
+    std::sort(
+      ordered_points.begin(), ordered_points.end(),
+      [](const auto & lhs, const auto & rhs) { return lhs.first < rhs.first; });
+
+    std::vector<Point3> centerline;
+    centerline.reserve(ordered_points.size());
+    for (const auto & point : ordered_points) {
+      centerline.push_back(point.second);
+    }
+    double length_m = 0.0;
+    for (std::size_t i = 1; i < centerline.size(); ++i) {
+      const double dx = centerline[i].x - centerline[i - 1].x;
+      const double dy = centerline[i].y - centerline[i - 1].y;
+      const double dz = centerline[i].z - centerline[i - 1].z;
+      length_m += std::sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    if (centerline.size() >= 2U && length_m >= min_centerline_length_m) {
+      raw_centerlines.push_back(std::move(centerline));
+    }
+  }
+
+  if (raw_centerlines.size() < 2U) {
+    return raw_centerlines;
+  }
+
+  double axis_sum_x = 0.0;
+  double axis_sum_y = 0.0;
+  for (const auto & line : raw_centerlines) {
+    if (line.size() < 2U) {
+      continue;
+    }
+    const Point3 & a = line.front();
+    const Point3 & b = line.back();
+    const double dx = b.x - a.x;
+    const double dy = b.y - a.y;
+    const double xy = std::hypot(dx, dy);
+    const double dz = std::abs(b.z - a.z);
+    if (xy < 1.0e-9 || pointDistance3d(a, b) < 1.0 || dz < 0.3) {
+      continue;
+    }
+    const double ux = dx / xy;
+    const double uy = dy / xy;
+    const double weight = pointDistance3d(a, b);
+    axis_sum_x += weight * (ux * ux - uy * uy);
+    axis_sum_y += weight * (2.0 * ux * uy);
+  }
+
+  const double axis_angle = 0.5 * std::atan2(axis_sum_y, axis_sum_x);
+  const double axis_x = std::cos(axis_angle);
+  const double axis_y = std::sin(axis_angle);
+  const double perp_x = -axis_y;
+  const double perp_y = axis_x;
+
+  struct Candidate
+  {
+    std::vector<Point3> line;
+    double length{0.0};
+    double xy{0.0};
+    double dz{0.0};
+    double axis_alignment{0.0};
+    double u_min{0.0};
+    double u_max{0.0};
+    double z_min{0.0};
+    double z_max{0.0};
+    double v{0.0};
+    int direction{1};
+  };
+
+  std::vector<Candidate> candidates;
+  candidates.reserve(raw_centerlines.size());
+  for (auto & line : raw_centerlines) {
+    if (line.size() < 2U) {
+      continue;
+    }
+    const Point3 a = line.front();
+    const Point3 b = line.back();
+    const double dx = b.x - a.x;
+    const double dy = b.y - a.y;
+    const double xy = std::hypot(dx, dy);
+    const double dz = std::abs(b.z - a.z);
+    const double length = pointDistance3d(a, b);
+    if (xy < 1.0e-9 || length < 0.65 || dz < 0.25) {
+      continue;
+    }
+    const double ux = dx / xy;
+    const double uy = dy / xy;
+    const double axis_dot = ux * axis_x + uy * axis_y;
+    const double alignment = std::abs(axis_dot);
+    const double slope = dz / xy;
+    if (alignment < 0.88 || slope < 0.25 || slope > 1.35) {
+      continue;
+    }
+
+    Candidate candidate;
+    candidate.line = std::move(line);
+    candidate.length = length;
+    candidate.xy = xy;
+    candidate.dz = dz;
+    candidate.axis_alignment = alignment;
+    candidate.direction = axis_dot >= 0.0 ? 1 : -1;
+    const double u0 = a.x * axis_x + a.y * axis_y;
+    const double u1 = b.x * axis_x + b.y * axis_y;
+    candidate.u_min = std::min(u0, u1);
+    candidate.u_max = std::max(u0, u1);
+    candidate.z_min = std::min(a.z, b.z);
+    candidate.z_max = std::max(a.z, b.z);
+    candidate.v = 0.5 * ((a.x + b.x) * perp_x + (a.y + b.y) * perp_y);
+    candidates.push_back(std::move(candidate));
+  }
+
+  std::vector<bool> merged(candidates.size(), false);
+  std::vector<std::vector<Point3>> merged_lines;
+  for (std::size_t i = 0; i < candidates.size(); ++i) {
+    if (merged[i]) {
+      continue;
+    }
+    std::vector<Point3> points = candidates[i].line;
+    merged[i] = true;
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (std::size_t j = 0; j < candidates.size(); ++j) {
+        if (merged[j] || candidates[i].direction != candidates[j].direction) {
+          continue;
+        }
+        if (std::abs(candidates[i].v - candidates[j].v) > 0.45) {
+          continue;
+        }
+        const double z_gap =
+          std::max(0.0, std::max(candidates[i].z_min, candidates[j].z_min) -
+            std::min(candidates[i].z_max, candidates[j].z_max));
+        if (z_gap > 0.75) {
+          continue;
+        }
+        const double gap =
+          std::max(0.0, std::max(candidates[i].u_min, candidates[j].u_min) -
+            std::min(candidates[i].u_max, candidates[j].u_max));
+        if (gap > 0.85) {
+          continue;
+        }
+        points.insert(points.end(), candidates[j].line.begin(), candidates[j].line.end());
+        candidates[i].u_min = std::min(candidates[i].u_min, candidates[j].u_min);
+        candidates[i].u_max = std::max(candidates[i].u_max, candidates[j].u_max);
+        candidates[i].z_min = std::min(candidates[i].z_min, candidates[j].z_min);
+        candidates[i].z_max = std::max(candidates[i].z_max, candidates[j].z_max);
+        candidates[i].v =
+          0.5 * (candidates[i].v + candidates[j].v);
+        merged[j] = true;
+        changed = true;
+      }
+    }
+
+    auto projection = [&](const Point3 & p) { return p.x * axis_x + p.y * axis_y; };
+    const auto low_it = std::min_element(
+      points.begin(), points.end(),
+      [&](const Point3 & lhs, const Point3 & rhs) { return projection(lhs) < projection(rhs); });
+    const auto high_it = std::max_element(
+      points.begin(), points.end(),
+      [&](const Point3 & lhs, const Point3 & rhs) { return projection(lhs) < projection(rhs); });
+    if (low_it == points.end() || high_it == points.end()) {
+      continue;
+    }
+    std::vector<Point3> line{*low_it, *high_it};
+    if (pointDistance3d(line.front(), line.back()) >= min_centerline_length_m) {
+      merged_lines.push_back(std::move(line));
+    }
+  }
+
+  return merged_lines;
 }
 
 int NavigationMap::maxStepCells() const
