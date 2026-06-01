@@ -193,6 +193,7 @@ private:
   int stairSegmentId(const GridIndex & idx) const;
   bool stairCellsSlopeCompatible(const GridIndex & from, const GridIndex & to) const;
   bool isStairSegmentBridgeAllowed(const GridIndex & from, const GridIndex & to) const;
+  bool isStairSameHeightTransferAllowed(const GridIndex & from, const GridIndex & to) const;
   bool stairSideDirection(const GridIndex & idx, int & side_dx, int & side_dy) const;
   bool isStairCenterCell(const GridIndex & idx, int min_side_cells) const;
   bool isStairEndpointCell(const GridIndex & idx) const;

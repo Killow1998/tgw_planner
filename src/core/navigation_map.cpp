@@ -456,6 +456,49 @@ bool NavigationMap::isStairSegmentBridgeAllowed(const GridIndex & from, const Gr
   return align >= 0.45;
 }
 
+bool NavigationMap::isStairSameHeightTransferAllowed(const GridIndex & from, const GridIndex & to) const
+{
+  if (!isStairTraversable(from) || !isStairTraversable(to) || from.z != to.z) {
+    return true;
+  }
+
+  const double move_x = static_cast<double>(to.x - from.x);
+  const double move_y = static_cast<double>(to.y - from.y);
+  const double move_norm = std::hypot(move_x, move_y);
+  if (move_norm <= 1.0e-9) {
+    return false;
+  }
+
+  double from_x = 0.0;
+  double from_y = 0.0;
+  double to_x = 0.0;
+  double to_y = 0.0;
+  const bool from_has_slope = stairSlope(from, from_x, from_y);
+  const bool to_has_slope = stairSlope(to, to_x, to_y);
+  if (!from_has_slope && !to_has_slope) {
+    return true;
+  }
+
+  const double unit_x = move_x / move_norm;
+  const double unit_y = move_y / move_norm;
+  const double from_along =
+    from_has_slope ? std::abs(unit_x * from_x + unit_y * from_y) : 1.0;
+  const double to_along = to_has_slope ? std::abs(unit_x * to_x + unit_y * to_y) : 1.0;
+  const bool moves_along_stair = std::max(from_along, to_along) >= 0.45;
+  if (moves_along_stair) {
+    return true;
+  }
+
+  if (from_has_slope && to_has_slope) {
+    return false;
+  }
+
+  const GridIndex sloped_cell = from_has_slope ? from : to;
+  const int center_side_cells =
+    std::max(1, static_cast<int>(std::ceil(0.5 * robot_radius_m_ / resolution_m_)));
+  return isStairEndpointCell(sloped_cell) && isStairCenterCell(sloped_cell, center_side_cells);
+}
+
 bool NavigationMap::stairSideDirection(const GridIndex & idx, int & side_dx, int & side_dy) const
 {
   side_dx = 0;
@@ -731,6 +774,10 @@ bool NavigationMap::isStairTransitionAllowed(const GridIndex & from, const GridI
   if (from_stair != to_stair) {
     const GridIndex stair_cell = from_stair ? from : to;
     return isStairEndpointCell(stair_cell) && isStairCenterCell(stair_cell, center_side_cells);
+  }
+
+  if (!isStairSameHeightTransferAllowed(from, to)) {
+    return false;
   }
 
   const int from_segment = stairSegmentId(from);
