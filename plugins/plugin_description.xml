@@ -1,0 +1,14 @@
+<library path="tgw_planner_rviz_plugins">
+  <class
+    name="tgw_planner/Tgw3DStartTool"
+    type="tgw_planner::rviz_plugins::Tgw3DStartTool"
+    base_class_type="rviz_common::Tool">
+    <description>Set a 3D start pose. Mouse wheel changes z; click-drag sets x/y/yaw.</description>
+  </class>
+  <class
+    name="tgw_planner/Tgw3DGoalTool"
+    type="tgw_planner::rviz_plugins::Tgw3DGoalTool"
+    base_class_type="rviz_common::Tool">
+    <description>Set a 3D goal pose. Mouse wheel changes z; click-drag sets x/y/yaw.</description>
+  </class>
+</library>

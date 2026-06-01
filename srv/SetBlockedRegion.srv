@@ -1,0 +1,12 @@
+# operation: add, remove, clear
+string operation
+
+# Axis-aligned bounding box in the map frame. Ignored for operation=clear.
+geometry_msgs/Point min
+geometry_msgs/Point max
+
+string reason
+---
+bool success
+string message
+uint32 affected_cells

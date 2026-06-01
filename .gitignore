@@ -1,0 +1,12 @@
+/build/
+/install/
+/log/
+/.colcon/
+
+*.pyc
+__pycache__/
+
+/.cache/
+
+# Local diagnostic handoff notes. Keep out of the public GitHub repo.
+CURRENT_NAVIGATION_ISSUES.md

@@ -1,0 +1,30 @@
+builtin_interfaces/Time stamp
+string map_id
+
+bool success
+string failure_reason
+
+float64 build_time_ms
+float64 search_time_ms
+float64 total_plan_time_ms
+
+uint32 occupied_cells
+uint32 traversable_cells
+uint32 blocked_cells
+uint32 risk_cells
+
+uint32 expanded_nodes
+uint32 generated_nodes
+uint32 reopened_nodes
+uint32 max_open_set_size
+
+uint32 path_waypoints
+float64 path_length_m
+float64 path_vertical_gain_m
+float64 path_vertical_loss_m
+
+float64 start_snap_distance_m
+float64 goal_snap_distance_m
+
+float64 map_resolution_m
+float64 robot_radius_m

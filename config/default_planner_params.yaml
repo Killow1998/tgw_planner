@@ -1,0 +1,15 @@
+tgw_planner_node:
+  ros__parameters:
+    pcd_file: "/home/user/ros_ws/to_migrate_ws/src/n3mapping/map/global_map.pcd"
+    map_frame: "map"
+    map_id: "n3mapping_global_map"
+    robot_radius_m: 0.35
+    robot_height_m: 0.80
+    map_resolution_m: 0.20
+    max_iterations: 250000
+    max_marker_cells: 120000
+    save_map_dir: ""
+
+tgw_clicked_point_router_node:
+  ros__parameters:
+    click_mode: "none"

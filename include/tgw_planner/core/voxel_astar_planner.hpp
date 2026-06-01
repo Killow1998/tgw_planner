@@ -1,0 +1,64 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "tgw_planner/core/grid_index.hpp"
+#include "tgw_planner/core/navigation_map.hpp"
+
+namespace tgw_planner::core
+{
+
+struct PlannerMetrics
+{
+  bool success{false};
+  std::string failure_reason;
+  double search_time_ms{0.0};
+  double total_plan_time_ms{0.0};
+  std::uint32_t expanded_nodes{0};
+  std::uint32_t generated_nodes{0};
+  std::uint32_t reopened_nodes{0};
+  std::uint32_t max_open_set_size{0};
+  std::uint32_t path_waypoints{0};
+  double path_length_m{0.0};
+  double path_vertical_gain_m{0.0};
+  double path_vertical_loss_m{0.0};
+  double start_snap_distance_m{0.0};
+  double goal_snap_distance_m{0.0};
+};
+
+struct PlanResult
+{
+  bool success{false};
+  std::string message;
+  bool start_snap_success{false};
+  bool goal_snap_success{false};
+  GridIndex start_cell;
+  GridIndex goal_cell;
+  std::vector<Point3> path;
+  PlannerMetrics metrics;
+};
+
+class VoxelAstarPlanner
+{
+public:
+  explicit VoxelAstarPlanner(std::uint32_t max_iterations = 250000);
+
+  PlanResult plan(const NavigationMap & map, const Point3 & start, const Point3 & goal) const;
+  bool snapToTraversable(
+    const NavigationMap & map, const Point3 & seed, GridIndex & snapped,
+    double & snap_distance_m) const;
+
+private:
+  std::vector<Point3> reconstructPath(
+    const NavigationMap & map,
+    const std::unordered_map<GridIndex, GridIndex, GridIndexHash> & came_from,
+    const GridIndex & start, const GridIndex & goal) const;
+  void fillPathMetrics(const std::vector<Point3> & path, PlannerMetrics & metrics) const;
+
+  std::uint32_t max_iterations_{250000};
+};
+
+}  // namespace tgw_planner::core
