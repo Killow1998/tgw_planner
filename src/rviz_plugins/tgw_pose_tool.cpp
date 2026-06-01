@@ -11,6 +11,7 @@
 #include "rviz_common/viewport_mouse_event.hpp"
 #include "rviz_common/ros_integration/ros_node_abstraction_iface.hpp"
 #include "rviz_default_plugins/tools/pose/pose_tool.hpp"
+#include "rviz_rendering/objects/arrow.hpp"
 #include "visualization_msgs/msg/marker.hpp"
 
 namespace tgw_planner::rviz_plugins
@@ -61,10 +62,12 @@ public:
         z_property_->setFloat(static_cast<float>(current_z_));
       }
       updateStatus();
+      updateArrowHeight();
       publishPreview();
       return Render;
     }
     const int result = PoseTool::processMouseEvent(event);
+    updateArrowHeight();
     publishPreview();
     return result;
   }
@@ -131,18 +134,8 @@ private:
     line.points.push_back(makePoint(x, y, marker_z));
     preview_pub_->publish(line);
 
-    visualization_msgs::msg::Marker sphere = line;
-    sphere.id = 1;
-    sphere.type = visualization_msgs::msg::Marker::SPHERE;
-    sphere.points.clear();
-    sphere.pose.position = makePoint(x, y, marker_z);
-    sphere.scale.x = 0.7;
-    sphere.scale.y = 0.7;
-    sphere.scale.z = 0.7;
-    preview_pub_->publish(sphere);
-
     visualization_msgs::msg::Marker text = line;
-    text.id = 2;
+    text.id = 1;
     text.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
     text.points.clear();
     text.pose.position = makePoint(x, y, marker_z + 0.75);
@@ -162,6 +155,16 @@ private:
     marker.ns = "tgw_pose_preview";
     marker.action = visualization_msgs::msg::Marker::DELETEALL;
     preview_pub_->publish(marker);
+  }
+
+  void updateArrowHeight()
+  {
+    if (!arrow_) {
+      return;
+    }
+    Ogre::Vector3 elevated_position = arrow_position_;
+    elevated_position.z = static_cast<float>(current_z_);
+    arrow_->setPosition(elevated_position);
   }
 
   void updateStatus()

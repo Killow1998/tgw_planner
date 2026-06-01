@@ -654,14 +654,14 @@ private:
     height_line.points.push_back(pose.pose.position);
     publisher->publish(height_line);
 
-    visualization_msgs::msg::Marker sphere = base;
-    sphere.id = 1;
-    sphere.type = visualization_msgs::msg::Marker::SPHERE;
-    sphere.pose.position = pose.pose.position;
-    sphere.scale.x = 0.75;
-    sphere.scale.y = 0.75;
-    sphere.scale.z = 0.75;
-    publisher->publish(sphere);
+    visualization_msgs::msg::Marker arrow = base;
+    arrow.id = 1;
+    arrow.type = visualization_msgs::msg::Marker::ARROW;
+    arrow.pose = pose.pose;
+    arrow.scale.x = 1.2;
+    arrow.scale.y = 0.28;
+    arrow.scale.z = 0.28;
+    publisher->publish(arrow);
 
     visualization_msgs::msg::Marker text = base;
     text.id = 2;
