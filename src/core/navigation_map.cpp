@@ -76,6 +76,9 @@ bool NavigationMap::loadFromPcd(
   rejected_ceiling_cells_.clear();
   rejected_clearance_cells_.clear();
   rejected_collision_cells_.clear();
+  stair_slopes_.clear();
+  stair_segment_by_cell_.clear();
+  stair_segments_.clear();
   blocked_cells_.clear();
   risk_cost_.clear();
   columns_.clear();
@@ -378,12 +381,272 @@ bool NavigationMap::hasContinuousSupport(const GridIndex & idx) const
   return support_count >= 3;
 }
 
+bool NavigationMap::stairSlope(const GridIndex & idx, double & slope_x, double & slope_y) const
+{
+  slope_x = 0.0;
+  slope_y = 0.0;
+  const auto it = stair_slopes_.find(idx);
+  if (it == stair_slopes_.end() || !it->second.valid) {
+    return false;
+  }
+  slope_x = it->second.x;
+  slope_y = it->second.y;
+  return true;
+}
+
+int NavigationMap::stairSegmentId(const GridIndex & idx) const
+{
+  const auto it = stair_segment_by_cell_.find(idx);
+  return it == stair_segment_by_cell_.end() ? -1 : it->second;
+}
+
+bool NavigationMap::stairCellsSlopeCompatible(const GridIndex & from, const GridIndex & to) const
+{
+  if (!isStairTraversable(from) || !isStairTraversable(to)) {
+    return true;
+  }
+  if (from.x == to.x && from.y == to.y) {
+    return false;
+  }
+
+  double from_x = 0.0;
+  double from_y = 0.0;
+  double to_x = 0.0;
+  double to_y = 0.0;
+  const bool from_has_slope = stairSlope(from, from_x, from_y);
+  const bool to_has_slope = stairSlope(to, to_x, to_y);
+
+  if (from_has_slope && to_has_slope) {
+    const double dot = from_x * to_x + from_y * to_y;
+    return dot >= 0.20;
+  }
+  if (from.z != to.z) {
+    return from_has_slope || to_has_slope;
+  }
+  return true;
+}
+
+bool NavigationMap::stairSideDirection(const GridIndex & idx, int & side_dx, int & side_dy) const
+{
+  side_dx = 0;
+  side_dy = 0;
+
+  double slope_x = 0.0;
+  double slope_y = 0.0;
+  if (stairSlope(idx, slope_x, slope_y)) {
+    const double perp_x = -slope_y;
+    const double perp_y = slope_x;
+    constexpr double component_threshold = 0.35;
+    if (std::abs(perp_x) >= component_threshold) {
+      side_dx = perp_x > 0.0 ? 1 : -1;
+    }
+    if (std::abs(perp_y) >= component_threshold) {
+      side_dy = perp_y > 0.0 ? 1 : -1;
+    }
+    if (side_dx == 0 && side_dy == 0) {
+      if (std::abs(perp_x) > std::abs(perp_y)) {
+        side_dx = perp_x > 0.0 ? 1 : -1;
+      } else {
+        side_dy = perp_y > 0.0 ? 1 : -1;
+      }
+    }
+    return side_dx != 0 || side_dy != 0;
+  }
+
+  int axis_x = 0;
+  int axis_y = 0;
+  if (!stairAxis(idx, axis_x, axis_y)) {
+    return false;
+  }
+  side_dx = axis_x != 0 && axis_y != 0 ? axis_y : (axis_x != 0 ? 0 : 1);
+  side_dy = axis_x != 0 && axis_y != 0 ? -axis_x : (axis_x != 0 ? 1 : 0);
+  return side_dx != 0 || side_dy != 0;
+}
+
+bool NavigationMap::hasNearbyAcceptedFloor(const GridIndex & idx) const
+{
+  const int max_step_cells = maxStepCells();
+  for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      if (dx == 0 && dy == 0) {
+        continue;
+      }
+      for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
+        const GridIndex neighbor{idx.x + dx, idx.y + dy, idx.z + dz};
+        if (accepted_floor_cells_.find(neighbor) != accepted_floor_cells_.end()) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+bool NavigationMap::isStairEndpointCell(const GridIndex & idx) const
+{
+  const int segment_id = stairSegmentId(idx);
+  if (segment_id < 0 || static_cast<std::size_t>(segment_id) >= stair_segments_.size()) {
+    return true;
+  }
+  const auto & segment = stair_segments_[segment_id];
+  const int terminal_window = std::max(1, maxStepCells());
+  const bool near_low_end = idx.z <= segment.z_min + terminal_window;
+  const bool near_high_end = idx.z >= segment.z_max - terminal_window;
+  if (!(near_low_end || near_high_end)) {
+    return false;
+  }
+  return hasNearbyAcceptedFloor(idx);
+}
+
+void NavigationMap::rebuildStairSegments()
+{
+  stair_slopes_.clear();
+  stair_segment_by_cell_.clear();
+  stair_segments_.clear();
+  if (accepted_stair_cells_.empty()) {
+    return;
+  }
+
+  const int max_step_cells = maxStepCells();
+  stair_slopes_.reserve(accepted_stair_cells_.size());
+  stair_segment_by_cell_.reserve(accepted_stair_cells_.size());
+
+  for (const auto & cell : accepted_stair_cells_) {
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    for (int dx = -1; dx <= 1; ++dx) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        if (dx == 0 && dy == 0) {
+          continue;
+        }
+        for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
+          if (dz == 0) {
+            continue;
+          }
+          const GridIndex neighbor{cell.x + dx, cell.y + dy, cell.z + dz};
+          if (accepted_stair_cells_.find(neighbor) == accepted_stair_cells_.end()) {
+            continue;
+          }
+          const double weight = static_cast<double>(std::abs(dz));
+          const double direction = dz > 0 ? 1.0 : -1.0;
+          sum_x += direction * static_cast<double>(dx) * weight;
+          sum_y += direction * static_cast<double>(dy) * weight;
+        }
+      }
+    }
+
+    StairSlope slope;
+    const double norm = std::hypot(sum_x, sum_y);
+    if (norm > 1.0e-9) {
+      slope.x = sum_x / norm;
+      slope.y = sum_y / norm;
+      slope.valid = true;
+    }
+    stair_slopes_[cell] = slope;
+  }
+
+  for (const auto & seed : accepted_stair_cells_) {
+    if (stair_segment_by_cell_.find(seed) != stair_segment_by_cell_.end()) {
+      continue;
+    }
+
+    StairSegmentInfo segment;
+    segment.id = static_cast<int>(stair_segments_.size());
+    segment.z_min = seed.z;
+    segment.z_max = seed.z;
+
+    std::deque<GridIndex> queue;
+    stair_segment_by_cell_[seed] = segment.id;
+    queue.push_back(seed);
+    while (!queue.empty()) {
+      const GridIndex current = queue.front();
+      queue.pop_front();
+      segment.cells.push_back(current);
+      segment.z_min = std::min(segment.z_min, current.z);
+      segment.z_max = std::max(segment.z_max, current.z);
+
+      for (int dx = -1; dx <= 1; ++dx) {
+        for (int dy = -1; dy <= 1; ++dy) {
+          if (dx == 0 && dy == 0) {
+            continue;
+          }
+          for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
+            const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
+            if (accepted_stair_cells_.find(neighbor) == accepted_stair_cells_.end() ||
+              stair_segment_by_cell_.find(neighbor) != stair_segment_by_cell_.end())
+            {
+              continue;
+            }
+            if (!stairCellsSlopeCompatible(current, neighbor)) {
+              continue;
+            }
+            stair_segment_by_cell_[neighbor] = segment.id;
+            queue.push_back(neighbor);
+          }
+        }
+      }
+    }
+
+    int turning_edges = 0;
+    int comparable_edges = 0;
+    for (const auto & cell : segment.cells) {
+      double cell_x = 0.0;
+      double cell_y = 0.0;
+      if (!stairSlope(cell, cell_x, cell_y)) {
+        continue;
+      }
+      for (int dx = -1; dx <= 1; ++dx) {
+        for (int dy = -1; dy <= 1; ++dy) {
+          if (dx == 0 && dy == 0) {
+            continue;
+          }
+          const GridIndex neighbor{cell.x + dx, cell.y + dy, cell.z};
+          if (stairSegmentId(neighbor) != segment.id) {
+            continue;
+          }
+          double neighbor_x = 0.0;
+          double neighbor_y = 0.0;
+          if (!stairSlope(neighbor, neighbor_x, neighbor_y)) {
+            continue;
+          }
+          ++comparable_edges;
+          if (cell_x * neighbor_x + cell_y * neighbor_y < 0.85) {
+            ++turning_edges;
+          }
+        }
+      }
+    }
+    segment.spiral_like = comparable_edges > 0 && turning_edges * 4 > comparable_edges;
+    stair_segments_.push_back(std::move(segment));
+  }
+}
+
 bool NavigationMap::stairAxis(const GridIndex & idx, int & axis_x, int & axis_y) const
 {
   axis_x = 0;
   axis_y = 0;
   if (!isStairTraversable(idx)) {
     return false;
+  }
+
+  double slope_x = 0.0;
+  double slope_y = 0.0;
+  if (stairSlope(idx, slope_x, slope_y)) {
+    constexpr double component_threshold = 0.35;
+    if (std::abs(slope_x) >= component_threshold) {
+      axis_x = slope_x > 0.0 ? 1 : -1;
+    }
+    if (std::abs(slope_y) >= component_threshold) {
+      axis_y = slope_y > 0.0 ? 1 : -1;
+    }
+    if (axis_x == 0 && axis_y == 0) {
+      if (std::abs(slope_x) > std::abs(slope_y)) {
+        axis_x = slope_x > 0.0 ? 1 : -1;
+      } else {
+        axis_y = slope_y > 0.0 ? 1 : -1;
+      }
+    }
+    return true;
   }
 
   int x_score = 0;
@@ -437,7 +700,13 @@ bool NavigationMap::isStairTransitionAllowed(const GridIndex & from, const GridI
     std::max(1, static_cast<int>(std::ceil(0.5 * robot_radius_m_ / resolution_m_)));
   if (from_stair != to_stair) {
     const GridIndex stair_cell = from_stair ? from : to;
-    return isStairCenterCell(stair_cell, center_side_cells);
+    return isStairEndpointCell(stair_cell) && isStairCenterCell(stair_cell, center_side_cells);
+  }
+
+  const int from_segment = stairSegmentId(from);
+  const int to_segment = stairSegmentId(to);
+  if (from_segment >= 0 && to_segment >= 0) {
+    return from_segment == to_segment;
   }
 
   int from_axis_x = 0;
@@ -452,19 +721,17 @@ bool NavigationMap::isStairTransitionAllowed(const GridIndex & from, const GridI
     return false;
   }
 
-  return true;
+  return stairCellsSlopeCompatible(from, to);
 }
 
 bool NavigationMap::isStairCenterCell(const GridIndex & idx, int min_side_cells) const
 {
-  int axis_x = 0;
-  int axis_y = 0;
-  if (!stairAxis(idx, axis_x, axis_y)) {
+  int side_dx = 0;
+  int side_dy = 0;
+  if (!stairSideDirection(idx, side_dx, side_dy)) {
     return true;
   }
 
-  const int side_dx = axis_x != 0 && axis_y != 0 ? 1 : (axis_x != 0 ? 0 : 1);
-  const int side_dy = axis_x != 0 && axis_y != 0 ? -1 : (axis_x != 0 ? 1 : 0);
   const int left = stairSideRunLength(idx, side_dx, side_dy);
   const int right = stairSideRunLength(idx, -side_dx, -side_dy);
   if (std::max(left, right) < min_side_cells) {
@@ -489,14 +756,12 @@ int NavigationMap::stairSideRunLength(const GridIndex & idx, int side_dx, int si
 
 double NavigationMap::getStairCenterCost(const GridIndex & idx) const
 {
-  int axis_x = 0;
-  int axis_y = 0;
-  if (!stairAxis(idx, axis_x, axis_y)) {
+  int side_dx = 0;
+  int side_dy = 0;
+  if (!stairSideDirection(idx, side_dx, side_dy)) {
     return 0.0;
   }
 
-  const int side_dx = axis_x != 0 && axis_y != 0 ? 1 : (axis_x != 0 ? 0 : 1);
-  const int side_dy = axis_x != 0 && axis_y != 0 ? -1 : (axis_x != 0 ? 1 : 0);
   const int left = stairSideRunLength(idx, side_dx, side_dy);
   const int right = stairSideRunLength(idx, -side_dx, -side_dy);
   const int side_sum = left + right;
@@ -779,6 +1044,8 @@ void NavigationMap::rebuildTraversableLayer()
       }
     }
   }
+
+  rebuildStairSegments();
 
   for (const auto & blocked : blocked_cells_) {
     forbidden_cells_.insert(blocked);

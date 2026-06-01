@@ -104,6 +104,22 @@ struct SurfaceCandidate
   SurfaceRejectReason reject_reason{SurfaceRejectReason::None};
 };
 
+struct StairSlope
+{
+  double x{0.0};
+  double y{0.0};
+  bool valid{false};
+};
+
+struct StairSegmentInfo
+{
+  int id{-1};
+  std::vector<GridIndex> cells;
+  int z_min{0};
+  int z_max{0};
+  bool spiral_like{false};
+};
+
 class NavigationMap
 {
 public:
@@ -171,8 +187,15 @@ private:
   const ColumnInfo * findColumn(int x, int y) const;
   bool hasHeadClearanceInColumn(const GridIndex & idx, int height_cells) const;
   int overheadDistanceCells(const GridIndex & idx, int height_cells, bool & overhead_known) const;
+  void rebuildStairSegments();
+  bool stairSlope(const GridIndex & idx, double & slope_x, double & slope_y) const;
   bool stairAxis(const GridIndex & idx, int & axis_x, int & axis_y) const;
+  int stairSegmentId(const GridIndex & idx) const;
+  bool stairCellsSlopeCompatible(const GridIndex & from, const GridIndex & to) const;
+  bool stairSideDirection(const GridIndex & idx, int & side_dx, int & side_dy) const;
   bool isStairCenterCell(const GridIndex & idx, int min_side_cells) const;
+  bool isStairEndpointCell(const GridIndex & idx) const;
+  bool hasNearbyAcceptedFloor(const GridIndex & idx) const;
   int stairSideRunLength(const GridIndex & idx, int side_dx, int side_dy) const;
 
   std::shared_ptr<octomap::OcTree> octree_;
@@ -188,6 +211,9 @@ private:
   std::unordered_set<GridIndex, GridIndexHash> blocked_cells_;
   std::unordered_map<GridIndex, double, GridIndexHash> risk_cost_;
   std::unordered_map<XYIndex, ColumnInfo, XYIndexHash> columns_;
+  std::unordered_map<GridIndex, StairSlope, GridIndexHash> stair_slopes_;
+  std::unordered_map<GridIndex, int, GridIndexHash> stair_segment_by_cell_;
+  std::vector<StairSegmentInfo> stair_segments_;
 
   double resolution_m_{0.20};
   double robot_radius_m_{0.35};
