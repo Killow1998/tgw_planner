@@ -11,6 +11,9 @@ def generate_launch_description():
     pcd_file = LaunchConfiguration("pcd_file")
     robot_radius_m = LaunchConfiguration("robot_radius_m")
     robot_height_m = LaunchConfiguration("robot_height_m")
+    robot_length_m = LaunchConfiguration("robot_length_m")
+    robot_width_m = LaunchConfiguration("robot_width_m")
+    base_to_front_m = LaunchConfiguration("base_to_front_m")
     map_resolution_m = LaunchConfiguration("map_resolution_m")
     map_frame = LaunchConfiguration("map_frame")
     map_id = LaunchConfiguration("map_id")
@@ -29,7 +32,10 @@ def generate_launch_description():
                 default_value="",
             ),
             DeclareLaunchArgument("robot_radius_m", default_value="0.35"),
-            DeclareLaunchArgument("robot_height_m", default_value="0.80"),
+            DeclareLaunchArgument("robot_height_m", default_value="0.50"),
+            DeclareLaunchArgument("robot_length_m", default_value="0.70"),
+            DeclareLaunchArgument("robot_width_m", default_value="0.43"),
+            DeclareLaunchArgument("base_to_front_m", default_value="0.20"),
             DeclareLaunchArgument("map_resolution_m", default_value="0.20"),
             DeclareLaunchArgument("map_frame", default_value="map"),
             DeclareLaunchArgument("map_id", default_value="tgw_nav_map"),
@@ -47,6 +53,9 @@ def generate_launch_description():
                         "pcd_file": pcd_file,
                         "robot_radius_m": robot_radius_m,
                         "robot_height_m": robot_height_m,
+                        "robot_length_m": robot_length_m,
+                        "robot_width_m": robot_width_m,
+                        "base_to_front_m": base_to_front_m,
                         "map_resolution_m": map_resolution_m,
                         "map_frame": map_frame,
                         "map_id": map_id,

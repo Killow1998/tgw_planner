@@ -19,9 +19,17 @@ source $ROS_WS/install/setup.bash
 ros2 launch tgw_planner pcd_to_path_mvp.launch.py \
   pcd_file:=/absolute/path/to/global_map.pcd \
   robot_radius_m:=0.35 \
-  robot_height_m:=0.80 \
+  robot_length_m:=0.70 \
+  robot_width_m:=0.43 \
+  robot_height_m:=0.50 \
+  base_to_front_m:=0.20 \
   map_resolution_m:=0.20
 ```
+
+The planner treats path poses as the odom/base reference point. By default that
+reference is 0.20 m behind the front edge of a 0.70 m x 0.43 m x 0.50 m
+footprint. A* neighbor expansion checks the rectangular footprint in the local
+movement direction instead of accepting a point-mass path.
 
 To save a lightweight map package during startup, pass `save_map_dir:=/path/to/map_package`.
 The package contains `map.bt`, `metadata.yaml`, `blocked_regions.yaml`, and `README.generated.txt`.

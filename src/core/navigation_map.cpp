@@ -39,7 +39,7 @@ Point3 orderedMax(const Point3 & a, const Point3 & b)
 bool NavigationMap::loadFromPcd(
   const std::string & pcd_file, double requested_resolution_m, double robot_radius_m,
   double robot_height_m, const std::string & map_frame, const std::string & map_id,
-  BuildStats & stats)
+  BuildStats & stats, double robot_length_m, double robot_width_m, double base_to_front_m)
 {
   const auto t0 = std::chrono::steady_clock::now();
   stats = BuildStats{};
@@ -61,8 +61,11 @@ bool NavigationMap::loadFromPcd(
 
   resolution_m_ = requested_resolution_m > 0.0 ? requested_resolution_m : 0.20;
   resolution_m_ = clampValue(resolution_m_, 0.05, 1.0);
-  robot_radius_m_ = std::max(0.01, robot_radius_m);
+  robot_length_m_ = std::max(0.10, robot_length_m);
+  robot_width_m_ = std::max(0.10, robot_width_m);
   robot_height_m_ = std::max(0.20, robot_height_m);
+  base_to_front_m_ = clampValue(base_to_front_m, 0.01, robot_length_m_ - 0.01);
+  robot_radius_m_ = std::max(0.01, robot_radius_m);
   risk_inflation_radius_m_ = std::max(robot_radius_m_, 2.0 * resolution_m_);
   map_frame_ = map_frame.empty() ? "map" : map_frame;
   map_id_ = map_id.empty() ? "tgw_nav_map" : map_id;
@@ -160,6 +163,10 @@ bool NavigationMap::saveToMapPackage(
   metadata << "source_pcd: " << source_pcd << "\n";
   metadata << "resolution_m: " << resolution_m_ << "\n";
   metadata << "robot_radius_m: " << robot_radius_m_ << "\n";
+  metadata << "robot_length_m: " << robot_length_m_ << "\n";
+  metadata << "robot_width_m: " << robot_width_m_ << "\n";
+  metadata << "robot_height_m: " << robot_height_m_ << "\n";
+  metadata << "base_to_front_m: " << base_to_front_m_ << "\n";
   metadata << "created_at: \"" << std::put_time(&utc_time, "%Y-%m-%dT%H:%M:%SZ") << "\"\n";
   metadata << "bounds:\n";
   metadata << "  min: [" << bounds_min_.x << ", " << bounds_min_.y << ", " << bounds_min_.z << "]\n";
@@ -358,6 +365,72 @@ bool NavigationMap::isCollisionFreeForRobot(const GridIndex & idx) const
   return true;
 }
 
+bool NavigationMap::isFootprintCollisionFreeAt(
+  const GridIndex & idx, double heading_x, double heading_y) const
+{
+  const double heading_norm = std::hypot(heading_x, heading_y);
+  if (heading_norm <= 1.0e-9) {
+    return isCollisionFreeForRobot(idx);
+  }
+
+  const double forward_x = heading_x / heading_norm;
+  const double forward_y = heading_y / heading_norm;
+  const double side_x = -forward_y;
+  const double side_y = forward_x;
+  const double front_m = base_to_front_m_;
+  const double rear_m = std::max(0.01, robot_length_m_ - base_to_front_m_);
+  const double half_width_m = 0.5 * robot_width_m_;
+  const double sample_step_m = std::max(0.05, 0.5 * resolution_m_);
+  const int height_cells =
+    std::max(1, static_cast<int>(std::ceil(robot_height_m_ / resolution_m_)));
+  const int low_step_clearance_cells =
+    std::max(0, maxStepCells());
+  const Point3 origin = gridToWorld(idx);
+
+  std::unordered_set<GridIndex, GridIndexHash> footprint_columns;
+  footprint_columns.reserve(64U);
+  for (double local_x = -rear_m; local_x <= front_m + 1.0e-9; local_x += sample_step_m) {
+    for (double local_y = -half_width_m; local_y <= half_width_m + 1.0e-9; local_y += sample_step_m) {
+      const Point3 sample{
+        origin.x + local_x * forward_x + local_y * side_x,
+        origin.y + local_x * forward_y + local_y * side_y,
+        origin.z};
+      footprint_columns.insert(worldToGrid(sample));
+    }
+  }
+
+  for (const auto & column : footprint_columns) {
+    const GridIndex footprint{column.x, column.y, idx.z};
+    if (isBlocked(footprint)) {
+      return false;
+    }
+    for (int dz = 0; dz <= height_cells; ++dz) {
+      const GridIndex check{column.x, column.y, idx.z + dz};
+      if (isBlocked(check)) {
+        return false;
+      }
+      if (dz <= low_step_clearance_cells) {
+        continue;
+      }
+      if (isOccupied(check)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool NavigationMap::isFootprintTransitionSafe(const GridIndex & from, const GridIndex & to) const
+{
+  const double heading_x = static_cast<double>(to.x - from.x);
+  const double heading_y = static_cast<double>(to.y - from.y);
+  if (std::hypot(heading_x, heading_y) <= 1.0e-9) {
+    return false;
+  }
+  return isFootprintCollisionFreeAt(from, heading_x, heading_y) &&
+         isFootprintCollisionFreeAt(to, heading_x, heading_y);
+}
+
 bool NavigationMap::isTraversable(const GridIndex & idx) const
 {
   return traversable_cells_.find(idx) != traversable_cells_.end() && !isBlocked(idx);
@@ -495,8 +568,9 @@ bool NavigationMap::isStairSameHeightTransferAllowed(const GridIndex & from, con
 
   const GridIndex sloped_cell = from_has_slope ? from : to;
   const int center_side_cells =
-    std::max(1, static_cast<int>(std::ceil(0.5 * robot_radius_m_ / resolution_m_)));
-  return isStairEndpointCell(sloped_cell) && isStairCenterCell(sloped_cell, center_side_cells);
+    std::max(1, static_cast<int>(std::ceil(0.5 * robot_width_m_ / resolution_m_)));
+  return isStairEndpointCell(sloped_cell) && isStairCenterCell(sloped_cell, center_side_cells) &&
+         isFootprintTransitionSafe(from, to);
 }
 
 bool NavigationMap::stairSideDirection(const GridIndex & idx, int & side_dx, int & side_dy) const
@@ -770,7 +844,7 @@ bool NavigationMap::isStairTransitionAllowed(const GridIndex & from, const GridI
   }
 
   const int center_side_cells =
-    std::max(1, static_cast<int>(std::ceil(0.5 * robot_radius_m_ / resolution_m_)));
+    std::max(1, static_cast<int>(std::ceil(0.5 * robot_width_m_ / resolution_m_)));
   if (from_stair != to_stair) {
     const GridIndex stair_cell = from_stair ? from : to;
     return isStairEndpointCell(stair_cell) && isStairCenterCell(stair_cell, center_side_cells);
@@ -848,7 +922,7 @@ double NavigationMap::getStairCenterCost(const GridIndex & idx) const
 
   const int min_side = std::min(left, right);
   const int desired_margin_cells =
-    std::max(1, static_cast<int>(std::ceil(robot_radius_m_ / resolution_m_)));
+    std::max(1, static_cast<int>(std::ceil(0.5 * robot_width_m_ / resolution_m_)));
   const int edge_shortfall = std::max(0, desired_margin_cells - min_side);
   const double imbalance =
     static_cast<double>(std::abs(left - right)) / static_cast<double>(side_sum + 1);
@@ -1311,6 +1385,21 @@ double NavigationMap::robotRadius() const
 double NavigationMap::robotHeight() const
 {
   return robot_height_m_;
+}
+
+double NavigationMap::robotLength() const
+{
+  return robot_length_m_;
+}
+
+double NavigationMap::robotWidth() const
+{
+  return robot_width_m_;
+}
+
+double NavigationMap::baseToFront() const
+{
+  return base_to_front_m_;
 }
 
 double NavigationMap::riskInflationRadius() const

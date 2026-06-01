@@ -128,7 +128,8 @@ public:
   bool loadFromPcd(
     const std::string & pcd_file, double requested_resolution_m, double robot_radius_m,
     double robot_height_m, const std::string & map_frame, const std::string & map_id,
-    BuildStats & stats);
+    BuildStats & stats, double robot_length_m = 0.70, double robot_width_m = 0.43,
+    double base_to_front_m = 0.20);
   bool saveToMapPackage(
     const std::string & map_dir, const std::string & source_pcd, std::string & message) const;
 
@@ -140,6 +141,9 @@ public:
   bool isBlocked(const GridIndex & idx) const;
   bool hasGroundSupport(const GridIndex & idx) const;
   bool isCollisionFreeForRobot(const GridIndex & idx) const;
+  bool isFootprintCollisionFreeAt(
+    const GridIndex & idx, double heading_x, double heading_y) const;
+  bool isFootprintTransitionSafe(const GridIndex & from, const GridIndex & to) const;
   bool isTraversable(const GridIndex & idx) const;
   bool isStairTraversable(const GridIndex & idx) const;
   bool hasContinuousSupport(const GridIndex & idx) const;
@@ -172,6 +176,9 @@ public:
   double resolution() const;
   double robotRadius() const;
   double robotHeight() const;
+  double robotLength() const;
+  double robotWidth() const;
+  double baseToFront() const;
   double riskInflationRadius() const;
   const std::string & mapFrame() const;
   const std::string & mapId() const;
@@ -219,7 +226,10 @@ private:
 
   double resolution_m_{0.20};
   double robot_radius_m_{0.35};
-  double robot_height_m_{0.80};
+  double robot_height_m_{0.50};
+  double robot_length_m_{0.70};
+  double robot_width_m_{0.43};
+  double base_to_front_m_{0.20};
   double risk_inflation_radius_m_{0.40};
   std::string map_frame_{"map"};
   std::string map_id_{"tgw_nav_map"};

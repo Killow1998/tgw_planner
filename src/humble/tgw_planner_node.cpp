@@ -73,7 +73,10 @@ public:
     declare_parameter<std::string>("map_frame", "map");
     declare_parameter<std::string>("map_id", "tgw_nav_map");
     declare_parameter<double>("robot_radius_m", 0.35);
-    declare_parameter<double>("robot_height_m", 0.80);
+    declare_parameter<double>("robot_height_m", 0.50);
+    declare_parameter<double>("robot_length_m", 0.70);
+    declare_parameter<double>("robot_width_m", 0.43);
+    declare_parameter<double>("base_to_front_m", 0.20);
     declare_parameter<double>("map_resolution_m", 0.20);
     declare_parameter<int>("max_iterations", 250000);
     declare_parameter<int>("max_marker_cells", 120000);
@@ -163,7 +166,8 @@ private:
     const bool ok = map_.loadFromPcd(
       pcd_file, requested_resolution, get_parameter("robot_radius_m").as_double(),
       get_parameter("robot_height_m").as_double(), get_parameter("map_frame").as_string(),
-      get_parameter("map_id").as_string(), stats);
+      get_parameter("map_id").as_string(), stats, get_parameter("robot_length_m").as_double(),
+      get_parameter("robot_width_m").as_double(), get_parameter("base_to_front_m").as_double());
     last_build_stats_ = stats;
     if (!ok) {
       RCLCPP_ERROR(get_logger(), "[NavMapBuilder] %s", stats.message.c_str());
@@ -173,6 +177,10 @@ private:
     RCLCPP_INFO(get_logger(), "[NavMapBuilder] source_pcd: %s", stats.source_pcd.c_str());
     RCLCPP_INFO(get_logger(), "[NavMapBuilder] source_points: %lu", stats.source_points);
     RCLCPP_INFO(get_logger(), "[NavMapBuilder] resolution_m: %.3f", map_.resolution());
+    RCLCPP_INFO(
+      get_logger(),
+      "[NavMapBuilder] footprint length/width/height/base_to_front: %.3f / %.3f / %.3f / %.3f",
+      map_.robotLength(), map_.robotWidth(), map_.robotHeight(), map_.baseToFront());
     RCLCPP_INFO(get_logger(), "[NavMapBuilder] occupied_cells: %u", stats.counts.occupied_cells);
     RCLCPP_INFO(get_logger(), "[NavMapBuilder] traversable_cells: %u", stats.counts.traversable_cells);
     RCLCPP_INFO(
