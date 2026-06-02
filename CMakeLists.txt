@@ -22,6 +22,9 @@ find_package(rviz_default_plugins REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common io filters)
 find_package(octomap REQUIRED)
@@ -83,6 +86,22 @@ ament_target_dependencies(tgw_clicked_point_router_node
   rclcpp
 )
 
+add_executable(tgw_realtime_mapping_node
+  src/humble/realtime_mapping_node.cpp
+)
+target_link_libraries(tgw_realtime_mapping_node
+  tgw_planner_core
+)
+ament_target_dependencies(tgw_realtime_mapping_node
+  geometry_msgs
+  rclcpp
+  sensor_msgs
+  std_msgs
+  std_srvs
+  tf2
+  tf2_ros
+)
+
 add_library(tgw_planner_rviz_plugins SHARED
   src/rviz_plugins/tgw_pose_tool.cpp
 )
@@ -114,6 +133,7 @@ install(TARGETS
   tgw_planner_core
   tgw_planner_node
   tgw_clicked_point_router_node
+  tgw_realtime_mapping_node
   tgw_planner_rviz_plugins
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib

@@ -1,0 +1,36 @@
+tgw_realtime_mapping_node:
+  ros__parameters:
+    points_topic: "/tgw_mapping/points"
+    pose_topic: "/tgw_mapping/pose"
+    map_frame: "map"
+    sensor_frame: ""
+    use_tf: true
+    assume_cloud_in_map_frame: false
+
+    resolution_m: 0.10
+    min_range_m: 0.30
+    max_range_m: 30.0
+    max_points_per_scan: 120000
+    publish_period_ms: 1000
+
+    p_hit: 0.70
+    p_miss: 0.40
+    p_occupied_threshold: 0.65
+    p_free_threshold: 0.35
+    min_static_hits: 3
+    min_distinct_views: 2
+    min_static_lifetime_sec: 1.0
+    enable_self_filter: true
+    enable_dynamic_filter: true
+
+    self_filter_min_x: -0.60
+    self_filter_max_x: 0.60
+    self_filter_min_y: -0.40
+    self_filter_max_y: 0.40
+    self_filter_min_z: -0.35
+    self_filter_max_z: 0.80
+
+    robot_height_m: 0.50
+    max_step_height_m: 0.30
+    surface_min_static_hits: 1
+    surface_require_static_support: false
