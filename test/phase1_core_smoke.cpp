@@ -284,6 +284,49 @@ int main()
   CHECK(validation.checked_samples > plan.path.size());
   CHECK(validation.mean_clearance_m > 0.0);
 
+  NavigationSnapshot fallback_snapshot;
+  fallback_snapshot.resolution_m = options.resolution_m;
+  for (int x = 0; x <= 6; ++x) {
+    for (int y = 0; y <= 6; ++y) {
+      const GridIndex cell{x, y, 0};
+      fallback_snapshot.surface.traversable_cells.insert(cell);
+      fallback_snapshot.surface.surface_cells[cell].cell = cell;
+      fallback_snapshot.surface.surface_cells[cell].support = {x, y, -1};
+      fallback_snapshot.surface.surface_cells[cell].height_m = fallback_snapshot.resolution_m * 0.5;
+    }
+  }
+  fallback_snapshot.surface.boundary_cells.insert({3, 3, 0});
+  fallback_snapshot.clearance.compute(
+    fallback_snapshot.surface.traversable_cells, fallback_snapshot.surface.boundary_cells,
+    fallback_snapshot.resolution_m);
+  fallback_snapshot.risk.compute(fallback_snapshot.surface, fallback_snapshot.clearance);
+  SurfacePlannerOptions fallback_options;
+  fallback_options.require_footprint_support = false;
+  fallback_options.w_clearance = 12.0;
+  fallback_options.w_risk = 0.0;
+  fallback_options.w_slope = 0.0;
+  fallback_options.w_turn = 0.0;
+  fallback_options.enable_shortcut = true;
+  fallback_options.shortcut_clearance_ratio = 0.0;
+  fallback_options.shortcut_safety_margin_m = 0.0;
+  fallback_options.final_validation_min_clearance_m = 0.15;
+  fallback_options.footprint.width_m = 0.0;
+  SurfaceAstarPlanner fallback_planner(fallback_options);
+  const auto fallback_plan =
+    fallback_planner.plan(fallback_snapshot, {0, 3, 0}, {6, 3, 0});
+  CHECK(fallback_plan.success);
+  CHECK(fallback_plan.metrics.final_path_validated);
+  CHECK(fallback_plan.metrics.final_path_fallback_to_raw);
+  CHECK(
+    fallback_plan.metrics.final_path_validation_failure.find("clearance below minimum") !=
+    std::string::npos);
+  bool fallback_uses_low_clearance_center = false;
+  for (const auto & cell : fallback_plan.cells) {
+    fallback_uses_low_clearance_center =
+      fallback_uses_low_clearance_center || cell == GridIndex{3, 3, 0};
+  }
+  CHECK(!fallback_uses_low_clearance_center);
+
   NavigationSnapshot blocked_snapshot;
   blocked_snapshot.resolution_m = options.resolution_m;
   blocked_snapshot.surface.traversable_cells.insert({0, 0, 0});

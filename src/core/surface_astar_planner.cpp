@@ -50,6 +50,8 @@ SurfaceAstarPlanner::SurfaceAstarPlanner(SurfacePlannerOptions options)
   options_.swept_sample_step_m = std::max(0.01, options_.swept_sample_step_m);
   options_.shortcut_sample_step_m = std::max(0.01, options_.shortcut_sample_step_m);
   options_.shortcut_clearance_ratio = std::clamp(options_.shortcut_clearance_ratio, 0.0, 1.0);
+  options_.final_validation_min_clearance_m =
+    std::max(0.0, options_.final_validation_min_clearance_m);
 }
 
 SurfacePlanResult SurfaceAstarPlanner::plan(
@@ -439,6 +441,9 @@ bool SurfaceAstarPlanner::validatePath(
       failure_reason = "final path sample is not traversable";
       return false;
     }
+    if (!hasRequiredFinalClearance(snapshot, cell, failure_reason)) {
+      return false;
+    }
     if (!isFootprintSupported(snapshot, path.front(), 0.0)) {
       failure_reason = "final path footprint is not fully supported";
       return false;
@@ -456,6 +461,12 @@ bool SurfaceAstarPlanner::validatePath(
       if (!isTransitionAllowed(snapshot, from_cell, to_cell)) {
         failure_reason = "final path direct transition is not allowed segment=" +
           std::to_string(i) + " from=" + cellString(from_cell) + " to=" + cellString(to_cell);
+        return false;
+      }
+      if (i == 1U && !hasRequiredFinalClearance(snapshot, from_cell, failure_reason)) {
+        return false;
+      }
+      if (!hasRequiredFinalClearance(snapshot, to_cell, failure_reason)) {
         return false;
       }
       continue;
@@ -486,6 +497,9 @@ bool SurfaceAstarPlanner::validatePath(
           std::to_string(to_cell.z - from_cell.z) + "]";
         return false;
       }
+      if (!hasRequiredFinalClearance(snapshot, sample_cell, failure_reason)) {
+        return false;
+      }
       if (!isFootprintSupported(snapshot, sample, yaw)) {
         failure_reason = "final path footprint is not fully supported segment=" +
           std::to_string(i) + " step=" + std::to_string(step) +
@@ -504,6 +518,20 @@ bool SurfaceAstarPlanner::validatePath(
 
   failure_reason.clear();
   return true;
+}
+
+bool SurfaceAstarPlanner::hasRequiredFinalClearance(
+  const NavigationSnapshot & snapshot, const GridIndex & cell, std::string & failure_reason) const
+{
+  if (options_.final_validation_min_clearance_m <= 0.0) {
+    return true;
+  }
+  const double clearance = snapshot.clearance.clearanceDistance(cell);
+  if (clearance >= options_.final_validation_min_clearance_m) {
+    return true;
+  }
+  failure_reason = "final path clearance below minimum cell=" + cellString(cell);
+  return false;
 }
 
 void SurfaceAstarPlanner::fillMetrics(

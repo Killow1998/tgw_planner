@@ -26,6 +26,7 @@ struct SurfacePlannerOptions
   double shortcut_sample_step_m{0.05};
   double shortcut_clearance_ratio{0.80};
   double shortcut_safety_margin_m{0.02};
+  double final_validation_min_clearance_m{0.0};
   RobotFootprintOptions footprint;
 };
 
@@ -95,6 +96,8 @@ private:
   bool validatePath(
     const NavigationSnapshot & snapshot, const std::vector<Point3> & path,
     std::string & failure_reason) const;
+  bool hasRequiredFinalClearance(
+    const NavigationSnapshot & snapshot, const GridIndex & cell, std::string & failure_reason) const;
   void fillMetrics(const NavigationSnapshot & snapshot, SurfacePlanResult & result) const;
 
   SurfacePlannerOptions options_;
