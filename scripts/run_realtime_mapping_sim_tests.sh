@@ -12,12 +12,17 @@ fi
 set -u
 
 launch_pid=""
+tmp_paths=()
 cleanup()
 {
   if [[ -n "${launch_pid}" ]]; then
     kill "${launch_pid}" >/dev/null 2>&1 || true
     wait "${launch_pid}" >/dev/null 2>&1 || true
     launch_pid=""
+  fi
+  if (( ${#tmp_paths[@]} > 0 )); then
+    rm -rf "${tmp_paths[@]}"
+    tmp_paths=()
   fi
 }
 trap cleanup EXIT
@@ -234,5 +239,55 @@ run_dynamic_disappears_case()
   fi
 }
 
+run_blocked_region_persistence_case()
+{
+  cleanup
+  local log_file="/tmp/tgw_realtime_blocked_region_launch.log"
+  local output_dir
+  output_dir="$(mktemp -d /tmp/tgw_realtime_blocked_region.XXXXXX)"
+  local add_file="/tmp/tgw_realtime_blocked_region_add.out"
+  local save_file="/tmp/tgw_realtime_blocked_region_save.out"
+  local clear_file="/tmp/tgw_realtime_blocked_region_clear.out"
+  local load_file="/tmp/tgw_realtime_blocked_region_load.out"
+  local remove_file="/tmp/tgw_realtime_blocked_region_remove.out"
+  tmp_paths+=("${output_dir}" "${add_file}" "${save_file}" "${clear_file}" "${load_file}" "${remove_file}")
+
+  ros2 launch tgw_planner realtime_mapping.launch.py \
+    publish_period_ms:=300 \
+    planner_require_footprint:=false \
+    validation_require_footprint:=false >"${log_file}" 2>&1 &
+  launch_pid="$!"
+  wait_for_node
+
+  ros2 service call /tgw_map/set_blocked_region tgw_planner/srv/SetBlockedRegion \
+    "{operation: add, min: {x: 0.0, y: 0.0, z: 0.0}, max: {x: 1.0, y: 1.0, z: 1.0}, reason: regression}" \
+    >"${add_file}" 2>&1
+  ros2 service call /tgw_mapping/save_map tgw_planner/srv/SaveMap \
+    "{output_dir: ${output_dir}}" >"${save_file}" 2>&1
+  ros2 service call /tgw_mapping/clear std_srvs/srv/Trigger "{}" >"${clear_file}" 2>&1
+  ros2 service call /tgw_mapping/load_map tgw_planner/srv/LoadMap \
+    "{input_dir: ${output_dir}}" >"${load_file}" 2>&1
+  ros2 service call /tgw_map/set_blocked_region tgw_planner/srv/SetBlockedRegion \
+    "{operation: remove, min: {x: 0.0, y: 0.0, z: 0.0}, max: {x: 1.0, y: 1.0, z: 1.0}, reason: regression}" \
+    >"${remove_file}" 2>&1
+
+  local save_success load_success removed_region
+  save_success="$(grep -o "success=True\\|success=False" "${save_file}" | tail -n 1 || true)"
+  load_success="$(grep -o "success=True\\|success=False" "${load_file}" | tail -n 1 || true)"
+  removed_region="$(grep -o "removed 1 realtime blocked regions" "${remove_file}" | tail -n 1 || true)"
+  echo "blocked_region_persistence: ${save_success:-save=unknown} ${load_success:-load=unknown} removed_region=${removed_region:+true}"
+  if [[ "${save_success}" != "success=True" || "${load_success}" != "success=True" ]]; then
+    echo "FAIL blocked_region_persistence: save/load failed"
+    cat "${save_file}" "${load_file}"
+    return 1
+  fi
+  if [[ -z "${removed_region}" ]]; then
+    echo "FAIL blocked_region_persistence: loaded blocked_regions.yaml did not restore an editable region"
+    cat "${remove_file}"
+    return 1
+  fi
+}
+
 run_floor_ceiling_case
 run_dynamic_disappears_case
+run_blocked_region_persistence_case
