@@ -801,6 +801,151 @@ private:
     return out.str();
   }
 
+  std::string trim(const std::string & value) const
+  {
+    const auto begin = value.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) {
+      return "";
+    }
+    const auto end = value.find_last_not_of(" \t\r\n");
+    return value.substr(begin, end - begin + 1U);
+  }
+
+  bool parseYamlPointLine(const std::string & line, const std::string & key, Point3 & point) const
+  {
+    const std::string pattern = key + ":";
+    const auto key_pos = line.find(pattern);
+    if (key_pos == std::string::npos) {
+      return false;
+    }
+    const auto left = line.find('[', key_pos + pattern.size());
+    const auto right = line.find(']', left == std::string::npos ? key_pos : left);
+    if (left == std::string::npos || right == std::string::npos || right <= left) {
+      return false;
+    }
+    std::string payload = line.substr(left + 1U, right - left - 1U);
+    std::replace(payload.begin(), payload.end(), ',', ' ');
+    std::istringstream in(payload);
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+    if (!(in >> x >> y >> z)) {
+      return false;
+    }
+    point = {x, y, z};
+    return true;
+  }
+
+  bool parseYamlReasonLine(const std::string & line, std::string & reason) const
+  {
+    const auto key_pos = line.find("reason:");
+    if (key_pos == std::string::npos) {
+      return false;
+    }
+    std::string payload = trim(line.substr(key_pos + 7U));
+    if (payload.size() >= 2U && payload.front() == '"' && payload.back() == '"') {
+      payload = payload.substr(1U, payload.size() - 2U);
+    }
+    std::string unescaped;
+    unescaped.reserve(payload.size());
+    bool escaping = false;
+    for (const char ch : payload) {
+      if (escaping) {
+        unescaped.push_back(ch);
+        escaping = false;
+      } else if (ch == '\\') {
+        escaping = true;
+      } else {
+        unescaped.push_back(ch);
+      }
+    }
+    if (escaping) {
+      unescaped.push_back('\\');
+    }
+    reason = unescaped;
+    return true;
+  }
+
+  std::vector<BlockedRegion> loadBlockedRegionsYaml(
+    const std::filesystem::path & path, std::string & message) const
+  {
+    message.clear();
+    std::vector<BlockedRegion> regions;
+    if (!std::filesystem::exists(path)) {
+      return regions;
+    }
+
+    std::ifstream in(path);
+    if (!in) {
+      message = "failed to open blocked regions file: " + path.string();
+      return regions;
+    }
+
+    BlockedRegion current;
+    bool have_min = false;
+    bool have_max = false;
+    bool have_reason = false;
+    auto flush_current = [&]() {
+      if (!have_min && !have_max && !have_reason) {
+        return;
+      }
+      if (have_min && have_max) {
+        regions.push_back(current);
+      }
+      current = BlockedRegion{};
+      have_min = false;
+      have_max = false;
+      have_reason = false;
+    };
+
+    std::string line;
+    std::size_t line_number = 0U;
+    while (std::getline(in, line)) {
+      ++line_number;
+      const std::string stripped = trim(line);
+      if (stripped.empty() || stripped == "blocked_regions:") {
+        continue;
+      }
+      if (stripped.rfind("- min:", 0) == 0) {
+        flush_current();
+        if (!parseYamlPointLine(stripped, "min", current.min)) {
+          message = "invalid blocked region min at " + path.string() + ":" +
+            std::to_string(line_number);
+          regions.clear();
+          return regions;
+        }
+        have_min = true;
+        continue;
+      }
+      if (stripped.rfind("max:", 0) == 0) {
+        if (!parseYamlPointLine(stripped, "max", current.max)) {
+          message = "invalid blocked region max at " + path.string() + ":" +
+            std::to_string(line_number);
+          regions.clear();
+          return regions;
+        }
+        have_max = true;
+        continue;
+      }
+      if (stripped.rfind("reason:", 0) == 0) {
+        if (!parseYamlReasonLine(stripped, current.reason)) {
+          message = "invalid blocked region reason at " + path.string() + ":" +
+            std::to_string(line_number);
+          regions.clear();
+          return regions;
+        }
+        have_reason = true;
+        continue;
+      }
+      message = "unsupported blocked region line at " + path.string() + ":" +
+        std::to_string(line_number);
+      regions.clear();
+      return regions;
+    }
+    flush_current();
+    return regions;
+  }
+
   std::string yamlEscape(const std::string & value) const
   {
     std::string escaped;
@@ -1479,6 +1624,7 @@ private:
     const std::filesystem::path static_path = input_dir / "static_candidate_cloud.pcd";
     const std::filesystem::path dynamic_path = input_dir / "dynamic_suspect_cloud.pcd";
     const std::filesystem::path blocked_path = input_dir / "blocked_cloud.pcd";
+    const std::filesystem::path blocked_regions_path = input_dir / "blocked_regions.yaml";
 
     std::string message;
     const LoadedPcdCells occupied_cells = loadPcdCells(occupied_path, message);
@@ -1496,6 +1642,7 @@ private:
     const LoadedPcdCells static_cells = loadPcdCells(static_path, message);
     const LoadedPcdCells dynamic_cells = loadPcdCells(dynamic_path, message);
     const LoadedPcdCells blocked_cells = loadPcdCells(blocked_path, message);
+    std::vector<BlockedRegion> loaded_regions = loadBlockedRegionsYaml(blocked_regions_path, message);
     if (!message.empty()) {
       response->success = false;
       response->message = message;
@@ -1503,7 +1650,7 @@ private:
     }
 
     map_.clear();
-    blocked_regions_.clear();
+    blocked_regions_ = std::move(loaded_regions);
     loaded_blocked_cells_.clear();
     response->free_points = loadLayer(free_cells, false, true, false, false);
     response->occupied_points = loadLayer(occupied_cells, true, false, false, false);
