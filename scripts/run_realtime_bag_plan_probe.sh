@@ -364,7 +364,8 @@ def main():
             f"min_path_clearance_m={stats.min_path_clearance_m:.3f} "
             f"mean_path_clearance_m={stats.mean_path_clearance_m:.3f} "
             f"low_clearance_samples={stats.low_clearance_samples} "
-            f"clearance_cost_sum={stats.clearance_cost_sum:.3f}")
+            f"clearance_cost_sum={stats.clearance_cost_sum:.3f} "
+            f"unknown_cost_sum={stats.unknown_cost_sum:.3f}")
         if response.success and stats.final_path_validated and stats.path_waypoints > 0:
             return 0
 

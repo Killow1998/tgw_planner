@@ -1045,6 +1045,7 @@ private:
     out << "\"min_path_clearance_m\":" << stats.min_path_clearance_m << ",";
     out << "\"mean_path_clearance_m\":" << stats.mean_path_clearance_m << ",";
     out << "\"clearance_cost_sum\":" << stats.clearance_cost_sum << ",";
+    out << "\"unknown_cost_sum\":" << stats.unknown_cost_sum << ",";
     out << "\"low_clearance_samples\":" << stats.low_clearance_samples << ",";
     out << "\"start_snap_distance_m\":" << stats.start_snap_distance_m << ",";
     out << "\"goal_snap_distance_m\":" << stats.goal_snap_distance_m << ",";
@@ -1278,6 +1279,21 @@ private:
     return sum;
   }
 
+  double unknownCostSum(
+    const NavigationSnapshot & snapshot, const std::vector<GridIndex> & cells) const
+  {
+    if (snapshot.observed_free_cells.empty()) {
+      return 0.0;
+    }
+    double sum = 0.0;
+    for (const GridIndex & cell : cells) {
+      if (snapshot.observed_free_cells.find(cell) == snapshot.observed_free_cells.end()) {
+        sum += 1.0;
+      }
+    }
+    return sum;
+  }
+
   void handlePlanPath(
     const std::shared_ptr<tgw_planner::srv::PlanPath::Request> request,
     std::shared_ptr<tgw_planner::srv::PlanPath::Response> response)
@@ -1408,6 +1424,7 @@ private:
     response->stats.min_path_clearance_m = result.metrics.min_path_clearance_m;
     response->stats.mean_path_clearance_m = result.metrics.mean_path_clearance_m;
     response->stats.clearance_cost_sum = result.metrics.clearance_cost_sum;
+    response->stats.unknown_cost_sum = result.metrics.unknown_cost_sum;
     response->stats.low_clearance_samples = result.metrics.low_clearance_samples;
     response->stats.final_path_validated = result.metrics.final_path_validated;
     response->stats.final_path_fallback_to_raw = result.metrics.final_path_fallback_to_raw;
@@ -1449,6 +1466,7 @@ private:
           response->stats.min_path_clearance_m = raw_validation.min_clearance_m;
           response->stats.mean_path_clearance_m = raw_validation.mean_clearance_m;
           response->stats.clearance_cost_sum = clearanceCostSum(snapshot, result.raw_cells);
+          response->stats.unknown_cost_sum = unknownCostSum(snapshot, result.raw_cells);
           response->stats.low_clearance_samples = raw_validation.low_clearance_samples;
           planned_path_pub_->publish(response->path);
           planned_path_compat_pub_->publish(response->path);

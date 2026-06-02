@@ -40,6 +40,7 @@ struct SurfacePlanMetrics
   double min_path_clearance_m{0.0};
   double mean_path_clearance_m{0.0};
   double clearance_cost_sum{0.0};
+  double unknown_cost_sum{0.0};
   double risk_cost_sum{0.0};
   double max_path_risk{0.0};
   std::uint32_t low_clearance_samples{0};

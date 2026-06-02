@@ -331,6 +331,7 @@ int main()
     used_observed_free_lane = used_observed_free_lane || cell.y == 3;
   }
   CHECK(used_observed_free_lane);
+  CHECK(unknown_cost_plan.metrics.unknown_cost_sum > 0.0);
 
   SurfacePlannerOptions clearance_shortcut_options = center_bias_options;
   clearance_shortcut_options.enable_shortcut = true;

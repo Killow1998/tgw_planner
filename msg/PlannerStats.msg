@@ -37,6 +37,7 @@ string final_path_validation_failure
 float64 min_path_clearance_m
 float64 mean_path_clearance_m
 float64 clearance_cost_sum
+float64 unknown_cost_sum
 uint32 low_clearance_samples
 
 float64 start_snap_distance_m

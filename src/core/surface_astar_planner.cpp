@@ -551,6 +551,7 @@ void SurfaceAstarPlanner::fillMetrics(
       std::min(result.metrics.min_path_clearance_m, clearance);
     clearance_sum += clearance;
     result.metrics.clearance_cost_sum += snapshot.clearance.clearancePenalty(result.cells[i]);
+    result.metrics.unknown_cost_sum += unknownPenalty(snapshot, result.cells[i]);
     const double risk = snapshot.risk.riskCost(result.cells[i]);
     result.metrics.risk_cost_sum += risk;
     result.metrics.max_path_risk = std::max(result.metrics.max_path_risk, risk);
