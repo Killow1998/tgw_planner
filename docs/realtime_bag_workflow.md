@@ -44,6 +44,12 @@ Synthetic realtime regression:
 src/tgw_planner/scripts/run_realtime_mapping_sim_tests.sh
 ```
 
+Dirty-map dynamic artifact regression:
+
+```bash
+src/tgw_planner/scripts/run_dirty_map_tests.sh
+```
+
 Realtime debug topics:
 
 - `/tgw_map/occupied_cloud`
