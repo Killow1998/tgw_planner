@@ -672,6 +672,9 @@ private:
     msg.path_length_m = metrics.path_length_m;
     msg.path_vertical_gain_m = metrics.path_vertical_gain_m;
     msg.path_vertical_loss_m = metrics.path_vertical_loss_m;
+    msg.final_path_validated = metrics.final_path_validated;
+    msg.final_path_fallback_to_raw = metrics.final_path_fallback_to_raw;
+    msg.final_path_validation_failure = metrics.final_path_validation_failure;
     msg.start_snap_distance_m = metrics.start_snap_distance_m;
     msg.goal_snap_distance_m = metrics.goal_snap_distance_m;
     msg.map_resolution_m = map_.resolution();

@@ -5,6 +5,7 @@
 #include "tgw_planner/core/robot_footprint.hpp"
 #include "tgw_planner/core/clearance_field.hpp"
 #include "tgw_planner/core/map_snapshot.hpp"
+#include "tgw_planner/core/path_validator.hpp"
 #include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/surface_extractor.hpp"
 
@@ -18,6 +19,7 @@ using tgw_planner::core::RobotFootprint;
 using tgw_planner::core::ScanInput;
 using tgw_planner::core::ClearanceField;
 using tgw_planner::core::NavigationSnapshot;
+using tgw_planner::core::PathValidator;
 using tgw_planner::core::SurfaceExtractionOptions;
 using tgw_planner::core::SurfaceAstarPlanner;
 using tgw_planner::core::SurfacePlannerOptions;
@@ -104,8 +106,8 @@ int main()
   CHECK(clearance.clearancePenalty(center) < clearance.clearancePenalty(edge));
 
   ProbabilisticVoxelMap planner_map(options);
-  for (int x = 0; x <= 8; ++x) {
-    for (int y = 0; y <= 4; ++y) {
+  for (int x = -6; x <= 18; ++x) {
+    for (int y = 0; y <= 8; ++y) {
       planner_map.updateHit({x, y, 0}, 0.0, 1);
     }
   }
@@ -117,15 +119,23 @@ int main()
   SurfacePlannerOptions planner_options;
   planner_options.w_clearance = 2.0;
   SurfaceAstarPlanner planner(planner_options);
-  const auto plan = planner.plan(snapshot, {1, 1, 1}, {7, 1, 1});
+  const auto plan = planner.plan(snapshot, {2, 4, 1}, {10, 4, 1});
   CHECK(plan.success);
   bool used_center_lane = false;
   for (const auto & cell : plan.cells) {
-    used_center_lane = used_center_lane || cell.y == 2;
+    used_center_lane = used_center_lane || cell.y == 4;
   }
   CHECK(used_center_lane);
   CHECK(plan.metrics.min_path_clearance_m >= 0.0);
   CHECK(plan.metrics.mean_path_clearance_m > 0.0);
+  PathValidator validator(footprint);
+  const auto validation = validator.validate(snapshot, plan.path);
+  if (!validation.valid) {
+    std::cerr << "validation failed: " << validation.failure_reason << "\n";
+  }
+  CHECK(validation.valid);
+  CHECK(validation.checked_samples > plan.path.size());
+  CHECK(validation.mean_clearance_m > 0.0);
 
   std::cout << "phase1_phase2_phase3_core_smoke passed\n";
   return 0;

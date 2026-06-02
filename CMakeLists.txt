@@ -43,6 +43,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 add_library(tgw_planner_core SHARED
   src/core/clearance_field.cpp
   src/core/navigation_map.cpp
+  src/core/path_validator.cpp
   src/core/probabilistic_voxel_map.cpp
   src/core/raycast_integrator.cpp
   src/core/robot_footprint.cpp

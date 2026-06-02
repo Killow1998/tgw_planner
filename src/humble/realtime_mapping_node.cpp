@@ -24,8 +24,10 @@
 #include "tgw_planner/core/clearance_field.hpp"
 #include "tgw_planner/core/map_snapshot.hpp"
 #include "tgw_planner/core/mapping_options.hpp"
+#include "tgw_planner/core/path_validator.hpp"
 #include "tgw_planner/core/probabilistic_voxel_map.hpp"
 #include "tgw_planner/core/raycast_integrator.hpp"
+#include "tgw_planner/core/robot_footprint.hpp"
 #include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/surface_extractor.hpp"
 #include "tgw_planner/msg/planner_stats.hpp"
@@ -37,10 +39,14 @@ using tgw_planner::core::GridIndex;
 using tgw_planner::core::MappingOptions;
 using tgw_planner::core::NavigationSnapshot;
 using tgw_planner::core::Point3;
+using tgw_planner::core::PathValidationOptions;
+using tgw_planner::core::PathValidator;
 using tgw_planner::core::Pose3;
 using tgw_planner::core::ProbabilisticVoxelMap;
 using tgw_planner::core::RaycastIntegrator;
 using tgw_planner::core::RaycastStats;
+using tgw_planner::core::RobotFootprint;
+using tgw_planner::core::RobotFootprintOptions;
 using tgw_planner::core::ScanInput;
 using tgw_planner::core::SelfFilterBox;
 using tgw_planner::core::SurfaceExtractionOptions;
@@ -111,7 +117,9 @@ public:
     map_ = ProbabilisticVoxelMap(mapping_options);
     integrator_ = RaycastIntegrator(mapping_options, selfFilterBox());
     surface_extractor_ = SurfaceExtractor(surfaceOptions());
+    footprint_ = RobotFootprint(footprintOptions());
     planner_options_ = plannerOptions();
+    validation_options_ = validationOptions();
 
     points_topic_ = declare_parameter<std::string>("points_topic", "/tgw_mapping/points");
     pose_topic_ = declare_parameter<std::string>("pose_topic", "/tgw_mapping/pose");
@@ -227,6 +235,27 @@ private:
     options.w_unknown = declare_parameter<double>("planner_w_unknown", options.w_unknown);
     options.max_iterations = static_cast<std::uint32_t>(
       declare_parameter<int>("planner_max_iterations", static_cast<int>(options.max_iterations)));
+    return options;
+  }
+
+  RobotFootprintOptions footprintOptions()
+  {
+    RobotFootprintOptions options;
+    options.length_m = declare_parameter<double>("robot_length_m", options.length_m);
+    options.width_m = declare_parameter<double>("robot_width_m", options.width_m);
+    options.base_to_front_m = declare_parameter<double>("base_to_front_m", options.base_to_front_m);
+    get_parameter("robot_height_m", options.height_m);
+    return options;
+  }
+
+  PathValidationOptions validationOptions()
+  {
+    PathValidationOptions options;
+    options.sample_step_m = declare_parameter<double>("validation_sample_step_m", options.sample_step_m);
+    options.min_clearance_m =
+      declare_parameter<double>("validation_min_clearance_m", options.min_clearance_m);
+    options.require_footprint_support =
+      declare_parameter<bool>("validation_require_footprint", options.require_footprint_support);
     return options;
   }
 
@@ -531,9 +560,32 @@ private:
     response->stats.path_length_m = result.metrics.path_length_m;
     response->stats.path_vertical_gain_m = verticalGain(result.path);
     response->stats.path_vertical_loss_m = verticalLoss(result.path);
-    if (result.success) {
-      planned_path_pub_->publish(response->path);
+    response->stats.min_path_clearance_m = result.metrics.min_path_clearance_m;
+    response->stats.mean_path_clearance_m = result.metrics.mean_path_clearance_m;
+    response->stats.low_clearance_samples = result.metrics.low_clearance_samples;
+
+    if (!result.success) {
+      return;
     }
+
+    const PathValidator validator(footprint_, validation_options_);
+    const auto validation = validator.validate(snapshot, result.path);
+    response->stats.final_path_validated = validation.valid;
+    response->stats.final_path_fallback_to_raw = false;
+    response->stats.final_path_validation_failure = validation.failure_reason;
+    response->stats.min_path_clearance_m = validation.min_clearance_m;
+    response->stats.mean_path_clearance_m = validation.mean_clearance_m;
+    response->stats.low_clearance_samples = validation.low_clearance_samples;
+
+    if (!validation.valid) {
+      response->success = false;
+      response->message = "final path validation failed: " + validation.failure_reason;
+      response->stats.success = false;
+      response->stats.failure_reason = response->message;
+      return;
+    }
+
+    planned_path_pub_->publish(response->path);
   }
 
   void publishStatsJson(
@@ -607,7 +659,9 @@ private:
   ProbabilisticVoxelMap map_;
   RaycastIntegrator integrator_;
   SurfaceExtractor surface_extractor_;
+  RobotFootprint footprint_;
   SurfacePlannerOptions planner_options_;
+  PathValidationOptions validation_options_;
 
   std::string points_topic_;
   std::string pose_topic_;

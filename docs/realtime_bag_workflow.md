@@ -56,6 +56,8 @@ Control services:
 Planning service:
 
 - `/tgw_map/plan_path` (`tgw_planner/srv/PlanPath`)
+- successful responses must pass final path validation before
+  `/tgw_map/planned_path` is published
 
 Example:
 
@@ -70,6 +72,20 @@ surface-extraction, and clearance-aware planner parameters to the node. This is
 important for bag validation because parameters such as `enable_dynamic_filter`,
 `surface_require_static_support`, and planner weights must be testable from the
 launch command line.
+
+The realtime planning response populates:
+
+- `final_path_validated`
+- `final_path_fallback_to_raw`
+- `final_path_validation_failure`
+- `min_path_clearance_m`
+- `mean_path_clearance_m`
+- `low_clearance_samples`
+
+With `validation_require_footprint:=true`, the final path is rejected if the
+configured rectangular footprint is not fully supported along sampled path
+segments. This may reject a point-center path near a surface boundary even if
+the A* search itself found connected traversable cells.
 
 ## Verified Smoke
 

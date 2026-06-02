@@ -28,12 +28,18 @@ def generate_launch_description():
     surface_min_static_hits = LaunchConfiguration("surface_min_static_hits")
     surface_require_static_support = LaunchConfiguration("surface_require_static_support")
     robot_height_m = LaunchConfiguration("robot_height_m")
+    robot_length_m = LaunchConfiguration("robot_length_m")
+    robot_width_m = LaunchConfiguration("robot_width_m")
+    base_to_front_m = LaunchConfiguration("base_to_front_m")
     max_step_height_m = LaunchConfiguration("max_step_height_m")
     planner_w_clearance = LaunchConfiguration("planner_w_clearance")
     planner_w_slope = LaunchConfiguration("planner_w_slope")
     planner_w_turn = LaunchConfiguration("planner_w_turn")
     planner_w_unknown = LaunchConfiguration("planner_w_unknown")
     planner_max_iterations = LaunchConfiguration("planner_max_iterations")
+    validation_sample_step_m = LaunchConfiguration("validation_sample_step_m")
+    validation_min_clearance_m = LaunchConfiguration("validation_min_clearance_m")
+    validation_require_footprint = LaunchConfiguration("validation_require_footprint")
 
     return LaunchDescription(
         [
@@ -60,12 +66,18 @@ def generate_launch_description():
             DeclareLaunchArgument("surface_min_static_hits", default_value="1"),
             DeclareLaunchArgument("surface_require_static_support", default_value="false"),
             DeclareLaunchArgument("robot_height_m", default_value="0.50"),
+            DeclareLaunchArgument("robot_length_m", default_value="0.70"),
+            DeclareLaunchArgument("robot_width_m", default_value="0.43"),
+            DeclareLaunchArgument("base_to_front_m", default_value="0.20"),
             DeclareLaunchArgument("max_step_height_m", default_value="0.30"),
             DeclareLaunchArgument("planner_w_clearance", default_value="0.80"),
             DeclareLaunchArgument("planner_w_slope", default_value="0.30"),
             DeclareLaunchArgument("planner_w_turn", default_value="0.10"),
             DeclareLaunchArgument("planner_w_unknown", default_value="2.0"),
             DeclareLaunchArgument("planner_max_iterations", default_value="250000"),
+            DeclareLaunchArgument("validation_sample_step_m", default_value="0.05"),
+            DeclareLaunchArgument("validation_min_clearance_m", default_value="0.0"),
+            DeclareLaunchArgument("validation_require_footprint", default_value="true"),
             Node(
                 package="tgw_planner",
                 executable="tgw_realtime_mapping_node",
@@ -96,12 +108,18 @@ def generate_launch_description():
                         "surface_min_static_hits": surface_min_static_hits,
                         "surface_require_static_support": surface_require_static_support,
                         "robot_height_m": robot_height_m,
+                        "robot_length_m": robot_length_m,
+                        "robot_width_m": robot_width_m,
+                        "base_to_front_m": base_to_front_m,
                         "max_step_height_m": max_step_height_m,
                         "planner_w_clearance": planner_w_clearance,
                         "planner_w_slope": planner_w_slope,
                         "planner_w_turn": planner_w_turn,
                         "planner_w_unknown": planner_w_unknown,
                         "planner_max_iterations": planner_max_iterations,
+                        "validation_sample_step_m": validation_sample_step_m,
+                        "validation_min_clearance_m": validation_min_clearance_m,
+                        "validation_require_footprint": validation_require_footprint,
                     }
                 ],
             ),

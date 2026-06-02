@@ -23,6 +23,14 @@ float64 path_length_m
 float64 path_vertical_gain_m
 float64 path_vertical_loss_m
 
+bool final_path_validated
+bool final_path_fallback_to_raw
+string final_path_validation_failure
+
+float64 min_path_clearance_m
+float64 mean_path_clearance_m
+uint32 low_clearance_samples
+
 float64 start_snap_distance_m
 float64 goal_snap_distance_m
 
