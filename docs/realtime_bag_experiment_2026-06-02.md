@@ -306,3 +306,53 @@ Interpretation:
   a conservative observed-free relaxation that only bridges locally supported
   stair/slope surface edges, without turning ceiling tops into traversable
   ground.
+
+## Component-Anchored Observed-Free Surface 2026-06-03
+
+The default realtime surface extractor now keeps
+`surface_require_observed_free_space=true`, but no longer requires every
+standing cell itself to be ray-cleared free. It first builds all static-support
+surface candidates that have head clearance, then accepts only candidate
+components connected to an observed-free or observed-clearance anchor. Candidate
+components with no free-space anchor remain forbidden.
+
+This fixes the real-bag fragmentation without using the unsafe diagnostic mode
+that accepts every unobserved candidate:
+
+```text
+TGW_SURFACE_REQUIRE_OBSERVED_FREE_SPACE=true
+TGW_SURFACE_ALLOW_OBSERVED_FREE_BRIDGE=true
+traversable_points=12208
+surface_component_count=666
+largest_component_size=10033
+largest_component_z_span=2.200
+success=True
+final_path_validated=True
+raw_path_waypoints=49
+shortcut_count=40
+path_waypoints=9
+path_length_m=6.485
+mean_path_clearance_m=0.674
+```
+
+Regression checks after the change:
+
+```text
+ctest tgw_phase1_core_smoke: passed
+run_synthetic_surface_scene_tests.sh: passed
+run_realtime_mapping_sim_tests.sh: passed
+  floor_ceiling_free_space: success=True surface_points=55 traversable_points=55 forbidden_points=57
+run_reference_pcd_smoke_tests.sh: passed
+  surface_pct_building: success=true final_path_validated=true
+  surface_pct_spiral: success=true final_path_validated=true
+```
+
+Interpretation:
+
+- The original default blocker was over-strict pointwise free-space evidence,
+  not A* connectivity or final-path validation.
+- The deployment default still rejects surface components with no observed
+  robot-clearance anchor, so this is not equivalent to
+  `surface_require_observed_free_space=false`.
+- Broader dirty-map and multi-scene validation is still needed before freezing
+  the realtime global layer.

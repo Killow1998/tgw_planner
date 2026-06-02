@@ -32,11 +32,14 @@ ros2 launch tgw_planner realtime_mapping.launch.py \
 ```
 
 Realtime surface extraction defaults to
-`surface_require_observed_free_space:=true`. A standing cell is only promoted to
-surface/traversable when ray clearing has observed that cell as free. This keeps
-ceiling tops and other unobserved occupied tops out of the realtime navigation
-surface. Use `surface_require_observed_free_space:=false` only for clean static
-PCD-style smoke tests that do not contain free-space evidence.
+`surface_require_observed_free_space:=true` and
+`surface_allow_observed_free_bridge:=true`. The extractor builds static-support
+surface candidates with head clearance, then accepts only candidate components
+that connect to an observed-free or observed-clearance anchor. This allows
+continuous floors and stairs to survive sparse ray-clearing evidence while still
+rejecting candidate components that have no observed free-space support. Use
+`surface_require_observed_free_space:=false` only for clean static PCD-style
+smoke tests that do not contain free-space evidence.
 
 Synthetic realtime regression:
 
@@ -94,6 +97,17 @@ src/tgw_planner/scripts/run_realtime_bag_plan_probe.sh \
 
 If this succeeds while the default observed-free run has no cross-height pair,
 the remaining blocker is free-space evidence continuity, not surface A* search.
+
+The current default cross-height probe should succeed on the reference real bag
+without disabling observed-free:
+
+```bash
+TGW_PROBE_MIN_DXY=1.0 TGW_PROBE_MAX_DXY=8.0 \
+TGW_PROBE_MIN_ABS_DZ=0.50 TGW_PROBE_MAX_ABS_DZ=3.00 \
+TGW_PROBE_PLAN_TIMEOUT=60 TGW_PROBE_TOP_COMPONENTS=12 \
+src/tgw_planner/scripts/run_realtime_bag_plan_probe.sh \
+  /home/user/ros_ws/bagfile/f7tof9_g2w_ros2
+```
 
 Realtime debug topics:
 

@@ -44,6 +44,7 @@ def generate_launch_description():
     surface_min_static_hits = LaunchConfiguration("surface_min_static_hits")
     surface_require_static_support = LaunchConfiguration("surface_require_static_support")
     surface_require_observed_free_space = LaunchConfiguration("surface_require_observed_free_space")
+    surface_allow_observed_free_bridge = LaunchConfiguration("surface_allow_observed_free_bridge")
     robot_height_m = LaunchConfiguration("robot_height_m")
     robot_length_m = LaunchConfiguration("robot_length_m")
     robot_width_m = LaunchConfiguration("robot_width_m")
@@ -114,6 +115,7 @@ def generate_launch_description():
             DeclareLaunchArgument("surface_min_static_hits", default_value="1"),
             DeclareLaunchArgument("surface_require_static_support", default_value="false"),
             DeclareLaunchArgument("surface_require_observed_free_space", default_value="true"),
+            DeclareLaunchArgument("surface_allow_observed_free_bridge", default_value="true"),
             DeclareLaunchArgument("robot_height_m", default_value="0.50"),
             DeclareLaunchArgument("robot_length_m", default_value="0.70"),
             DeclareLaunchArgument("robot_width_m", default_value="0.43"),
@@ -188,6 +190,7 @@ def generate_launch_description():
                         "surface_min_static_hits": surface_min_static_hits,
                         "surface_require_static_support": surface_require_static_support,
                         "surface_require_observed_free_space": surface_require_observed_free_space,
+                        "surface_allow_observed_free_bridge": surface_allow_observed_free_bridge,
                         "robot_height_m": robot_height_m,
                         "robot_length_m": robot_length_m,
                         "robot_width_m": robot_width_m,

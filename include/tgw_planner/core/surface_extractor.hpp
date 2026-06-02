@@ -46,6 +46,7 @@ struct SurfaceExtractionOptions
   int min_static_hits{1};
   bool require_static_support{false};
   bool require_observed_free_space{true};
+  bool allow_observed_free_bridge{true};
   bool treat_hits_as_surface_samples{false};
 };
 
@@ -62,6 +63,8 @@ private:
     const ProbabilisticVoxelMap & occupancy, const GridIndex & stand, int height_cells) const;
   bool hasObservedFreeSpace(
     const ProbabilisticVoxelMap & occupancy, const GridIndex & stand) const;
+  bool hasObservedClearanceEvidence(
+    const ProbabilisticVoxelMap & occupancy, const GridIndex & stand, int height_cells) const;
   bool supportAccepted(const VoxelState & state) const;
   SurfaceLabel classify(
     const GridIndex & cell,

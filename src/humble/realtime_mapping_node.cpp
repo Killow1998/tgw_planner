@@ -319,6 +319,8 @@ private:
       declare_parameter<bool>("surface_require_static_support", options.require_static_support);
     options.require_observed_free_space = declare_parameter<bool>(
       "surface_require_observed_free_space", options.require_observed_free_space);
+    options.allow_observed_free_bridge = declare_parameter<bool>(
+      "surface_allow_observed_free_bridge", options.allow_observed_free_bridge);
     return options;
   }
 

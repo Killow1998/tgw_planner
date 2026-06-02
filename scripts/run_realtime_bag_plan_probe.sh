@@ -24,6 +24,7 @@ bag_path="${1:-/home/user/ros_ws/bagfile/f7tof9_g2w_ros2}"
 play_seconds="${TGW_BAG_PLAY_SECONDS:-75}"
 log_dir="${TGW_BAG_PROBE_LOG_DIR:-/tmp/tgw_real_bag_plan_probe}"
 surface_require_observed_free_space="${TGW_SURFACE_REQUIRE_OBSERVED_FREE_SPACE:-true}"
+surface_allow_observed_free_bridge="${TGW_SURFACE_ALLOW_OBSERVED_FREE_BRIDGE:-true}"
 surface_require_static_support="${TGW_SURFACE_REQUIRE_STATIC_SUPPORT:-false}"
 enable_dynamic_filter="${TGW_ENABLE_DYNAMIC_FILTER:-true}"
 min_static_hits="${TGW_MIN_STATIC_HITS:-3}"
@@ -43,6 +44,7 @@ rm -f \
 echo "ROS_DOMAIN_ID=${ROS_DOMAIN_ID}" >"${log_dir}/domain.log"
 {
   echo "TGW_SURFACE_REQUIRE_OBSERVED_FREE_SPACE=${surface_require_observed_free_space}"
+  echo "TGW_SURFACE_ALLOW_OBSERVED_FREE_BRIDGE=${surface_allow_observed_free_bridge}"
   echo "TGW_SURFACE_REQUIRE_STATIC_SUPPORT=${surface_require_static_support}"
   echo "TGW_ENABLE_DYNAMIC_FILTER=${enable_dynamic_filter}"
   echo "TGW_MIN_STATIC_HITS=${min_static_hits}"
@@ -121,6 +123,7 @@ ros2 launch tgw_planner realtime_mapping.launch.py \
   assume_cloud_in_map_frame:=true \
   publish_period_ms:=1000 \
   surface_require_observed_free_space:="${surface_require_observed_free_space}" \
+  surface_allow_observed_free_bridge:="${surface_allow_observed_free_bridge}" \
   surface_require_static_support:="${surface_require_static_support}" \
   enable_dynamic_filter:="${enable_dynamic_filter}" \
   min_static_hits:="${min_static_hits}" \
