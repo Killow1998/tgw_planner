@@ -77,6 +77,12 @@ prints tails from the FAST-LIO, n3mapping, tgw, bag, probe, and snapshot logs.
 Use `TGW_BAG_PLAY_SECONDS=5` for a startup/diagnostic smoke only; it is not a
 full map quality validation.
 
+Endpoint snapping is capped by `planner_max_snap_distance_m`, exposed in the
+probe as `TGW_PLANNER_MAX_SNAP_DISTANCE_M` and defaulting to 0.75 m. Increase it
+only for explicit diagnostics; otherwise a requested start or goal that is too
+far from any footprint-supported traversable surface should fail instead of
+being silently projected to a distant layer.
+
 The automatic start/goal selector can be tightened for stronger probes:
 
 ```bash
@@ -187,6 +193,10 @@ surface-extraction, and clearance-aware planner parameters to the node. This is
 important for bag validation because parameters such as `enable_dynamic_filter`,
 `dynamic_clear_ratio_threshold`, `surface_require_static_support`, and planner
 weights must be testable from the launch command line.
+
+The launch also forwards `planner_max_snap_distance_m`, which bounds how far
+`/tgw_map/plan_path` may project requested start and goal poses onto a nearby
+traversable, footprint-supported surface.
 
 The realtime planning response populates:
 

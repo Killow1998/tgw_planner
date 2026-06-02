@@ -66,7 +66,10 @@ Main services:
 When `planner_require_footprint:=true` or
 `validation_require_footprint:=true`, `/tgw_map/plan_path` snaps requested
 start and goal poses to nearby cells that are both traversable and
-footprint-supported before running A*.
+footprint-supported before running A*. The realtime node limits this endpoint
+projection with `planner_max_snap_distance_m` and defaults to 0.75 m, so an
+imprecise click can land on the nearest surface without silently moving to a
+distant map layer.
 
 ## PCD Debug Mode
 
