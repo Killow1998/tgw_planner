@@ -209,13 +209,41 @@ success=False
 reason=no_component_pair_matching_probe_criteria
 ```
 
+Longer 180 s cross-height probe:
+
+```bash
+TGW_BAG_PLAY_SECONDS=180 \
+TGW_PROBE_MIN_DXY=1.0 TGW_PROBE_MAX_DXY=12.0 \
+TGW_PROBE_MIN_ABS_DZ=0.50 TGW_PROBE_MAX_ABS_DZ=4.00 \
+TGW_PROBE_PLAN_TIMEOUT=90 \
+scripts/run_realtime_bag_plan_probe.sh /home/user/ros_ws/bagfile/f7tof9_g2w_ros2
+```
+
+Result:
+
+```text
+received_clouds=736
+integrated_clouds=736
+surface_points=1622
+traversable_points=1622
+surface_component_count=811
+largest_component_size=328
+success=False
+reason=no_component_pair_matching_probe_criteria
+```
+
 Interpretation:
 
 - The realtime stack can produce validated short and 3 m same-height paths from
-  this 75 s bag slice.
-- The same slice does not produce a connected traversable component containing
-  a point pair with `abs(dz) >= 0.5 m`; this is map coverage/connectivity
-  evidence, not a failed path search between chosen cross-floor endpoints.
+  this bag.
+- The 75 s and 180 s runs do not produce a connected traversable component
+  containing a point pair with `abs(dz) >= 0.5 m`; this is map
+  coverage/connectivity evidence, not a failed path search between chosen
+  cross-floor endpoints.
+- The largest realtime traversable component remains small relative to total
+  traversable points, so cross-floor validation now needs either a better bag
+  segment, adjusted realtime surface continuity, or explicit inspected
+  start/goal points from RViz.
 - Mean clearance is low on the real-bag probes, so broader map-quality and
   corridor-quality validation is still required before treating the realtime
   layer as deployment-ready.
