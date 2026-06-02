@@ -261,23 +261,24 @@ PCD -> layered ground/ceiling slices -> traversability cost -> gateway-aware A*
 ```
 
 It intentionally does not replace the ROS wrapper or the realtime map path yet.
-The first probe on `spiral0.3_2.pcd` shows that a naive tomogram is still
-insufficient:
+The first probe on `spiral0.3_2.pcd` showed that a naive tomogram is still
+insufficient. After adding PCT-style layer simplification and gateway-layer
+search, the probe still fails:
 
 ```text
 success=false
-tomogram_grid=[419,216,48]
-traversable_cells=1767179
+tomogram_grid=[419,216,11]
+traversable_cells=413224
+gateway_cells=6280
 start_node=[1,232,136]
 goal_node=[1,182,141]
-expanded_nodes=19132
+expanded_nodes=55837
 ```
 
 The useful conclusion is negative but concrete: PCT's result is not reproduced
-by only adding slices and same-XY gateway edges. Their planner also uses
-layer-simplification, inflated cost fields, traversability gradients, and
-unsafe-grid layer correction. The next implementation step should therefore be
-either:
+by only adding slices, layer simplification, and gateway-aware A*. Their
+planner also uses inflated cost fields, traversability gradients, and unsafe
+grid layer correction. The next implementation step should therefore be either:
 
 1. port the full tomogram/elevation-map semantics into `tgw_planner`, or
 2. keep raw PCD spiral unsupported and rely on realtime ray-cleared mapping plus

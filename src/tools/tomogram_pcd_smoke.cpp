@@ -137,6 +137,7 @@ public:
     }
 
     computeTraversability();
+    simplifyLayers();
     computeGateways();
     return true;
   }
@@ -253,6 +254,11 @@ public:
   int nx() const {return nx_;}
   int ny() const {return ny_;}
   int nlayers() const {return nlayers_;}
+  std::size_t gatewayCount() const
+  {
+    return static_cast<std::size_t>(
+      std::count_if(gateway_.begin(), gateway_.end(), [](int gateway) {return gateway != 0;}));
+  }
 
 private:
   std::size_t size() const
@@ -406,6 +412,69 @@ private:
     }
   }
 
+  void simplifyLayers()
+  {
+    if (nlayers_ <= 2) {
+      return;
+    }
+    std::vector<int> keep_layers;
+    keep_layers.push_back(0);
+    int lower_layer = 0;
+    int middle_layer = 1;
+    while (middle_layer < nlayers_ - 2) {
+      bool unique = false;
+      for (int y = 0; y < ny_ && !unique; ++y) {
+        for (int x = 0; x < nx_; ++x) {
+          if (!hasGround(middle_layer, x, y) || !hasGround(lower_layer, x, y) ||
+            !hasGround(middle_layer + 1, x, y))
+          {
+            continue;
+          }
+          const std::size_t middle = index(middle_layer, x, y);
+          const std::size_t lower = index(lower_layer, x, y);
+          const std::size_t upper = index(middle_layer + 1, x, y);
+          const bool lower_ground_or_better_cost =
+            ground_[middle] - ground_[lower] > 0.0 || cost_[lower] > cost_[middle];
+          const bool upper_ground_increases = ground_[upper] - ground_[middle] > 0.0;
+          const bool middle_traversable = cost_[middle] < kBarrierCost;
+          if (lower_ground_or_better_cost && upper_ground_increases && middle_traversable) {
+            unique = true;
+            break;
+          }
+        }
+      }
+      if (unique) {
+        keep_layers.push_back(middle_layer);
+        lower_layer = middle_layer;
+      }
+      ++middle_layer;
+    }
+    keep_layers.push_back(middle_layer);
+
+    const int old_nlayers = nlayers_;
+    const std::vector<double> old_ground = ground_;
+    const std::vector<double> old_ceiling = ceiling_;
+    const std::vector<double> old_cost = cost_;
+    nlayers_ = static_cast<int>(keep_layers.size());
+    ground_.assign(size(), kUnsetGround);
+    ceiling_.assign(size(), kUnsetCeiling);
+    cost_.assign(size(), kBarrierCost);
+    gateway_.assign(size(), 0);
+    for (int new_layer = 0; new_layer < nlayers_; ++new_layer) {
+      const int old_layer = std::clamp(keep_layers[static_cast<std::size_t>(new_layer)], 0, old_nlayers - 1);
+      for (int y = 0; y < ny_; ++y) {
+        for (int x = 0; x < nx_; ++x) {
+          const std::size_t old_idx =
+            static_cast<std::size_t>((old_layer * ny_ + y) * nx_ + x);
+          const std::size_t new_idx = index(new_layer, x, y);
+          ground_[new_idx] = old_ground[old_idx];
+          ceiling_[new_idx] = old_ceiling[old_idx];
+          cost_[new_idx] = old_cost[old_idx];
+        }
+      }
+    }
+  }
+
   std::vector<Node> neighbors(const Node & node) const
   {
     std::vector<Node> out;
@@ -435,12 +504,25 @@ private:
 
   int decideSearchLayer(const Node & node) const
   {
-    const int gateway = gateway_[index(node.layer, node.x, node.y)];
-    if (gateway > 0) {
-      return std::min(node.layer + 1, nlayers_ - 1);
-    }
-    if (gateway < 0) {
-      return std::max(node.layer - 1, 0);
+    const double current_height = ground_[index(node.layer, node.x, node.y)];
+    for (const int offset : {0, -1, 1}) {
+      const int layer = node.layer + offset;
+      if (layer < 0 || layer >= nlayers_) {
+        continue;
+      }
+      if (!hasGround(layer, node.x, node.y)) {
+        continue;
+      }
+      if (std::abs(ground_[index(layer, node.x, node.y)] - current_height) > 0.20) {
+        continue;
+      }
+      const int gateway = gateway_[index(layer, node.x, node.y)];
+      if (gateway > 0) {
+        return std::min(layer + 1, nlayers_ - 1);
+      }
+      if (gateway < 0) {
+        return std::max(layer - 1, 0);
+      }
     }
     return node.layer;
   }
@@ -524,6 +606,7 @@ int main(int argc, char ** argv)
       << " source_points=" << cloud.size()
       << " tomogram_layers=" << tomogram.nlayers()
       << " traversable_cells=" << tomogram.traversableCount()
+      << " gateway_cells=" << tomogram.gatewayCount()
       << "\n";
     return 1;
   }
@@ -536,6 +619,7 @@ int main(int argc, char ** argv)
     << " tomogram_grid=[" << tomogram.nx() << "," << tomogram.ny() << "," <<
       tomogram.nlayers() << "]"
     << " traversable_cells=" << tomogram.traversableCount()
+    << " gateway_cells=" << tomogram.gatewayCount()
     << " start_snap_distance_m=" << start_snap
     << " goal_snap_distance_m=" << goal_snap
     << " start_node=[" << snapped_start.layer << "," << snapped_start.x << "," <<
