@@ -41,6 +41,7 @@
 #include "tgw_planner/msg/mapping_stats.hpp"
 #include "tgw_planner/msg/planner_stats.hpp"
 #include "tgw_planner/srv/export_static_cloud.hpp"
+#include "tgw_planner/srv/get_snapshot.hpp"
 #include "tgw_planner/srv/load_map.hpp"
 #include "tgw_planner/srv/plan_path.hpp"
 #include "tgw_planner/srv/save_map.hpp"
@@ -188,6 +189,9 @@ public:
     stop_srv_ = create_service<std_srvs::srv::Trigger>(
       "/tgw_mapping/stop",
       std::bind(&TgwRealtimeMappingNode::handleStop, this, std::placeholders::_1, std::placeholders::_2));
+    pause_srv_ = create_service<std_srvs::srv::Trigger>(
+      "/tgw_mapping/pause",
+      std::bind(&TgwRealtimeMappingNode::handlePause, this, std::placeholders::_1, std::placeholders::_2));
     clear_srv_ = create_service<std_srvs::srv::Trigger>(
       "/tgw_mapping/clear",
       std::bind(&TgwRealtimeMappingNode::handleClear, this, std::placeholders::_1, std::placeholders::_2));
@@ -201,6 +205,11 @@ public:
       "/tgw_mapping/export_static_pcd",
       std::bind(
         &TgwRealtimeMappingNode::handleExportStaticCloud, this,
+        std::placeholders::_1, std::placeholders::_2));
+    get_snapshot_srv_ = create_service<tgw_planner::srv::GetSnapshot>(
+      "/tgw_mapping/get_snapshot",
+      std::bind(
+        &TgwRealtimeMappingNode::handleGetSnapshot, this,
         std::placeholders::_1, std::placeholders::_2));
     plan_srv_ = create_service<tgw_planner::srv::PlanPath>(
       "/tgw_map/plan_path",
@@ -1140,6 +1149,15 @@ private:
     response->message = "realtime mapping stopped";
   }
 
+  void handlePause(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+  {
+    mapping_enabled_ = false;
+    response->success = true;
+    response->message = "realtime mapping paused";
+  }
+
   void handleClear(
     const std::shared_ptr<std_srvs::srv::Trigger::Request>,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response)
@@ -1237,6 +1255,36 @@ private:
     response->success = true;
     response->message = "exported static candidate cloud to " + output.string();
     response->saved_points = static_cast<std::uint32_t>(static_cells.size());
+  }
+
+  void handleGetSnapshot(
+    const std::shared_ptr<tgw_planner::srv::GetSnapshot::Request>,
+    std::shared_ptr<tgw_planner::srv::GetSnapshot::Response> response)
+  {
+    response->success = true;
+    response->message = "snapshot built";
+    if (map_.size() == 0U) {
+      response->stats = buildMappingStats();
+      response->stats_json = buildStatsJson();
+      return;
+    }
+
+    const NavigationSnapshot snapshot = buildNavigationSnapshot();
+    const std::vector<GridIndex> medial_axis =
+      snapshot.clearance.medialAxisCells(medial_axis_min_clearance_m_);
+    response->stats =
+      buildMappingStats(&snapshot.surface, &snapshot.clearance, &snapshot.risk, medial_axis.size());
+    response->stats_json =
+      buildStatsJson(&snapshot.surface, &snapshot.clearance, &snapshot.risk, medial_axis.size());
+    response->occupied_points = static_cast<std::uint32_t>(map_.occupiedVoxels().size());
+    response->free_points = static_cast<std::uint32_t>(map_.freeVoxels().size());
+    response->static_points = static_cast<std::uint32_t>(map_.staticCandidateVoxels().size());
+    response->dynamic_points = static_cast<std::uint32_t>(map_.dynamicSuspectVoxels().size());
+    response->surface_points = static_cast<std::uint32_t>(snapshot.surface.surface_cells.size());
+    response->traversable_points = static_cast<std::uint32_t>(snapshot.surface.traversable_cells.size());
+    response->blocked_points = static_cast<std::uint32_t>(snapshot.surface.blocked_cells.size());
+    response->forbidden_points = static_cast<std::uint32_t>(snapshot.surface.forbidden_cells.size());
+    response->risk_points = static_cast<std::uint32_t>(snapshot.risk.risks().size());
   }
 
   void handleLoadMap(
@@ -1404,10 +1452,12 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr stats_json_pub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr pause_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_srv_;
   rclcpp::Service<tgw_planner::srv::SaveMap>::SharedPtr save_map_srv_;
   rclcpp::Service<tgw_planner::srv::LoadMap>::SharedPtr load_map_srv_;
   rclcpp::Service<tgw_planner::srv::ExportStaticCloud>::SharedPtr export_static_cloud_srv_;
+  rclcpp::Service<tgw_planner::srv::GetSnapshot>::SharedPtr get_snapshot_srv_;
   rclcpp::Service<tgw_planner::srv::PlanPath>::SharedPtr plan_srv_;
   rclcpp::Service<tgw_planner::srv::SetBlockedRegion>::SharedPtr set_blocked_region_srv_;
   rclcpp::TimerBase::SharedPtr publish_timer_;

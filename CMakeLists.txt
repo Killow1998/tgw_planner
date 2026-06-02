@@ -33,6 +33,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   msg/MappingStats.msg
   msg/PlannerStats.msg
   srv/ExportStaticCloud.srv
+  srv/GetSnapshot.srv
   srv/LoadMap.srv
   srv/PlanPath.srv
   srv/SaveMap.srv
