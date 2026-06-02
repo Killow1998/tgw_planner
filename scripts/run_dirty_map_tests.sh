@@ -26,7 +26,7 @@ launch_pid=""
 cleanup()
 {
   if [[ -n "${launch_pid}" ]]; then
-    kill "${launch_pid}" >/dev/null 2>&1 || true
+    kill -- "-${launch_pid}" >/dev/null 2>&1 || kill "${launch_pid}" >/dev/null 2>&1 || true
     wait "${launch_pid}" >/dev/null 2>&1 || true
   fi
   rm -f "${output_file}"
@@ -112,7 +112,7 @@ run_dirty_pcd_warning_test()
 
   write_dirty_pcd "${pcd}"
   echo "dirty_pcd_artifact_warning: running PCD import warning regression"
-  ros2 launch tgw_planner pcd_to_path_mvp.launch.py \
+  setsid ros2 launch tgw_planner pcd_to_path_mvp.launch.py \
     use_rviz:=false \
     max_marker_cells:=20 \
     map_resolution_m:=0.20 \
@@ -150,7 +150,7 @@ run_dirty_pcd_warning_test()
   fi
   echo "dirty_pcd_artifact_warning: success=true"
 
-  kill "${launch_pid}" >/dev/null 2>&1 || true
+  kill -- "-${launch_pid}" >/dev/null 2>&1 || kill "${launch_pid}" >/dev/null 2>&1 || true
   wait "${launch_pid}" >/dev/null 2>&1 || true
   launch_pid=""
 }
