@@ -37,6 +37,8 @@ def generate_launch_description():
     planner_w_turn = LaunchConfiguration("planner_w_turn")
     planner_w_unknown = LaunchConfiguration("planner_w_unknown")
     planner_max_iterations = LaunchConfiguration("planner_max_iterations")
+    planner_require_footprint = LaunchConfiguration("planner_require_footprint")
+    planner_swept_sample_step_m = LaunchConfiguration("planner_swept_sample_step_m")
     validation_sample_step_m = LaunchConfiguration("validation_sample_step_m")
     validation_min_clearance_m = LaunchConfiguration("validation_min_clearance_m")
     validation_require_footprint = LaunchConfiguration("validation_require_footprint")
@@ -75,6 +77,8 @@ def generate_launch_description():
             DeclareLaunchArgument("planner_w_turn", default_value="0.10"),
             DeclareLaunchArgument("planner_w_unknown", default_value="2.0"),
             DeclareLaunchArgument("planner_max_iterations", default_value="250000"),
+            DeclareLaunchArgument("planner_require_footprint", default_value="true"),
+            DeclareLaunchArgument("planner_swept_sample_step_m", default_value="0.05"),
             DeclareLaunchArgument("validation_sample_step_m", default_value="0.05"),
             DeclareLaunchArgument("validation_min_clearance_m", default_value="0.0"),
             DeclareLaunchArgument("validation_require_footprint", default_value="true"),
@@ -117,6 +121,8 @@ def generate_launch_description():
                         "planner_w_turn": planner_w_turn,
                         "planner_w_unknown": planner_w_unknown,
                         "planner_max_iterations": planner_max_iterations,
+                        "planner_require_footprint": planner_require_footprint,
+                        "planner_swept_sample_step_m": planner_swept_sample_step_m,
                         "validation_sample_step_m": validation_sample_step_m,
                         "validation_min_clearance_m": validation_min_clearance_m,
                         "validation_require_footprint": validation_require_footprint,

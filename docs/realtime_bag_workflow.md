@@ -87,6 +87,12 @@ configured rectangular footprint is not fully supported along sampled path
 segments. This may reject a point-center path near a surface boundary even if
 the A* search itself found connected traversable cells.
 
+With `planner_require_footprint:=true`, the surface A* itself also checks the
+configured rectangular footprint at start/goal, at each neighbor cell, and along
+sampled swept transitions. This prevents many invalid point-center paths from
+being generated in the first place. Final validation remains as a second proof
+before publishing `/tgw_map/planned_path`.
+
 ## Verified Smoke
 
 On 2026-06-02, the bag at `/home/user/ros_ws/bagfile/f7tof9_g2w_ros2`

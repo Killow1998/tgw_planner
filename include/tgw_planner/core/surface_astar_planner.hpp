@@ -6,6 +6,7 @@
 
 #include "tgw_planner/core/map_snapshot.hpp"
 #include "tgw_planner/core/planning_types.hpp"
+#include "tgw_planner/core/robot_footprint.hpp"
 
 namespace tgw_planner::core
 {
@@ -17,6 +18,9 @@ struct SurfacePlannerOptions
   double w_turn{0.1};
   double w_unknown{2.0};
   std::uint32_t max_iterations{250000};
+  bool require_footprint_support{true};
+  double swept_sample_step_m{0.05};
+  RobotFootprintOptions footprint;
 };
 
 struct SurfacePlanMetrics
@@ -53,9 +57,17 @@ private:
   double transitionCost(
     const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to,
     const GridIndex * previous) const;
+  bool isCellTraversable(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
+  bool isFootprintSupported(
+    const NavigationSnapshot & snapshot, const Point3 & point, double yaw_rad) const;
+  bool isTransitionAllowed(
+    const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
+  Point3 cellCenter(const GridIndex & cell, double resolution_m) const;
+  GridIndex worldToGrid(const Point3 & point, double resolution_m) const;
   void fillMetrics(const NavigationSnapshot & snapshot, SurfacePlanResult & result) const;
 
   SurfacePlannerOptions options_;
+  RobotFootprint footprint_;
 };
 
 }  // namespace tgw_planner::core

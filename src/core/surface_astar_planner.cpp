@@ -36,24 +36,40 @@ double gridDistance(const GridIndex & a, const GridIndex & b)
 }  // namespace
 
 SurfaceAstarPlanner::SurfaceAstarPlanner(SurfacePlannerOptions options)
-: options_(options)
+: options_(options), footprint_(options.footprint)
 {
   options_.max_iterations = std::max<std::uint32_t>(1U, options_.max_iterations);
+  options_.swept_sample_step_m = std::max(0.01, options_.swept_sample_step_m);
 }
 
 SurfacePlanResult SurfaceAstarPlanner::plan(
   const NavigationSnapshot & snapshot, const GridIndex & start, const GridIndex & goal) const
 {
   SurfacePlanResult result;
-  if (snapshot.surface.traversable_cells.find(start) == snapshot.surface.traversable_cells.end()) {
+  if (!isCellTraversable(snapshot, start)) {
     result.message = "start is not traversable";
     result.metrics.failure_reason = result.message;
     return result;
   }
-  if (snapshot.surface.traversable_cells.find(goal) == snapshot.surface.traversable_cells.end()) {
+  if (!isCellTraversable(snapshot, goal)) {
     result.message = "goal is not traversable";
     result.metrics.failure_reason = result.message;
     return result;
+  }
+  if (options_.require_footprint_support) {
+    const Point3 start_point = cellCenter(start, snapshot.resolution_m);
+    const Point3 goal_point = cellCenter(goal, snapshot.resolution_m);
+    const double yaw = std::atan2(goal_point.y - start_point.y, goal_point.x - start_point.x);
+    if (!isFootprintSupported(snapshot, start_point, yaw)) {
+      result.message = "start footprint is not fully supported";
+      result.metrics.failure_reason = result.message;
+      return result;
+    }
+    if (!isFootprintSupported(snapshot, goal_point, yaw)) {
+      result.message = "goal footprint is not fully supported";
+      result.metrics.failure_reason = result.message;
+      return result;
+    }
   }
 
   std::priority_queue<QueueNode, std::vector<QueueNode>, QueueCompare> open;
@@ -93,15 +109,11 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
           if (dx == 0 && dy == 0 && dz == 0) {
             continue;
           }
-          const GridIndex neighbor{current.cell.x + dx, current.cell.y + dy, current.cell.z + dz};
-          if (snapshot.surface.traversable_cells.find(neighbor) ==
-            snapshot.surface.traversable_cells.end())
-          {
+          if (dx == 0 && dy == 0) {
             continue;
           }
-          if (snapshot.surface.forbidden_cells.find(neighbor) !=
-            snapshot.surface.forbidden_cells.end())
-          {
+          const GridIndex neighbor{current.cell.x + dx, current.cell.y + dy, current.cell.z + dz};
+          if (!isTransitionAllowed(snapshot, current.cell, neighbor)) {
             continue;
           }
           const double tentative_g =
@@ -182,6 +194,73 @@ double SurfaceAstarPlanner::transitionCost(
   }
 
   return step + clearance_penalty + slope_penalty + turn_penalty;
+}
+
+bool SurfaceAstarPlanner::isCellTraversable(
+  const NavigationSnapshot & snapshot, const GridIndex & cell) const
+{
+  return snapshot.surface.traversable_cells.find(cell) != snapshot.surface.traversable_cells.end() &&
+         snapshot.surface.forbidden_cells.find(cell) == snapshot.surface.forbidden_cells.end();
+}
+
+bool SurfaceAstarPlanner::isFootprintSupported(
+  const NavigationSnapshot & snapshot, const Point3 & point, double yaw_rad) const
+{
+  if (!options_.require_footprint_support) {
+    return true;
+  }
+  for (const Point3 & sample :
+    footprint_.sampleFootprint(point, yaw_rad, snapshot.resolution_m))
+  {
+    if (!isCellTraversable(snapshot, worldToGrid(sample, snapshot.resolution_m))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool SurfaceAstarPlanner::isTransitionAllowed(
+  const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const
+{
+  if (!isCellTraversable(snapshot, to)) {
+    return false;
+  }
+  if (!options_.require_footprint_support) {
+    return true;
+  }
+
+  const Point3 from_point = cellCenter(from, snapshot.resolution_m);
+  const Point3 to_point = cellCenter(to, snapshot.resolution_m);
+  const double segment_length = distance3d(from_point, to_point);
+  const int steps = std::max(1, static_cast<int>(std::ceil(segment_length / options_.swept_sample_step_m)));
+  const double yaw = std::atan2(to_point.y - from_point.y, to_point.x - from_point.x);
+  for (int step = 0; step <= steps; ++step) {
+    const double t = static_cast<double>(step) / static_cast<double>(steps);
+    const Point3 sample{
+      from_point.x + (to_point.x - from_point.x) * t,
+      from_point.y + (to_point.y - from_point.y) * t,
+      from_point.z + (to_point.z - from_point.z) * t};
+    if (!isFootprintSupported(snapshot, sample, yaw)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+Point3 SurfaceAstarPlanner::cellCenter(const GridIndex & cell, double resolution_m) const
+{
+  return {
+    (static_cast<double>(cell.x) + 0.5) * resolution_m,
+    (static_cast<double>(cell.y) + 0.5) * resolution_m,
+    (static_cast<double>(cell.z) + 0.5) * resolution_m};
+}
+
+GridIndex SurfaceAstarPlanner::worldToGrid(const Point3 & point, double resolution_m) const
+{
+  return {
+    static_cast<int>(std::floor(point.x / resolution_m)),
+    static_cast<int>(std::floor(point.y / resolution_m)),
+    static_cast<int>(std::floor(point.z / resolution_m))};
 }
 
 void SurfaceAstarPlanner::fillMetrics(

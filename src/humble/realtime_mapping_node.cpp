@@ -119,6 +119,7 @@ public:
     surface_extractor_ = SurfaceExtractor(surfaceOptions());
     footprint_ = RobotFootprint(footprintOptions());
     planner_options_ = plannerOptions();
+    planner_options_.footprint = footprint_.options();
     validation_options_ = validationOptions();
 
     points_topic_ = declare_parameter<std::string>("points_topic", "/tgw_mapping/points");
@@ -235,6 +236,10 @@ private:
     options.w_unknown = declare_parameter<double>("planner_w_unknown", options.w_unknown);
     options.max_iterations = static_cast<std::uint32_t>(
       declare_parameter<int>("planner_max_iterations", static_cast<int>(options.max_iterations)));
+    options.require_footprint_support =
+      declare_parameter<bool>("planner_require_footprint", options.require_footprint_support);
+    options.swept_sample_step_m =
+      declare_parameter<double>("planner_swept_sample_step_m", options.swept_sample_step_m);
     return options;
   }
 
