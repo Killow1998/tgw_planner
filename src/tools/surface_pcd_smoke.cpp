@@ -541,6 +541,7 @@ int main(int argc, char ** argv)
     << " path_length_m=" << result.metrics.path_length_m
     << " min_path_clearance_m=" << result.metrics.min_path_clearance_m
     << " mean_path_clearance_m=" << result.metrics.mean_path_clearance_m
+    << " clearance_cost_sum=" << result.metrics.clearance_cost_sum
     << "\n";
   return result.success ? 0 : 1;
 }

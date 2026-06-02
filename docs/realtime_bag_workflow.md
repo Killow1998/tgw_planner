@@ -125,6 +125,7 @@ The realtime planning response populates:
 - `final_path_validation_failure`
 - `min_path_clearance_m`
 - `mean_path_clearance_m`
+- `clearance_cost_sum`
 - `low_clearance_samples`
 
 With `validation_require_footprint:=true`, the final path is rejected if the

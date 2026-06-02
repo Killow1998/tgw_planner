@@ -933,6 +933,16 @@ private:
     return loss;
   }
 
+  double clearanceCostSum(
+    const NavigationSnapshot & snapshot, const std::vector<GridIndex> & cells) const
+  {
+    double sum = 0.0;
+    for (const GridIndex & cell : cells) {
+      sum += snapshot.clearance.clearancePenalty(cell);
+    }
+    return sum;
+  }
+
   void handlePlanPath(
     const std::shared_ptr<tgw_planner::srv::PlanPath::Request> request,
     std::shared_ptr<tgw_planner::srv::PlanPath::Response> response)
@@ -993,6 +1003,7 @@ private:
     response->stats.path_vertical_loss_m = verticalLoss(result.path);
     response->stats.min_path_clearance_m = result.metrics.min_path_clearance_m;
     response->stats.mean_path_clearance_m = result.metrics.mean_path_clearance_m;
+    response->stats.clearance_cost_sum = result.metrics.clearance_cost_sum;
     response->stats.low_clearance_samples = result.metrics.low_clearance_samples;
 
     if (!result.success) {
@@ -1028,6 +1039,7 @@ private:
           response->stats.path_vertical_loss_m = verticalLoss(result.raw_path);
           response->stats.min_path_clearance_m = raw_validation.min_clearance_m;
           response->stats.mean_path_clearance_m = raw_validation.mean_clearance_m;
+          response->stats.clearance_cost_sum = clearanceCostSum(snapshot, result.raw_cells);
           response->stats.low_clearance_samples = raw_validation.low_clearance_samples;
           planned_path_pub_->publish(response->path);
           return;

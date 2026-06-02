@@ -183,7 +183,8 @@ def main():
         f"expanded_nodes={stats.expanded_nodes} path_waypoints={stats.path_waypoints} "
         f"path_length_m={stats.path_length_m:.3f} "
         f"min_path_clearance_m={stats.min_path_clearance_m:.3f} "
-        f"mean_path_clearance_m={stats.mean_path_clearance_m:.3f}")
+        f"mean_path_clearance_m={stats.mean_path_clearance_m:.3f} "
+        f"clearance_cost_sum={stats.clearance_cost_sum:.3f}")
     return 0 if response.success and stats.final_path_validated and stats.path_waypoints > 0 else 1
 
 

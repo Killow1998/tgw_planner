@@ -697,6 +697,7 @@ private:
     msg.final_path_validated = metrics.final_path_validated;
     msg.final_path_fallback_to_raw = metrics.final_path_fallback_to_raw;
     msg.final_path_validation_failure = metrics.final_path_validation_failure;
+    msg.clearance_cost_sum = 0.0;
     msg.start_snap_distance_m = metrics.start_snap_distance_m;
     msg.goal_snap_distance_m = metrics.goal_snap_distance_m;
     msg.map_resolution_m = map_.resolution();
@@ -734,6 +735,7 @@ private:
     out << "\"path_length_m\":" << metrics.path_length_m << ",";
     out << "\"vertical_gain_m\":" << metrics.path_vertical_gain_m << ",";
     out << "\"vertical_loss_m\":" << metrics.path_vertical_loss_m << ",";
+    out << "\"clearance_cost_sum\":0.000,";
     out << "\"start_snap_distance_m\":" << metrics.start_snap_distance_m << ",";
     out << "\"goal_snap_distance_m\":" << metrics.goal_snap_distance_m << ",";
     out << "\"resolution_m\":" << map_.resolution();
