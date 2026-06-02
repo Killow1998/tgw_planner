@@ -245,6 +245,8 @@ private:
       declare_parameter<int>("min_distinct_views", options.min_distinct_views);
     options.min_static_lifetime_sec =
       declare_parameter<double>("min_static_lifetime_sec", options.min_static_lifetime_sec);
+    options.dynamic_clear_ratio_threshold =
+      declare_parameter<double>("dynamic_clear_ratio_threshold", options.dynamic_clear_ratio_threshold);
     options.enable_self_filter = declare_parameter<bool>("enable_self_filter", options.enable_self_filter);
     options.enable_dynamic_filter =
       declare_parameter<bool>("enable_dynamic_filter", options.enable_dynamic_filter);
@@ -1014,7 +1016,11 @@ private:
     out << "\"last_scan_filtered_range\":" << last_raycast_stats_.filtered_range << ",";
     out << "\"last_scan_filtered_self\":" << last_raycast_stats_.filtered_self << ",";
     out << "\"last_scan_hit_updates\":" << last_raycast_stats_.hit_updates << ",";
-    out << "\"last_scan_miss_updates\":" << last_raycast_stats_.miss_updates;
+    out << "\"last_scan_miss_updates\":" << last_raycast_stats_.miss_updates << ",";
+    out << "\"last_scan_dynamic_suspect_voxels_after_decay\":" <<
+      last_raycast_stats_.dynamic_suspect_voxels_after_decay << ",";
+    out << "\"last_scan_static_candidate_voxels_after_decay\":" <<
+      last_raycast_stats_.static_candidate_voxels_after_decay;
     if (surface != nullptr) {
       out << ",\"surface_cells\":" << surface->surface_cells.size();
       out << ",\"traversable_cells\":" << surface->traversable_cells.size();
@@ -1058,6 +1064,10 @@ private:
     msg.last_scan_filtered_self = last_raycast_stats_.filtered_self;
     msg.last_scan_hit_updates = last_raycast_stats_.hit_updates;
     msg.last_scan_miss_updates = last_raycast_stats_.miss_updates;
+    msg.last_scan_dynamic_suspect_voxels_after_decay =
+      last_raycast_stats_.dynamic_suspect_voxels_after_decay;
+    msg.last_scan_static_candidate_voxels_after_decay =
+      last_raycast_stats_.static_candidate_voxels_after_decay;
     if (surface != nullptr) {
       msg.surface_cells = surface->surface_cells.size();
       msg.traversable_cells = surface->traversable_cells.size();

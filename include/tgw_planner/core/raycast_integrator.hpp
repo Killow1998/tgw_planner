@@ -37,6 +37,8 @@ struct RaycastStats
   std::uint64_t filtered_self{0};
   std::uint64_t miss_updates{0};
   std::uint64_t hit_updates{0};
+  std::uint64_t dynamic_suspect_voxels_after_decay{0};
+  std::uint64_t static_candidate_voxels_after_decay{0};
 };
 
 class RaycastIntegrator

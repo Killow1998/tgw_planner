@@ -91,8 +91,8 @@ ros2 service call /tgw_map/set_blocked_region tgw_planner/srv/SetBlockedRegion \
 `realtime_mapping.launch.py` forwards the core probabilistic mapping,
 surface-extraction, and clearance-aware planner parameters to the node. This is
 important for bag validation because parameters such as `enable_dynamic_filter`,
-`surface_require_static_support`, and planner weights must be testable from the
-launch command line.
+`dynamic_clear_ratio_threshold`, `surface_require_static_support`, and planner
+weights must be testable from the launch command line.
 
 The realtime planning response populates:
 
@@ -137,6 +137,10 @@ search objective.
 `/tgw_map/stats_json` in `tgw_planner/msg/MappingStats` form. Use the typed
 topic for bagged diagnostics and monitoring; keep the JSON topic for quick CLI
 inspection and text logs.
+
+Dynamic filtering runs after each raycast-integrated scan. The latest decay
+result is exposed as `last_scan_dynamic_suspect_voxels_after_decay` and
+`last_scan_static_candidate_voxels_after_decay` in both stats outputs.
 
 Map export:
 

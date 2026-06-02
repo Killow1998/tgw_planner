@@ -21,6 +21,7 @@ def generate_launch_description():
     min_static_hits = LaunchConfiguration("min_static_hits")
     min_distinct_views = LaunchConfiguration("min_distinct_views")
     min_static_lifetime_sec = LaunchConfiguration("min_static_lifetime_sec")
+    dynamic_clear_ratio_threshold = LaunchConfiguration("dynamic_clear_ratio_threshold")
     enable_self_filter = LaunchConfiguration("enable_self_filter")
     enable_dynamic_filter = LaunchConfiguration("enable_dynamic_filter")
     max_points_per_scan = LaunchConfiguration("max_points_per_scan")
@@ -73,6 +74,7 @@ def generate_launch_description():
             DeclareLaunchArgument("min_static_hits", default_value="3"),
             DeclareLaunchArgument("min_distinct_views", default_value="2"),
             DeclareLaunchArgument("min_static_lifetime_sec", default_value="1.0"),
+            DeclareLaunchArgument("dynamic_clear_ratio_threshold", default_value="0.65"),
             DeclareLaunchArgument("enable_self_filter", default_value="true"),
             DeclareLaunchArgument("enable_dynamic_filter", default_value="true"),
             DeclareLaunchArgument("max_points_per_scan", default_value="120000"),
@@ -129,6 +131,7 @@ def generate_launch_description():
                         "min_static_hits": min_static_hits,
                         "min_distinct_views": min_distinct_views,
                         "min_static_lifetime_sec": min_static_lifetime_sec,
+                        "dynamic_clear_ratio_threshold": dynamic_clear_ratio_threshold,
                         "enable_self_filter": enable_self_filter,
                         "enable_dynamic_filter": enable_dynamic_filter,
                         "max_points_per_scan": max_points_per_scan,

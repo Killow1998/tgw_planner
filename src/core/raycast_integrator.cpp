@@ -49,6 +49,8 @@ RaycastStats RaycastIntegrator::insertScan(
   }
 
   map.decayDynamic(scan.stamp_sec);
+  stats.dynamic_suspect_voxels_after_decay = map.dynamicSuspectVoxels().size();
+  stats.static_candidate_voxels_after_decay = map.staticCandidateVoxels().size();
   return stats;
 }
 

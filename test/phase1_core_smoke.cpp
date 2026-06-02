@@ -60,6 +60,8 @@ int main()
   CHECK(stats.inserted_points == 1U);
   CHECK(stats.hit_updates == 1U);
   CHECK(stats.miss_updates > 0U);
+  CHECK(stats.dynamic_suspect_voxels_after_decay == map.dynamicSuspectVoxels().size());
+  CHECK(stats.static_candidate_voxels_after_decay == map.staticCandidateVoxels().size());
 
   const GridIndex endpoint = map.worldToGrid({1.0, 0.0, 0.0});
   const GridIndex free_cell = map.worldToGrid({0.5, 0.0, 0.0});

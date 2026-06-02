@@ -20,6 +20,8 @@ uint64 last_scan_filtered_range
 uint64 last_scan_filtered_self
 uint64 last_scan_hit_updates
 uint64 last_scan_miss_updates
+uint64 last_scan_dynamic_suspect_voxels_after_decay
+uint64 last_scan_static_candidate_voxels_after_decay
 
 uint64 surface_cells
 uint64 traversable_cells
