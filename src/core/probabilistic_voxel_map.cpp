@@ -25,6 +25,17 @@ void saturatingIncrement(std::uint16_t & value)
     ++value;
   }
 }
+
+double clearEvidenceRatio(const VoxelState & state)
+{
+  const double clear_evidence = static_cast<double>(state.miss_count);
+  const double total_evidence =
+    clear_evidence + static_cast<double>(state.hit_count);
+  if (total_evidence <= 0.0) {
+    return 0.0;
+  }
+  return clear_evidence / total_evidence;
+}
 }  // namespace
 
 ProbabilisticVoxelMap::ProbabilisticVoxelMap(MappingOptions options)
@@ -175,8 +186,7 @@ void ProbabilisticVoxelMap::decayDynamic(double now_sec)
     const double lifetime = std::max(0.0, state.last_seen_time - state.first_seen_time);
     const double missed_recently =
       state.last_miss_time > state.last_hit_time && now_sec - state.last_miss_time < 5.0;
-    const double pass_count = static_cast<double>(std::max<std::uint16_t>(1U, state.ray_pass_count));
-    const double clear_ratio = static_cast<double>(state.miss_count) / pass_count;
+    const double clear_ratio = clearEvidenceRatio(state);
     state.dynamic_suspect =
       missed_recently &&
       lifetime < options_.min_static_lifetime_sec &&
@@ -228,8 +238,7 @@ void ProbabilisticVoxelMap::refreshClassification(VoxelState & state) const
   state.free = state.log_odds <= free_threshold_log_odds_;
 
   const double lifetime = std::max(0.0, state.last_seen_time - state.first_seen_time);
-  const double pass_count = static_cast<double>(std::max<std::uint16_t>(1U, state.ray_pass_count));
-  const double clear_ratio = static_cast<double>(state.miss_count) / pass_count;
+  const double clear_ratio = clearEvidenceRatio(state);
   state.dynamic_suspect =
     options_.enable_dynamic_filter &&
     state.hit_count < options_.min_static_hits &&

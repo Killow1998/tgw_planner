@@ -221,7 +221,7 @@ def main():
     sample_limit = int(os.environ.get("TGW_PROBE_SAMPLE_LIMIT", "2000"))
     top_component_limit = int(os.environ.get("TGW_PROBE_TOP_COMPONENTS", "8"))
     component_pool = os.environ.get("TGW_PROBE_COMPONENT_POOL", "largest")
-    max_plan_attempts = int(os.environ.get("TGW_PROBE_MAX_PLAN_ATTEMPTS", "8"))
+    max_plan_attempts = int(os.environ.get("TGW_PROBE_MAX_PLAN_ATTEMPTS", "32"))
     print(
         f"probe_criteria=min_dxy:{min_dxy:.3f} max_dxy:{max_dxy:.3f} "
         f"min_abs_dz:{min_abs_dz:.3f} max_abs_dz:{max_abs_dz:.3f} "
@@ -361,6 +361,8 @@ def main():
             f"shortcut_count={stats.postprocess_floor_shortcuts} "
             f"path_waypoints={stats.path_waypoints} "
             f"path_length_m={stats.path_length_m:.3f} "
+            f"start_snap_distance_m={stats.start_snap_distance_m:.3f} "
+            f"goal_snap_distance_m={stats.goal_snap_distance_m:.3f} "
             f"min_path_clearance_m={stats.min_path_clearance_m:.3f} "
             f"mean_path_clearance_m={stats.mean_path_clearance_m:.3f} "
             f"low_clearance_samples={stats.low_clearance_samples} "

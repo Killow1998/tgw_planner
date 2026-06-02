@@ -128,6 +128,16 @@ int main()
   CHECK(map.lookup(transient)->dynamic_suspect);
   CHECK(map.isFree(transient));
 
+  GridIndex stable_wall{30, 0, 0};
+  map.updateHit(stable_wall, 0.0, 1);
+  map.updateHit(stable_wall, 0.5, 2);
+  map.updateHit(stable_wall, 1.0, 3);
+  CHECK(map.lookup(stable_wall)->static_candidate);
+  map.updateMiss(stable_wall, 1.1, 4);
+  CHECK(!map.lookup(stable_wall)->dynamic_suspect);
+  CHECK(map.lookup(stable_wall)->static_candidate);
+  CHECK(map.isOccupied(stable_wall));
+
   RobotFootprint footprint;
   const std::vector<Point3> samples = footprint.sampleFootprint({0.0, 0.0, 0.0}, 0.0, 0.10);
   CHECK(!samples.empty());
