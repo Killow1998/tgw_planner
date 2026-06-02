@@ -1,0 +1,46 @@
+builtin_interfaces/Time stamp
+string map_id
+string map_input_mode
+
+bool success
+string message
+string source_pcd
+bool pcd_artifact_warning
+bool possible_artifacts_detected
+
+uint64 source_points
+float64 build_time_ms
+
+float64 bounds_min_x
+float64 bounds_min_y
+float64 bounds_min_z
+float64 bounds_max_x
+float64 bounds_max_y
+float64 bounds_max_z
+
+uint32 occupied_cells
+uint32 traversable_cells
+uint32 blocked_cells
+uint32 forbidden_cells
+uint32 risk_cells
+
+uint32 surface_candidate_cells
+uint32 accepted_floor_cells
+uint32 accepted_stair_cells
+uint32 rejected_ceiling_cells
+uint32 rejected_clearance_cells
+uint32 rejected_collision_cells
+uint32 rejected_stair_noise_cells
+
+uint32 floor_component_count
+uint32 landing_component_count
+uint32 stair_flight_count
+uint32 loose_stair_fragment_count
+uint32 rescued_stair_fragment_count
+uint32 recovered_stair_cell_count
+
+float64 map_resolution_m
+float64 robot_radius_m
+float64 robot_length_m
+float64 robot_width_m
+float64 robot_height_m

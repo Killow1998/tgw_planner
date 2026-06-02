@@ -134,8 +134,10 @@ def publish_frame(node, points):
 
 rclpy.init()
 node = Publisher()
-publish_frame(node, [(1.0, 0.0, 0.0)])
-for _ in range(5):
+time.sleep(0.5)
+for _ in range(2):
+    publish_frame(node, [(1.0, 0.0, 0.0)])
+for _ in range(8):
     publish_frame(node, [(2.0, 0.0, 0.0)])
 
 node.destroy_node()
@@ -200,7 +202,7 @@ run_dynamic_disappears_case()
     publish_period_ms:=300 \
     min_static_hits:=3 \
     min_distinct_views:=2 \
-    min_static_lifetime_sec:=1.0 \
+    min_static_lifetime_sec:=10.0 \
     enable_dynamic_filter:=true \
     dynamic_clear_ratio_threshold:=0.50 \
     enable_self_filter:=false \

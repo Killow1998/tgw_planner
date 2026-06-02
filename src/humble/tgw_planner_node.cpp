@@ -19,6 +19,7 @@
 
 #include "tgw_planner/core/navigation_map.hpp"
 #include "tgw_planner/core/voxel_astar_planner.hpp"
+#include "tgw_planner/msg/map_build_stats.hpp"
 #include "tgw_planner/msg/planner_stats.hpp"
 #include "tgw_planner/srv/plan_path.hpp"
 #include "tgw_planner/srv/set_blocked_region.hpp"
@@ -171,11 +172,15 @@ std::string jsonEscape(const std::string & text)
 }
 }  // namespace
 
+#ifndef TGW_NODE_NAME
+#define TGW_NODE_NAME "tgw_planner_node"
+#endif
+
 class TgwPlannerNode : public rclcpp::Node
 {
 public:
   TgwPlannerNode()
-  : Node("tgw_planner_node")
+  : Node(TGW_NODE_NAME)
   {
     declare_parameter<std::string>("pcd_file", "");
     declare_parameter<std::string>("map_frame", "map");
@@ -254,6 +259,10 @@ public:
     stats_pub_ = create_publisher<tgw_planner::msg::PlannerStats>(
       "/planner_stats", latched_qos);
     stats_json_pub_ = create_publisher<std_msgs::msg::String>("/planner_stats_json", latched_qos);
+    map_build_stats_pub_ = create_publisher<tgw_planner::msg::MapBuildStats>(
+      "/map_build_stats", latched_qos);
+    map_build_stats_json_pub_ = create_publisher<std_msgs::msg::String>(
+      "/map_build_stats_json", latched_qos);
 
     start_point_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
       "/start_point", latched_qos, std::bind(&TgwPlannerNode::onStartPoint, this, std::placeholders::_1));
@@ -309,6 +318,7 @@ private:
     last_build_stats_ = stats;
     if (!ok) {
       RCLCPP_ERROR(get_logger(), "[NavMapBuilder] %s", stats.message.c_str());
+      publishMapBuildStats();
       return;
     }
 
@@ -429,6 +439,12 @@ private:
     RCLCPP_INFO(
       get_logger(), "[NavMapBuilder] bounds_max: [%.3f, %.3f, %.3f]",
       stats.bounds_max.x, stats.bounds_max.y, stats.bounds_max.z);
+    if (possiblePcdArtifactsDetected()) {
+      RCLCPP_WARN(
+        get_logger(),
+        "[PCD MODE WARNING] possible artifacts detected; traversability may be unreliable");
+    }
+    publishMapBuildStats();
     publishMapLayers();
     saveMapPackageIfRequested();
   }
@@ -723,6 +739,124 @@ private:
     out << "\"resolution_m\":" << map_.resolution();
     out << "}";
     return out.str();
+  }
+
+  bool possiblePcdArtifactsDetected() const
+  {
+    const std::size_t rejected_artifact_like =
+      map_.rejectedCollisionCells().size() +
+      map_.rejectedStairNoiseCells().size() +
+      map_.rejectedShortLowCells().size() +
+      map_.rejectedWidthPrefilterCells().size();
+    const std::size_t threshold =
+      std::max<std::size_t>(200U, map_.occupiedCells().size() / 100U);
+    return rejected_artifact_like >= threshold;
+  }
+
+  tgw_planner::msg::MapBuildStats toMapBuildStatsMsg() const
+  {
+    const MapCounts counts = last_build_stats_.counts;
+    tgw_planner::msg::MapBuildStats msg;
+    msg.stamp = now();
+    msg.map_id = map_.mapId();
+    msg.map_input_mode = "pcd";
+    msg.success = last_build_stats_.success;
+    msg.message = last_build_stats_.message;
+    msg.source_pcd = last_build_stats_.source_pcd;
+    msg.pcd_artifact_warning = true;
+    msg.possible_artifacts_detected = possiblePcdArtifactsDetected();
+    msg.source_points = last_build_stats_.source_points;
+    msg.build_time_ms = last_build_stats_.build_time_ms;
+    msg.bounds_min_x = last_build_stats_.bounds_min.x;
+    msg.bounds_min_y = last_build_stats_.bounds_min.y;
+    msg.bounds_min_z = last_build_stats_.bounds_min.z;
+    msg.bounds_max_x = last_build_stats_.bounds_max.x;
+    msg.bounds_max_y = last_build_stats_.bounds_max.y;
+    msg.bounds_max_z = last_build_stats_.bounds_max.z;
+    msg.occupied_cells = counts.occupied_cells;
+    msg.traversable_cells = counts.traversable_cells;
+    msg.blocked_cells = counts.blocked_cells;
+    msg.forbidden_cells = static_cast<std::uint32_t>(map_.forbiddenCells().size());
+    msg.risk_cells = counts.risk_cells;
+    msg.surface_candidate_cells = static_cast<std::uint32_t>(map_.surfaceCandidateCells().size());
+    msg.accepted_floor_cells = static_cast<std::uint32_t>(map_.acceptedFloorCells().size());
+    msg.accepted_stair_cells = static_cast<std::uint32_t>(map_.acceptedStairCells().size());
+    msg.rejected_ceiling_cells = static_cast<std::uint32_t>(map_.rejectedCeilingCells().size());
+    msg.rejected_clearance_cells = static_cast<std::uint32_t>(map_.rejectedClearanceCells().size());
+    msg.rejected_collision_cells = static_cast<std::uint32_t>(map_.rejectedCollisionCells().size());
+    msg.rejected_stair_noise_cells =
+      static_cast<std::uint32_t>(map_.rejectedStairNoiseCells().size());
+    msg.floor_component_count = static_cast<std::uint32_t>(map_.floorComponents().size());
+    msg.landing_component_count = static_cast<std::uint32_t>(map_.landingComponents().size());
+    msg.stair_flight_count = static_cast<std::uint32_t>(map_.stairFlights().size());
+    const auto & stair_diag = map_.stairFlightDiagnostics();
+    msg.loose_stair_fragment_count =
+      static_cast<std::uint32_t>(stair_diag.loose_fragment_count);
+    msg.rescued_stair_fragment_count =
+      static_cast<std::uint32_t>(stair_diag.rescued_fragment_count);
+    msg.recovered_stair_cell_count =
+      static_cast<std::uint32_t>(stair_diag.recovered_stair_cell_count);
+    msg.map_resolution_m = map_.resolution();
+    msg.robot_radius_m = map_.robotRadius();
+    msg.robot_length_m = map_.robotLength();
+    msg.robot_width_m = map_.robotWidth();
+    msg.robot_height_m = map_.robotHeight();
+    return msg;
+  }
+
+  std::string toMapBuildStatsJson() const
+  {
+    const auto msg = toMapBuildStatsMsg();
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3);
+    out << "{";
+    out << "\"success\":" << (msg.success ? "true" : "false") << ",";
+    out << "\"map_id\":\"" << jsonEscape(msg.map_id) << "\",";
+    out << "\"map_input_mode\":\"pcd\",";
+    out << "\"pcd_artifact_warning\":true,";
+    out << "\"possible_artifacts_detected\":" <<
+      (msg.possible_artifacts_detected ? "true" : "false") << ",";
+    out << "\"message\":\"" << jsonEscape(msg.message) << "\",";
+    out << "\"source_pcd\":\"" << jsonEscape(msg.source_pcd) << "\",";
+    out << "\"source_points\":" << msg.source_points << ",";
+    out << "\"build_time_ms\":" << msg.build_time_ms << ",";
+    out << "\"occupied_cells\":" << msg.occupied_cells << ",";
+    out << "\"traversable_cells\":" << msg.traversable_cells << ",";
+    out << "\"blocked_cells\":" << msg.blocked_cells << ",";
+    out << "\"forbidden_cells\":" << msg.forbidden_cells << ",";
+    out << "\"risk_cells\":" << msg.risk_cells << ",";
+    out << "\"surface_candidate_cells\":" << msg.surface_candidate_cells << ",";
+    out << "\"accepted_floor_cells\":" << msg.accepted_floor_cells << ",";
+    out << "\"accepted_stair_cells\":" << msg.accepted_stair_cells << ",";
+    out << "\"rejected_ceiling_cells\":" << msg.rejected_ceiling_cells << ",";
+    out << "\"rejected_clearance_cells\":" << msg.rejected_clearance_cells << ",";
+    out << "\"rejected_collision_cells\":" << msg.rejected_collision_cells << ",";
+    out << "\"rejected_stair_noise_cells\":" << msg.rejected_stair_noise_cells << ",";
+    out << "\"floor_component_count\":" << msg.floor_component_count << ",";
+    out << "\"landing_component_count\":" << msg.landing_component_count << ",";
+    out << "\"stair_flight_count\":" << msg.stair_flight_count << ",";
+    out << "\"loose_stair_fragment_count\":" << msg.loose_stair_fragment_count << ",";
+    out << "\"rescued_stair_fragment_count\":" << msg.rescued_stair_fragment_count << ",";
+    out << "\"recovered_stair_cell_count\":" << msg.recovered_stair_cell_count << ",";
+    out << "\"bounds_min\":[" << msg.bounds_min_x << "," << msg.bounds_min_y << "," <<
+      msg.bounds_min_z << "],";
+    out << "\"bounds_max\":[" << msg.bounds_max_x << "," << msg.bounds_max_y << "," <<
+      msg.bounds_max_z << "],";
+    out << "\"resolution_m\":" << msg.map_resolution_m << ",";
+    out << "\"robot_radius_m\":" << msg.robot_radius_m << ",";
+    out << "\"robot_length_m\":" << msg.robot_length_m << ",";
+    out << "\"robot_width_m\":" << msg.robot_width_m << ",";
+    out << "\"robot_height_m\":" << msg.robot_height_m;
+    out << "}";
+    return out.str();
+  }
+
+  void publishMapBuildStats()
+  {
+    map_build_stats_pub_->publish(toMapBuildStatsMsg());
+    std_msgs::msg::String json_msg;
+    json_msg.data = toMapBuildStatsJson();
+    map_build_stats_json_pub_->publish(json_msg);
   }
 
   void publishMapLayers()
@@ -1239,6 +1373,8 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_marker_pub_;
   rclcpp::Publisher<tgw_planner::msg::PlannerStats>::SharedPtr stats_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr stats_json_pub_;
+  rclcpp::Publisher<tgw_planner::msg::MapBuildStats>::SharedPtr map_build_stats_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr map_build_stats_json_pub_;
 
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr start_point_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr goal_point_sub_;

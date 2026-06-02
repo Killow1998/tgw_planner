@@ -44,5 +44,12 @@ This can corrupt:
 - path planning
 
 For deployment, prefer realtime raycast mapping mode or a cleaned static PCD.
-When PCD mode is used, `tgw_planner_node` prints a PCD mode warning and reports
-`map_input_mode="pcd"` with `pcd_artifact_warning=true` in `/planner_stats_json`.
+When PCD mode is used, `tgw_pcd_import_node` prints a PCD mode warning and
+reports `map_input_mode="pcd"` with `pcd_artifact_warning=true` in:
+
+- `/map_build_stats`
+- `/map_build_stats_json`
+- `/planner_stats_json`
+
+`pcd_to_path_mvp.launch.py` starts `tgw_pcd_import_node` but keeps the ROS node
+name `tgw_planner_node` for compatibility with existing scripts.

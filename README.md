@@ -3,6 +3,9 @@
 `tgw_planner` (`tgw_planner`) is a ROS 2 Humble MVP for Unitree Go2-W multi-floor navigation from a static PCD map.
 
 The package keeps the planner core ROS-free under `include/tgw_planner/core` and `src/core`. The Humble wrapper nodes live in `src/humble`.
+Static PCD import is handled by `tgw_pcd_import_node`; the legacy
+`pcd_to_path_mvp.launch.py` launch file keeps the ROS node name
+`tgw_planner_node` for compatibility.
 
 ## Build
 
@@ -30,6 +33,10 @@ The planner treats path poses as the odom/base reference point. By default that
 reference is 0.20 m behind the front edge of a 0.70 m x 0.43 m x 0.50 m
 footprint. A* neighbor expansion checks the rectangular footprint in the local
 movement direction instead of accepting a point-mass path.
+
+PCD mode publishes map-build diagnostics on `/map_build_stats` and
+`/map_build_stats_json`, including `pcd_artifact_warning=true`. Realtime raycast
+mapping is the recommended deployment path for dirty or live maps.
 
 To save a lightweight map package during startup, pass `save_map_dir:=/path/to/map_package`.
 The package contains `map.bt`, `metadata.yaml`, `blocked_regions.yaml`, and `README.generated.txt`.

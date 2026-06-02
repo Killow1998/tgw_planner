@@ -45,7 +45,7 @@ def generate_launch_description():
             DeclareLaunchArgument("use_rviz", default_value="true"),
             Node(
                 package="tgw_planner",
-                executable="tgw_planner_node",
+                executable="tgw_pcd_import_node",
                 name="tgw_planner_node",
                 output="screen",
                 parameters=[

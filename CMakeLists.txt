@@ -30,6 +30,7 @@ find_package(PCL REQUIRED COMPONENTS common io filters)
 find_package(octomap REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  msg/MapBuildStats.msg
   msg/MappingStats.msg
   msg/PlannerStats.msg
   srv/ExportStaticCloud.srv
@@ -85,6 +86,22 @@ ament_target_dependencies(tgw_planner_node
   visualization_msgs
 )
 
+add_executable(tgw_pcd_import_node
+  src/humble/tgw_planner_node.cpp
+)
+target_compile_definitions(tgw_pcd_import_node PRIVATE TGW_NODE_NAME="tgw_pcd_import_node")
+target_link_libraries(tgw_pcd_import_node
+  tgw_planner_core
+)
+ament_target_dependencies(tgw_pcd_import_node
+  geometry_msgs
+  nav_msgs
+  rclcpp
+  sensor_msgs
+  std_msgs
+  visualization_msgs
+)
+
 add_executable(tgw_clicked_point_router_node
   src/humble/clicked_point_router_node.cpp
 )
@@ -125,6 +142,7 @@ pluginlib_export_plugin_description_file(rviz_common plugins/plugin_description.
 
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 target_link_libraries(tgw_planner_node "${cpp_typesupport_target}")
+target_link_libraries(tgw_pcd_import_node "${cpp_typesupport_target}")
 target_link_libraries(tgw_clicked_point_router_node "${cpp_typesupport_target}")
 target_link_libraries(tgw_realtime_mapping_node "${cpp_typesupport_target}")
 
@@ -141,6 +159,7 @@ endif()
 install(TARGETS
   tgw_planner_core
   tgw_planner_node
+  tgw_pcd_import_node
   tgw_clicked_point_router_node
   tgw_realtime_mapping_node
   tgw_planner_rviz_plugins
