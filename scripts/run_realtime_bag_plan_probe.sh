@@ -11,10 +11,15 @@ if [[ -f install/setup.bash ]]; then
 fi
 set -u
 
+if [[ -z "${ROS_DOMAIN_ID:-}" ]]; then
+  export ROS_DOMAIN_ID=$((20 + RANDOM % 180))
+fi
+
 bag_path="${1:-/home/user/ros_ws/bagfile/f7tof9_g2w_ros2}"
 play_seconds="${TGW_BAG_PLAY_SECONDS:-75}"
 log_dir="${TGW_BAG_PROBE_LOG_DIR:-/tmp/tgw_real_bag_plan_probe}"
 mkdir -p "${log_dir}"
+echo "ROS_DOMAIN_ID=${ROS_DOMAIN_ID}" >"${log_dir}/domain.log"
 
 if [[ ! -e "${bag_path}" ]]; then
   echo "FAIL realtime_bag_plan_probe: bag path does not exist: ${bag_path}"
@@ -35,7 +40,7 @@ trap cleanup EXIT
 
 tail_logs()
 {
-  for log in fast_lio n3mapping tgw bag probe snapshot; do
+  for log in domain fast_lio n3mapping tgw bag probe snapshot; do
     local file="${log_dir}/${log}.log"
     if [[ "${log}" == "probe" ]]; then
       file="${log_dir}/probe.out"
@@ -106,6 +111,19 @@ fi
 
 timeout "${play_seconds}s" ros2 bag play "${bag_path}" >"${log_dir}/bag.log" 2>&1 || true
 sleep 3
+
+ros2 service call /tgw_mapping/get_snapshot tgw_planner/srv/GetSnapshot "{}" \
+  >"${log_dir}/snapshot.out" 2>&1 || true
+snapshot_summary="$(grep -o \
+  "received_clouds=[0-9]*\\|integrated_clouds=[0-9]*\\|traversable_points=[0-9]*\\|surface_points=[0-9]*\\|dynamic_points=[0-9]*" \
+  "${log_dir}/snapshot.out" | tr "\n" " " || true)"
+echo "${snapshot_summary}"
+integrated_clouds="$(grep -o "integrated_clouds=[0-9]*" "${log_dir}/snapshot.out" | tail -n 1 | cut -d= -f2 || true)"
+if (( ${integrated_clouds:-0} == 0 )); then
+  echo "FAIL realtime_bag_plan_probe: realtime node integrated zero clouds"
+  tail_logs
+  exit 1
+fi
 
 set +e
 python3 - >"${log_dir}/probe.out" 2>&1 <<'PY'
@@ -253,13 +271,6 @@ sys.exit(main())
 PY
 probe_rc=$?
 set -e
-
-ros2 service call /tgw_mapping/get_snapshot tgw_planner/srv/GetSnapshot "{}" \
-  >"${log_dir}/snapshot.out" 2>&1 || true
-grep -o \
-  "received_clouds=[0-9]*\\|integrated_clouds=[0-9]*\\|traversable_points=[0-9]*\\|surface_points=[0-9]*\\|dynamic_points=[0-9]*" \
-  "${log_dir}/snapshot.out" | tr "\n" " " || true
-echo
 cat "${log_dir}/probe.out"
 if [[ ${probe_rc} -ne 0 ]]; then
   echo "FAIL realtime_bag_plan_probe: planner probe failed with rc=${probe_rc}"

@@ -96,13 +96,13 @@ surface component, and calls `/tgw_map/plan_path`.
 Observed result with a 75 s playback on 2026-06-03:
 
 ```text
-received_clouds=674
-integrated_clouds=674
-dynamic_points=20057
-surface_points=1327
-traversable_points=1327
-surface_component_count=561
-largest_component_size=340
+received_clouds=641
+integrated_clouds=641
+dynamic_points=19638
+surface_points=1205
+traversable_points=1205
+surface_component_count=491
+largest_component_size=381
 start=(0.0500000007, 1.1499999762, -0.1500000060)
 goal=(-0.75, 0.4499999881, -0.1500000060)
 dxy=1.063
@@ -110,14 +110,20 @@ success=True
 message="path found"
 final_path_validated=True
 final_path_fallback_to_raw=False
-expanded_nodes=133
+expanded_nodes=117
 path_waypoints=13
-path_length_m=1.407
+path_length_m=1.490
 min_path_clearance_m=0.000
-mean_path_clearance_m=0.085
-clearance_cost_sum=134.667
+mean_path_clearance_m=0.097
+clearance_cost_sum=121.333
 ```
 
 This validates the realtime map-to-plan service chain on the real bag, but only
 for a short same-component path. Longer cross-floor or cross-component planning
 still needs separate point selection and map-quality validation.
+
+The probe script now assigns a temporary `ROS_DOMAIN_ID` when the caller has not
+set one. This prevents stale transient-local `/tgw_map/traversable_cloud` data
+from an older ROS graph from being mistaken for current realtime mapping output.
+The script also fails before planning if `/tgw_mapping/get_snapshot` reports
+`integrated_clouds=0`.
