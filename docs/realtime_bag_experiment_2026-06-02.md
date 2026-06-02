@@ -247,3 +247,62 @@ Interpretation:
 - Mean clearance is low on the real-bag probes, so broader map-quality and
   corridor-quality validation is still required before treating the realtime
   layer as deployment-ready.
+
+## Surface Connectivity A/B 2026-06-03
+
+The probe now prints global traversable bounds and the top traversable
+components with XY/Z bounds. This made the remaining real-bag issue explicit:
+
+- Default `surface_require_observed_free_space=true`:
+  - `traversable_points=1232`
+  - `surface_component_count=539`
+  - `largest_component_size=324`
+  - top component `z_span=0.000`
+  - only one of the top twelve components has `z_span >= 0.5 m`
+  - result: `success=False reason=no_component_pair_matching_probe_criteria`
+
+- Diagnostic `surface_require_observed_free_space=false`:
+  - `traversable_points=12998`
+  - `surface_component_count=1201`
+  - `largest_component_size=9975`
+  - largest component `z_span=2.100`
+  - cross-height path succeeds:
+
+```text
+start=(4.4499998093, -2.8499999046, 2.3499999046)
+goal=(0.9499999881, 1.8500000238, 2.8499999046)
+dxy=5.860
+success=True
+message="path found"
+final_path_validated=True
+raw_path_waypoints=48
+path_waypoints=48
+path_length_m=6.671
+mean_path_clearance_m=0.630
+```
+
+With shortcuts enabled under the same diagnostic surface mode:
+
+```text
+success=True
+final_path_validated=True
+raw_path_waypoints=55
+shortcut_count=43
+path_waypoints=12
+path_length_m=6.983
+mean_path_clearance_m=0.670
+```
+
+Interpretation:
+
+- Surface A* and final validation can now handle direct adjacent surface edges
+  with vertical change; validation no longer rejects valid stair/slope edges
+  because of interpolated samples through empty z layers.
+- The remaining default-mode cross-height blocker is the observed-free-space
+  requirement fragmenting the realtime surface. Disabling it is useful for
+  diagnosis but is not a deployment fix because it can admit ceiling tops and
+  unobserved occupied tops.
+- The next algorithmic task is to improve free-space evidence continuity or add
+  a conservative observed-free relaxation that only bridges locally supported
+  stair/slope surface edges, without turning ceiling tops into traversable
+  ground.

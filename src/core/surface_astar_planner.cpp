@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <queue>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -32,6 +33,12 @@ double gridDistance(const GridIndex & a, const GridIndex & b)
   const double dy = static_cast<double>(a.y - b.y);
   const double dz = static_cast<double>(a.z - b.z);
   return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+std::string cellString(const GridIndex & cell)
+{
+  return "[" + std::to_string(cell.x) + "," + std::to_string(cell.y) + "," +
+         std::to_string(cell.z) + "]";
 }
 }  // namespace
 
@@ -265,15 +272,23 @@ bool SurfaceAstarPlanner::isFootprintSupported(
 bool SurfaceAstarPlanner::isTransitionAllowed(
   const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const
 {
+  if (from == to) {
+    return isCellTraversable(snapshot, from);
+  }
   if (!isCellTraversable(snapshot, to)) {
     return false;
   }
 
   const Point3 from_point = cellCenter(from, snapshot.resolution_m);
   const Point3 to_point = cellCenter(to, snapshot.resolution_m);
+  const double yaw = std::atan2(to_point.y - from_point.y, to_point.x - from_point.x);
+  if (isDirectSurfaceNeighbor(snapshot, from, to)) {
+    return isFootprintSupported(snapshot, from_point, yaw) &&
+           isFootprintSupported(snapshot, to_point, yaw);
+  }
+
   const double segment_length = distance3d(from_point, to_point);
   const int steps = std::max(1, static_cast<int>(std::ceil(segment_length / options_.swept_sample_step_m)));
-  const double yaw = std::atan2(to_point.y - from_point.y, to_point.x - from_point.x);
   for (int step = 0; step <= steps; ++step) {
     const double t = static_cast<double>(step) / static_cast<double>(steps);
     const Point3 sample{
@@ -288,6 +303,20 @@ bool SurfaceAstarPlanner::isTransitionAllowed(
     }
   }
   return true;
+}
+
+bool SurfaceAstarPlanner::isDirectSurfaceNeighbor(
+  const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const
+{
+  const int dx = std::abs(to.x - from.x);
+  const int dy = std::abs(to.y - from.y);
+  const int dz = std::abs(to.z - from.z);
+  if (dx == 0 && dy == 0) {
+    return false;
+  }
+  const int max_step_cells =
+    std::max(1, static_cast<int>(std::ceil(options_.max_step_height_m / snapshot.resolution_m)));
+  return dx <= 1 && dy <= 1 && dz <= max_step_cells;
 }
 
 Point3 SurfaceAstarPlanner::cellCenter(const GridIndex & cell, double resolution_m) const
@@ -421,6 +450,17 @@ bool SurfaceAstarPlanner::validatePath(
   for (std::size_t i = 1; i < path.size(); ++i) {
     const Point3 & from = path[i - 1U];
     const Point3 & to = path[i];
+    const GridIndex from_cell = worldToGrid(from, snapshot.resolution_m);
+    const GridIndex to_cell = worldToGrid(to, snapshot.resolution_m);
+    if (isDirectSurfaceNeighbor(snapshot, from_cell, to_cell)) {
+      if (!isTransitionAllowed(snapshot, from_cell, to_cell)) {
+        failure_reason = "final path direct transition is not allowed segment=" +
+          std::to_string(i) + " from=" + cellString(from_cell) + " to=" + cellString(to_cell);
+        return false;
+      }
+      continue;
+    }
+
     const double segment_length = distance3d(from, to);
     const int steps = std::max(
       1, static_cast<int>(std::ceil(segment_length / options_.shortcut_sample_step_m)));
@@ -437,15 +477,25 @@ bool SurfaceAstarPlanner::validatePath(
         from.z + (to.z - from.z) * t};
       const GridIndex sample_cell = worldToGrid(sample, snapshot.resolution_m);
       if (!isCellTraversable(snapshot, sample_cell)) {
-        failure_reason = "final path sample is not traversable";
+        failure_reason = "final path sample is not traversable segment=" +
+          std::to_string(i) + " step=" + std::to_string(step) +
+          " from=" + cellString(from_cell) + " to=" + cellString(to_cell) +
+          " sample=" + cellString(sample_cell) +
+          " delta=[" + std::to_string(to_cell.x - from_cell.x) + "," +
+          std::to_string(to_cell.y - from_cell.y) + "," +
+          std::to_string(to_cell.z - from_cell.z) + "]";
         return false;
       }
       if (!isFootprintSupported(snapshot, sample, yaw)) {
-        failure_reason = "final path footprint is not fully supported";
+        failure_reason = "final path footprint is not fully supported segment=" +
+          std::to_string(i) + " step=" + std::to_string(step) +
+          " from=" + cellString(from_cell) + " to=" + cellString(to_cell);
         return false;
       }
       if (step > 0 && !isTransitionAllowed(snapshot, previous_cell, sample_cell)) {
-        failure_reason = "final path transition is not allowed";
+        failure_reason = "final path transition is not allowed segment=" +
+          std::to_string(i) + " step=" + std::to_string(step) +
+          " previous=" + cellString(previous_cell) + " sample=" + cellString(sample_cell);
         return false;
       }
       previous_cell = sample_cell;

@@ -81,6 +81,20 @@ For cross-height validation, raise `TGW_PROBE_MIN_ABS_DZ` and
 `TGW_PROBE_MAX_ABS_DZ`. If no pair is found, the current bag segment does not
 contain a connected traversable component matching that geometry.
 
+For A/B diagnosis only, the probe can override realtime surface extraction
+without changing launch defaults:
+
+```bash
+TGW_SURFACE_REQUIRE_OBSERVED_FREE_SPACE=false \
+TGW_PLANNER_ENABLE_SHORTCUT=false \
+TGW_PROBE_MIN_ABS_DZ=0.50 TGW_PROBE_MAX_ABS_DZ=3.00 \
+src/tgw_planner/scripts/run_realtime_bag_plan_probe.sh \
+  /home/user/ros_ws/bagfile/f7tof9_g2w_ros2
+```
+
+If this succeeds while the default observed-free run has no cross-height pair,
+the remaining blocker is free-space evidence continuity, not surface A* search.
+
 Realtime debug topics:
 
 - `/tgw_map/occupied_cloud`

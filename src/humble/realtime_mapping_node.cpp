@@ -379,6 +379,8 @@ private:
     options.sample_step_m = declare_parameter<double>("validation_sample_step_m", options.sample_step_m);
     options.min_clearance_m =
       declare_parameter<double>("validation_min_clearance_m", options.min_clearance_m);
+    options.max_step_height_m =
+      declare_parameter<double>("validation_max_step_height_m", options.max_step_height_m);
     options.require_footprint_support =
       declare_parameter<bool>("validation_require_footprint", options.require_footprint_support);
     return options;
@@ -1301,6 +1303,9 @@ private:
     response->stats.mean_path_clearance_m = result.metrics.mean_path_clearance_m;
     response->stats.clearance_cost_sum = result.metrics.clearance_cost_sum;
     response->stats.low_clearance_samples = result.metrics.low_clearance_samples;
+    response->stats.final_path_validated = result.metrics.final_path_validated;
+    response->stats.final_path_fallback_to_raw = result.metrics.final_path_fallback_to_raw;
+    response->stats.final_path_validation_failure = result.metrics.final_path_validation_failure;
 
     if (!result.success) {
       response->path = makePathMessage(result.path);

@@ -13,6 +13,7 @@ PathValidator::PathValidator(RobotFootprint footprint, PathValidationOptions opt
 {
   options_.sample_step_m = std::max(0.01, options_.sample_step_m);
   options_.min_clearance_m = std::max(0.0, options_.min_clearance_m);
+  options_.max_step_height_m = std::max(0.05, options_.max_step_height_m);
 }
 
 PathValidationReport PathValidator::validate(
@@ -39,6 +40,19 @@ PathValidationReport PathValidator::validate(
   for (std::size_t i = 1; i < path.size(); ++i) {
     const Point3 & from = path[i - 1U];
     const Point3 & to = path[i];
+    const GridIndex from_cell = worldToGrid(from, snapshot.resolution_m);
+    const GridIndex to_cell = worldToGrid(to, snapshot.resolution_m);
+    if (isDirectSurfaceNeighbor(snapshot, from_cell, to_cell)) {
+      const double yaw = std::atan2(to.y - from.y, to.x - from.x);
+      if (i == 1U && !validateSample(snapshot, from, yaw, report, clearance_sum)) {
+        return report;
+      }
+      if (!validateSample(snapshot, to, yaw, report, clearance_sum)) {
+        return report;
+      }
+      continue;
+    }
+
     const double segment_length = distance3d(from, to);
     const int steps = std::max(1, static_cast<int>(std::ceil(segment_length / options_.sample_step_m)));
     const double yaw = std::atan2(to.y - from.y, to.x - from.x);
@@ -73,6 +87,20 @@ GridIndex PathValidator::worldToGrid(const Point3 & point, double resolution_m) 
     static_cast<int>(std::floor(point.x / resolution_m)),
     static_cast<int>(std::floor(point.y / resolution_m)),
     static_cast<int>(std::floor(point.z / resolution_m))};
+}
+
+bool PathValidator::isDirectSurfaceNeighbor(
+  const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const
+{
+  const int dx = std::abs(to.x - from.x);
+  const int dy = std::abs(to.y - from.y);
+  const int dz = std::abs(to.z - from.z);
+  if (dx == 0 && dy == 0) {
+    return false;
+  }
+  const int max_step_cells =
+    std::max(1, static_cast<int>(std::ceil(options_.max_step_height_m / snapshot.resolution_m)));
+  return dx <= 1 && dy <= 1 && dz <= max_step_cells;
 }
 
 bool PathValidator::validateSample(

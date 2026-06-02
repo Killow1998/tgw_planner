@@ -71,6 +71,11 @@ elif scene == "spiral":
     add_surface_rect(-14, 12, -3, 3, 1)
     add_spiral(0.0, 0.0, 0.0, turns=1.15, samples=96, radius=2.0, width=1.0, rise_total=2.0)
     add_surface_rect(0, 7, 6, 14, 11)
+elif scene == "steep_step_chain":
+    add_surface_rect(-8, 0, -3, 3, 1)
+    for i in range(6):
+        add_surface_rect(1 + i, 1 + i, -3, 3, 1 + 2 * (i + 1))
+    add_surface_rect(7, 12, -3, 3, 13)
 elif scene == "negative_gap":
     add_surface_rect(-10, -3, -3, 3, 1)
     add_surface_rect(4, 10, -3, 3, 1)
@@ -159,6 +164,7 @@ run_failure_case()
 run_success_case "straight" "-1.0 0.0 0.0" "5.0 0.0 1.8"
 run_success_case "switchback" "-1.0 0.0 0.0" "3.8 5.2 2.8"
 run_success_case "spiral" "-2.0 0.0 0.0" "0.8 2.0 2.0"
+run_success_case "steep_step_chain" "-1.0 0.0 0.0" "2.0 0.0 2.4"
 run_failure_case "negative_gap" "-1.5 0.0 0.0" "1.5 0.0 0.0"
 run_failure_case "negative_railing_bridge" "-1.5 0.0 0.0" "1.5 0.0 0.0" 1
 

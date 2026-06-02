@@ -14,6 +14,7 @@ struct PathValidationOptions
 {
   double sample_step_m{0.05};
   double min_clearance_m{0.0};
+  double max_step_height_m{0.30};
   bool require_footprint_support{true};
 };
 
@@ -37,6 +38,8 @@ public:
 
 private:
   GridIndex worldToGrid(const Point3 & point, double resolution_m) const;
+  bool isDirectSurfaceNeighbor(
+    const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
   bool validateSample(
     const NavigationSnapshot & snapshot, const Point3 & point, double yaw_rad,
     PathValidationReport & report, double & clearance_sum) const;
