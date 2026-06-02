@@ -207,10 +207,7 @@ PlanResult VoxelAstarPlanner::plan(
     cells.push_back(current_state.cell);
   }
   std::reverse(cells.begin(), cells.end());
-  result.path.reserve(cells.size());
-  for (const auto & cell : cells) {
-    result.path.push_back(map.gridToWorld(cell));
-  }
+  result.path = postProcessPath(map, cells);
   fillPathMetrics(result.path, result.metrics);
   result.success = true;
   result.message = "ok";
@@ -318,6 +315,181 @@ bool VoxelAstarPlanner::snapToTraversable(
   }
 
   return false;
+}
+
+std::vector<Point3> VoxelAstarPlanner::postProcessPath(
+  const NavigationMap & map, const std::vector<GridIndex> & cells) const
+{
+  if (cells.empty()) {
+    return {};
+  }
+
+  std::vector<Point3> path;
+  auto append_points = [&](const std::vector<Point3> & points) {
+    for (const auto & point : points) {
+      if (!path.empty() && pointDistance(path.back(), point) <= 0.5 * map.resolution()) {
+        continue;
+      }
+      path.push_back(point);
+    }
+  };
+
+  std::size_t run_begin = 0U;
+  while (run_begin < cells.size()) {
+    const int flight_id = map.stairFlightId(cells[run_begin]);
+    std::size_t run_end = run_begin + 1U;
+    while (run_end < cells.size() && map.stairFlightId(cells[run_end]) == flight_id) {
+      ++run_end;
+    }
+
+    std::vector<GridIndex> run_cells(cells.begin() + static_cast<std::ptrdiff_t>(run_begin),
+      cells.begin() + static_cast<std::ptrdiff_t>(run_end));
+    if (flight_id >= 0) {
+      append_points(centerlineStairRun(map, flight_id, run_cells));
+    } else {
+      append_points(simplifyFloorRun(map, run_cells));
+    }
+    run_begin = run_end;
+  }
+
+  if (path.empty()) {
+    path.push_back(map.gridToWorld(cells.front()));
+    if (cells.size() > 1U) {
+      path.push_back(map.gridToWorld(cells.back()));
+    }
+  }
+  return path;
+}
+
+std::vector<Point3> VoxelAstarPlanner::simplifyFloorRun(
+  const NavigationMap & map, const std::vector<GridIndex> & cells) const
+{
+  if (cells.empty()) {
+    return {};
+  }
+  if (cells.size() <= 2U) {
+    std::vector<Point3> points;
+    points.reserve(cells.size());
+    for (const auto & cell : cells) {
+      points.push_back(map.gridToWorld(cell));
+    }
+    return points;
+  }
+
+  std::vector<Point3> simplified;
+  simplified.push_back(map.gridToWorld(cells.front()));
+
+  std::size_t current = 0U;
+  while (current + 1U < cells.size()) {
+    std::size_t best = current + 1U;
+    const std::size_t max_lookahead =
+      std::min(cells.size() - 1U, current + static_cast<std::size_t>(
+        std::max(4, static_cast<int>(std::ceil(8.0 / map.resolution())))));
+    for (std::size_t candidate = max_lookahead; candidate > current + 1U; --candidate) {
+      if (isLineTraversable(
+          map, map.gridToWorld(cells[current]), map.gridToWorld(cells[candidate]), true))
+      {
+        best = candidate;
+        break;
+      }
+    }
+    simplified.push_back(map.gridToWorld(cells[best]));
+    current = best;
+  }
+  return simplified;
+}
+
+std::vector<Point3> VoxelAstarPlanner::centerlineStairRun(
+  const NavigationMap & map, int stair_flight_id, const std::vector<GridIndex> & cells) const
+{
+  if (cells.empty()) {
+    return {};
+  }
+  const auto & flights = map.stairFlights();
+  if (stair_flight_id < 0 || static_cast<std::size_t>(stair_flight_id) >= flights.size() ||
+    flights[static_cast<std::size_t>(stair_flight_id)].centerline.size() < 2U)
+  {
+    std::vector<Point3> fallback;
+    fallback.reserve(cells.size());
+    for (const auto & cell : cells) {
+      fallback.push_back(map.gridToWorld(cell));
+    }
+    return fallback;
+  }
+
+  const auto & centerline = flights[static_cast<std::size_t>(stair_flight_id)].centerline;
+  const Point3 run_start = map.gridToWorld(cells.front());
+  const Point3 run_end = map.gridToWorld(cells.back());
+  auto nearest_centerline_index = [&](const Point3 & point) {
+    std::size_t best = 0U;
+    double best_distance = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < centerline.size(); ++i) {
+      const double distance = pointDistance(point, centerline[i]);
+      if (distance < best_distance) {
+        best_distance = distance;
+        best = i;
+      }
+    }
+    return best;
+  };
+
+  std::size_t start_index = nearest_centerline_index(run_start);
+  std::size_t end_index = nearest_centerline_index(run_end);
+  std::vector<Point3> points;
+  points.push_back(run_start);
+  if (start_index <= end_index) {
+    for (std::size_t i = start_index; i <= end_index; ++i) {
+      points.push_back(centerline[i]);
+    }
+  } else {
+    for (std::size_t i = start_index + 1U; i > end_index; --i) {
+      points.push_back(centerline[i - 1U]);
+    }
+  }
+  points.push_back(run_end);
+
+  std::vector<Point3> resampled;
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    if (!resampled.empty() && pointDistance(resampled.back(), points[i]) <= 0.5 * map.resolution()) {
+      continue;
+    }
+    resampled.push_back(points[i]);
+  }
+  return resampled;
+}
+
+bool VoxelAstarPlanner::isLineTraversable(
+  const NavigationMap & map, const Point3 & from, const Point3 & to, bool require_floor) const
+{
+  const double distance = pointDistance(from, to);
+  const int samples =
+    std::max(1, static_cast<int>(std::ceil(distance / std::max(0.5 * map.resolution(), 1.0e-6))));
+  GridIndex previous = map.worldToGrid(from);
+  if (!map.isTraversable(previous) || (require_floor && map.stairFlightId(previous) >= 0)) {
+    return false;
+  }
+  for (int i = 1; i <= samples; ++i) {
+    const double ratio = static_cast<double>(i) / static_cast<double>(samples);
+    const Point3 point{
+      from.x + (to.x - from.x) * ratio,
+      from.y + (to.y - from.y) * ratio,
+      from.z + (to.z - from.z) * ratio};
+    const GridIndex current = map.worldToGrid(point);
+    if (current == previous) {
+      continue;
+    }
+    if (!map.isTraversable(current) || (require_floor && map.stairFlightId(current) >= 0)) {
+      return false;
+    }
+    if (!map.isStairTransitionAllowed(previous, current)) {
+      return false;
+    }
+    if (!map.isFootprintTransitionSupported(previous, current)) {
+      return false;
+    }
+    previous = current;
+  }
+  return true;
 }
 
 std::vector<Point3> VoxelAstarPlanner::reconstructPath(

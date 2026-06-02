@@ -52,6 +52,14 @@ public:
     double & snap_distance_m) const;
 
 private:
+  std::vector<Point3> postProcessPath(
+    const NavigationMap & map, const std::vector<GridIndex> & cells) const;
+  std::vector<Point3> simplifyFloorRun(
+    const NavigationMap & map, const std::vector<GridIndex> & cells) const;
+  std::vector<Point3> centerlineStairRun(
+    const NavigationMap & map, int stair_flight_id, const std::vector<GridIndex> & cells) const;
+  bool isLineTraversable(
+    const NavigationMap & map, const Point3 & from, const Point3 & to, bool require_floor) const;
   std::vector<Point3> reconstructPath(
     const NavigationMap & map,
     const std::unordered_map<GridIndex, GridIndex, GridIndexHash> & came_from,
