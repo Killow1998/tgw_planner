@@ -11,16 +11,10 @@
 #include "octomap/OcTree.h"
 
 #include "tgw_planner/core/grid_index.hpp"
+#include "tgw_planner/core/planning_types.hpp"
 
 namespace tgw_planner::core
 {
-
-struct Point3
-{
-  double x{0.0};
-  double y{0.0};
-  double z{0.0};
-};
 
 struct Vec2
 {

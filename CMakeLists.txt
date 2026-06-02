@@ -38,7 +38,12 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 
 add_library(tgw_planner_core SHARED
+  src/core/clearance_field.cpp
   src/core/navigation_map.cpp
+  src/core/probabilistic_voxel_map.cpp
+  src/core/raycast_integrator.cpp
+  src/core/robot_footprint.cpp
+  src/core/surface_extractor.cpp
   src/core/voxel_astar_planner.cpp
 )
 target_include_directories(tgw_planner_core
@@ -94,6 +99,16 @@ rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typ
 target_link_libraries(tgw_planner_node "${cpp_typesupport_target}")
 target_link_libraries(tgw_clicked_point_router_node "${cpp_typesupport_target}")
 
+if(BUILD_TESTING)
+  add_executable(tgw_phase1_core_smoke
+    test/phase1_core_smoke.cpp
+  )
+  target_link_libraries(tgw_phase1_core_smoke
+    tgw_planner_core
+  )
+  add_test(NAME tgw_phase1_core_smoke COMMAND tgw_phase1_core_smoke)
+endif()
+
 install(TARGETS
   tgw_planner_core
   tgw_planner_node
@@ -109,7 +124,7 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
-install(DIRECTORY config launch rviz scripts
+install(DIRECTORY config docs launch rviz scripts
   DESTINATION share/${PROJECT_NAME}
 )
 

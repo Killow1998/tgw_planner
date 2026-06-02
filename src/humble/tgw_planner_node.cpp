@@ -293,6 +293,12 @@ private:
         get_logger(),
         "[NavMapBuilder] map_resolution_m not set, using default 0.20 m");
     }
+    RCLCPP_WARN(
+      get_logger(),
+      "[PCD MODE WARNING] Loading a final PCD without scan origins or timestamps. "
+      "Dynamic objects, human operators, SLAM ghost artifacts, and temporary obstacles "
+      "cannot be ray-cleared in PCD mode and may be treated as static structure. "
+      "Use realtime raycast mapping mode or a cleaned static PCD for deployment.");
 
     BuildStats stats;
     const bool ok = map_.loadFromPcd(
@@ -680,6 +686,8 @@ private:
     out << "{";
     out << "\"success\":" << (metrics.success ? "true" : "false") << ",";
     out << "\"map_id\":\"" << map_.mapId() << "\",";
+    out << "\"map_input_mode\":\"pcd\",";
+    out << "\"pcd_artifact_warning\":true,";
     out << "\"failure_reason\":\"" << jsonEscape(metrics.failure_reason) << "\",";
     out << "\"final_path_validated\":" << (metrics.final_path_validated ? "true" : "false") << ",";
     out << "\"final_path_fallback_to_raw\":" <<
