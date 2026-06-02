@@ -424,6 +424,32 @@ int main()
   CHECK(!blocked_validation.valid);
   CHECK(blocked_validation.failure_reason == "final path sample is blocked");
 
+  NavigationSnapshot vertical_jump_snapshot;
+  vertical_jump_snapshot.resolution_m = options.resolution_m;
+  vertical_jump_snapshot.surface.traversable_cells.insert({0, 0, 0});
+  vertical_jump_snapshot.surface.traversable_cells.insert({0, 0, 1});
+  PathValidationOptions vertical_validation_options;
+  vertical_validation_options.require_footprint_support = false;
+  PathValidator vertical_validator(footprint, vertical_validation_options);
+  const auto vertical_validation = vertical_validator.validate(
+    vertical_jump_snapshot, {{0.05, 0.05, 0.05}, {0.05, 0.05, 0.15}});
+  CHECK(!vertical_validation.valid);
+  CHECK(vertical_validation.failure_reason == "final path pure vertical transition");
+
+  NavigationSnapshot height_jump_snapshot;
+  height_jump_snapshot.resolution_m = options.resolution_m;
+  height_jump_snapshot.surface.traversable_cells.insert({0, 0, 0});
+  height_jump_snapshot.surface.traversable_cells.insert({1, 0, 5});
+  PathValidationOptions height_jump_validation_options;
+  height_jump_validation_options.require_footprint_support = false;
+  height_jump_validation_options.sample_step_m = 10.0;
+  height_jump_validation_options.max_step_height_m = 0.20;
+  PathValidator height_jump_validator(footprint, height_jump_validation_options);
+  const auto height_jump_validation = height_jump_validator.validate(
+    height_jump_snapshot, {{0.05, 0.05, 0.05}, {0.15, 0.05, 0.55}});
+  CHECK(!height_jump_validation.valid);
+  CHECK(height_jump_validation.failure_reason == "final path height jump exceeds maximum step");
+
   NavigationSnapshot detour_snapshot;
   detour_snapshot.resolution_m = options.resolution_m;
   for (int x = 0; x <= 4; ++x) {

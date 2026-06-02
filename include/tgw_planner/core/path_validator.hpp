@@ -41,6 +41,9 @@ private:
   GridIndex worldToGrid(const Point3 & point, double resolution_m) const;
   bool isDirectSurfaceNeighbor(
     const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
+  bool validateCellTransition(
+    const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to,
+    PathValidationReport & report) const;
   bool validateSample(
     const NavigationSnapshot & snapshot, const Point3 & point, double yaw_rad,
     PathValidationReport & report, double & clearance_sum) const;

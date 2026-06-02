@@ -46,6 +46,9 @@ PathValidationReport PathValidator::validate(
     const GridIndex to_cell = worldToGrid(to, snapshot.resolution_m);
     if (isDirectSurfaceNeighbor(snapshot, from_cell, to_cell)) {
       const double yaw = std::atan2(to.y - from.y, to.x - from.x);
+      if (!validateCellTransition(snapshot, from_cell, to_cell, report)) {
+        return report;
+      }
       if (i == 1U && !validateSample(snapshot, from, yaw, report, clearance_sum)) {
         return report;
       }
@@ -58,6 +61,7 @@ PathValidationReport PathValidator::validate(
     const double segment_length = distance3d(from, to);
     const int steps = std::max(1, static_cast<int>(std::ceil(segment_length / options_.sample_step_m)));
     const double yaw = std::atan2(to.y - from.y, to.x - from.x);
+    GridIndex previous_sample_cell = from_cell;
     for (int step = 0; step <= steps; ++step) {
       if (i > 1U && step == 0) {
         continue;
@@ -67,9 +71,14 @@ PathValidationReport PathValidator::validate(
         from.x + (to.x - from.x) * t,
         from.y + (to.y - from.y) * t,
         from.z + (to.z - from.z) * t};
+      const GridIndex sample_cell = worldToGrid(sample, snapshot.resolution_m);
+      if (!validateCellTransition(snapshot, previous_sample_cell, sample_cell, report)) {
+        return report;
+      }
       if (!validateSample(snapshot, sample, yaw, report, clearance_sum)) {
         return report;
       }
+      previous_sample_cell = sample_cell;
     }
   }
 
@@ -103,6 +112,33 @@ bool PathValidator::isDirectSurfaceNeighbor(
   const int max_step_cells =
     std::max(1, static_cast<int>(std::ceil(options_.max_step_height_m / snapshot.resolution_m)));
   return dx <= 1 && dy <= 1 && dz <= max_step_cells;
+}
+
+bool PathValidator::validateCellTransition(
+  const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to,
+  PathValidationReport & report) const
+{
+  if (from == to) {
+    return true;
+  }
+  const int dx = std::abs(to.x - from.x);
+  const int dy = std::abs(to.y - from.y);
+  const int dz = std::abs(to.z - from.z);
+  if (dx == 0 && dy == 0) {
+    report.failure_reason = "final path pure vertical transition";
+    return false;
+  }
+  const int max_step_cells =
+    std::max(1, static_cast<int>(std::ceil(options_.max_step_height_m / snapshot.resolution_m)));
+  if (dz > max_step_cells) {
+    report.failure_reason = "final path height jump exceeds maximum step";
+    return false;
+  }
+  if (dx > 1 || dy > 1) {
+    report.failure_reason = "final path skips intermediate surface cells";
+    return false;
+  }
+  return true;
 }
 
 bool PathValidator::validateSample(
