@@ -294,11 +294,14 @@ ros2 service call /tgw_mapping/get_snapshot tgw_planner/srv/GetSnapshot "{}"
 
 `save_map` writes `occupied_cloud.pcd`, `free_cloud.pcd`,
 `static_candidate_cloud.pcd`, `dynamic_suspect_cloud.pcd`,
-`blocked_cloud.pcd`, `blocked_regions.yaml`, and `stats.json`. The exported PCD
-intensity is the current occupancy probability for each voxel center. `load_map`
-reconstructs the realtime probabilistic voxel layers from those PCD assets and
-restores editable blocked region objects from `blocked_regions.yaml` plus
-discrete loaded blocked cells from `blocked_cloud.pcd`.
+`blocked_cloud.pcd`, `blocked_regions.yaml`, `metadata.yaml`, and `stats.json`.
+The exported PCD intensity is the current occupancy probability for each voxel
+center. `metadata.yaml` records the map format, input mode, frame, resolution,
+and key probabilistic/static-evidence parameters. `load_map` reconstructs the
+realtime probabilistic voxel layers from those PCD assets, rejects packages whose
+saved resolution does not match the running node resolution, and restores
+editable blocked region objects from `blocked_regions.yaml` plus discrete loaded
+blocked cells from `blocked_cloud.pcd`.
 
 `get_snapshot` is intentionally lightweight: it returns `MappingStats`, the
 same JSON string as `/tgw_map/stats_json`, and per-layer point counts. The

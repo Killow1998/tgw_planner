@@ -837,6 +837,85 @@ private:
     return out.str();
   }
 
+  std::string buildMapMetadataYaml() const
+  {
+    const MappingOptions & mapping = map_.options();
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(6);
+    out << "map_format: tgw_realtime_map_v1\n";
+    out << "map_input_mode: realtime_raycast\n";
+    out << "map_frame: \"" << yamlEscape(map_frame_) << "\"\n";
+    out << "created_at_unix_sec: " <<
+      std::chrono::duration<double>(
+        std::chrono::system_clock::now().time_since_epoch()).count() << "\n";
+    out << "resolution_m: " << mapping.resolution_m << "\n";
+    out << "max_range_m: " << mapping.max_range_m << "\n";
+    out << "min_range_m: " << mapping.min_range_m << "\n";
+    out << "p_hit: " << mapping.p_hit << "\n";
+    out << "p_miss: " << mapping.p_miss << "\n";
+    out << "p_occupied_threshold: " << mapping.p_occupied_threshold << "\n";
+    out << "p_free_threshold: " << mapping.p_free_threshold << "\n";
+    out << "min_static_hits: " << mapping.min_static_hits << "\n";
+    out << "min_distinct_views: " << mapping.min_distinct_views << "\n";
+    out << "min_static_lifetime_sec: " << mapping.min_static_lifetime_sec << "\n";
+    out << "dynamic_clear_ratio_threshold: " << mapping.dynamic_clear_ratio_threshold << "\n";
+    out << "enable_dynamic_filter: " << (mapping.enable_dynamic_filter ? "true" : "false") << "\n";
+    out << "blocked_region_count: " << blocked_regions_.size() << "\n";
+    return out.str();
+  }
+
+  bool parseYamlScalarDouble(
+    const std::string & line, const std::string & key, double & value) const
+  {
+    const std::string pattern = key + ":";
+    const auto key_pos = line.find(pattern);
+    if (key_pos == std::string::npos) {
+      return false;
+    }
+    std::istringstream in(trim(line.substr(key_pos + pattern.size())));
+    return static_cast<bool>(in >> value);
+  }
+
+  bool validateMapMetadata(
+    const std::filesystem::path & path, std::string & message) const
+  {
+    message.clear();
+    if (!std::filesystem::exists(path)) {
+      return true;
+    }
+    std::ifstream in(path);
+    if (!in) {
+      message = "failed to open map metadata: " + path.string();
+      return false;
+    }
+
+    bool have_resolution = false;
+    double saved_resolution = 0.0;
+    std::string line;
+    while (std::getline(in, line)) {
+      const std::string stripped = trim(line);
+      if (stripped.empty()) {
+        continue;
+      }
+      if (parseYamlScalarDouble(stripped, "resolution_m", saved_resolution)) {
+        have_resolution = true;
+      }
+    }
+    if (!have_resolution) {
+      message = "map metadata missing resolution_m: " + path.string();
+      return false;
+    }
+    if (std::abs(saved_resolution - map_.resolution()) > 1.0e-9) {
+      std::ostringstream out;
+      out << std::fixed << std::setprecision(6);
+      out << "map resolution mismatch for " << path.string() <<
+        ": saved=" << saved_resolution << " current=" << map_.resolution();
+      message = out.str();
+      return false;
+    }
+    return true;
+  }
+
   std::string trim(const std::string & value) const
   {
     const auto begin = value.find_first_not_of(" \t\r\n");
@@ -1799,8 +1878,14 @@ private:
     const std::filesystem::path dynamic_path = input_dir / "dynamic_suspect_cloud.pcd";
     const std::filesystem::path blocked_path = input_dir / "blocked_cloud.pcd";
     const std::filesystem::path blocked_regions_path = input_dir / "blocked_regions.yaml";
+    const std::filesystem::path metadata_path = input_dir / "metadata.yaml";
 
     std::string message;
+    if (!validateMapMetadata(metadata_path, message)) {
+      response->success = false;
+      response->message = message;
+      return;
+    }
     const LoadedPcdCells occupied_cells = loadPcdCells(occupied_path, message);
     if (!message.empty()) {
       response->success = false;
@@ -1852,6 +1937,7 @@ private:
     const std::filesystem::path dynamic_path = output_dir / "dynamic_suspect_cloud.pcd";
     const std::filesystem::path blocked_path = output_dir / "blocked_cloud.pcd";
     const std::filesystem::path blocked_regions_path = output_dir / "blocked_regions.yaml";
+    const std::filesystem::path metadata_path = output_dir / "metadata.yaml";
     const std::filesystem::path stats_path = output_dir / "stats.json";
 
     const std::vector<GridIndex> occupied_cells = map_.occupiedVoxels();
@@ -1880,6 +1966,7 @@ private:
         stats_path,
         buildStatsJson(&snapshot.surface, &snapshot.clearance, &snapshot.risk, medial_axis.size()),
         message) ||
+      !writeTextFile(metadata_path, buildMapMetadataYaml(), message) ||
       !writeTextFile(blocked_regions_path, buildBlockedRegionsYaml(), message))
     {
       response->success = false;

@@ -438,12 +438,17 @@ run_blocked_region_persistence_case()
   local log_file="${tmp_root}/blocked_region_launch.log"
   local output_dir
   output_dir="$(mktemp -d "${tmp_root}/blocked_region_map.XXXXXX")"
+  local mismatch_dir
+  mismatch_dir="$(mktemp -d "${tmp_root}/blocked_region_mismatch_map.XXXXXX")"
   local add_file="${tmp_root}/blocked_region_add.out"
   local save_file="${tmp_root}/blocked_region_save.out"
   local clear_file="${tmp_root}/blocked_region_clear.out"
   local load_file="${tmp_root}/blocked_region_load.out"
+  local mismatch_load_file="${tmp_root}/blocked_region_mismatch_load.out"
   local remove_file="${tmp_root}/blocked_region_remove.out"
-  tmp_paths+=("${output_dir}" "${add_file}" "${save_file}" "${clear_file}" "${load_file}" "${remove_file}")
+  tmp_paths+=(
+    "${output_dir}" "${mismatch_dir}" "${add_file}" "${save_file}" "${clear_file}"
+    "${load_file}" "${mismatch_load_file}" "${remove_file}")
 
   setsid ros2 launch tgw_planner realtime_mapping.launch.py \
     publish_period_ms:=300 \
@@ -471,21 +476,48 @@ run_blocked_region_persistence_case()
     >"${add_file}" 2>&1
   ros2 service call /tgw_mapping/save_map tgw_planner/srv/SaveMap \
     "{output_dir: ${output_dir}}" >"${save_file}" 2>&1
+  if [[ ! -f "${output_dir}/metadata.yaml" ]]; then
+    echo "FAIL blocked_region_persistence: save_map did not write metadata.yaml"
+    cat "${save_file}"
+    return 1
+  fi
+  if ! grep -q "^resolution_m: 0.100000" "${output_dir}/metadata.yaml"; then
+    echo "FAIL blocked_region_persistence: metadata.yaml did not record map resolution"
+    cat "${output_dir}/metadata.yaml"
+    return 1
+  fi
+  cp -a "${output_dir}/." "${mismatch_dir}/"
+  python3 - "${mismatch_dir}/metadata.yaml" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+path.write_text(text.replace("resolution_m: 0.100000", "resolution_m: 0.200000", 1))
+PY
   ros2 service call /tgw_mapping/clear std_srvs/srv/Trigger "{}" >"${clear_file}" 2>&1
   ros2 service call /tgw_mapping/load_map tgw_planner/srv/LoadMap \
     "{input_dir: ${output_dir}}" >"${load_file}" 2>&1
+  ros2 service call /tgw_mapping/load_map tgw_planner/srv/LoadMap \
+    "{input_dir: ${mismatch_dir}}" >"${mismatch_load_file}" 2>&1
   ros2 service call /tgw_map/set_blocked_region tgw_planner/srv/SetBlockedRegion \
     "{operation: remove, min: {x: 0.0, y: 0.0, z: 0.0}, max: {x: 1.0, y: 1.0, z: 1.0}, reason: regression}" \
     >"${remove_file}" 2>&1
 
-  local save_success load_success removed_region
+  local save_success load_success mismatch_failed removed_region
   save_success="$(grep -o "success=True\\|success=False" "${save_file}" | tail -n 1 || true)"
   load_success="$(grep -o "success=True\\|success=False" "${load_file}" | tail -n 1 || true)"
+  mismatch_failed="$(grep -o "map resolution mismatch" "${mismatch_load_file}" | tail -n 1 || true)"
   removed_region="$(grep -o "removed 1 realtime blocked regions" "${remove_file}" | tail -n 1 || true)"
-  echo "blocked_region_persistence: ${save_success:-save=unknown} ${load_success:-load=unknown} removed_region=${removed_region:+true}"
+  echo "blocked_region_persistence: ${save_success:-save=unknown} ${load_success:-load=unknown} metadata_mismatch_rejected=${mismatch_failed:+true} removed_region=${removed_region:+true}"
   if [[ "${save_success}" != "success=True" || "${load_success}" != "success=True" ]]; then
     echo "FAIL blocked_region_persistence: save/load failed"
     cat "${save_file}" "${load_file}"
+    return 1
+  fi
+  if [[ -z "${mismatch_failed}" ]]; then
+    echo "FAIL blocked_region_persistence: metadata resolution mismatch was not rejected"
+    cat "${mismatch_load_file}"
     return 1
   fi
   if [[ -z "${removed_region}" ]]; then
