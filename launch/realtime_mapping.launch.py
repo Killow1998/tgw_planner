@@ -66,6 +66,9 @@ def generate_launch_description():
     planner_shortcut_safety_margin_m = LaunchConfiguration("planner_shortcut_safety_margin_m")
     validation_sample_step_m = LaunchConfiguration("validation_sample_step_m")
     validation_min_clearance_m = LaunchConfiguration("validation_min_clearance_m")
+    validation_low_clearance_report_threshold_m = LaunchConfiguration(
+        "validation_low_clearance_report_threshold_m"
+    )
     validation_max_step_height_m = LaunchConfiguration("validation_max_step_height_m")
     validation_require_footprint = LaunchConfiguration("validation_require_footprint")
     risk_boundary = LaunchConfiguration("risk_boundary")
@@ -138,6 +141,7 @@ def generate_launch_description():
             DeclareLaunchArgument("planner_shortcut_safety_margin_m", default_value="0.02"),
             DeclareLaunchArgument("validation_sample_step_m", default_value="0.05"),
             DeclareLaunchArgument("validation_min_clearance_m", default_value="0.0"),
+            DeclareLaunchArgument("validation_low_clearance_report_threshold_m", default_value="0.30"),
             DeclareLaunchArgument("validation_max_step_height_m", default_value="0.30"),
             DeclareLaunchArgument("validation_require_footprint", default_value="true"),
             DeclareLaunchArgument("risk_boundary", default_value="0.50"),
@@ -214,6 +218,8 @@ def generate_launch_description():
                         "planner_shortcut_safety_margin_m": planner_shortcut_safety_margin_m,
                         "validation_sample_step_m": validation_sample_step_m,
                         "validation_min_clearance_m": validation_min_clearance_m,
+                        "validation_low_clearance_report_threshold_m":
+                            validation_low_clearance_report_threshold_m,
                         "validation_max_step_height_m": validation_max_step_height_m,
                         "validation_require_footprint": validation_require_footprint,
                         "risk_boundary": risk_boundary,

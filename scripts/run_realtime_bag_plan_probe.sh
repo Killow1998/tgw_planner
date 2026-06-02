@@ -62,7 +62,7 @@ pids=""
 cleanup()
 {
   for pid in ${pids}; do
-    kill "${pid}" >/dev/null 2>&1 || true
+    kill -- "-${pid}" >/dev/null 2>&1 || kill "${pid}" >/dev/null 2>&1 || true
   done
   for pid in ${pids}; do
     wait "${pid}" >/dev/null 2>&1 || true
@@ -111,13 +111,13 @@ wait_for_service()
   return 1
 }
 
-ros2 launch fast_lio mapping_mid360.launch.py >"${log_dir}/fast_lio.log" 2>&1 &
+setsid ros2 launch fast_lio mapping_mid360.launch.py >"${log_dir}/fast_lio.log" 2>&1 &
 pids="${pids} $!"
 sleep 3
-ros2 launch n3mapping mapping.launch.py >"${log_dir}/n3mapping.log" 2>&1 &
+setsid ros2 launch n3mapping mapping.launch.py >"${log_dir}/n3mapping.log" 2>&1 &
 pids="${pids} $!"
 sleep 3
-ros2 launch tgw_planner realtime_mapping.launch.py \
+setsid ros2 launch tgw_planner realtime_mapping.launch.py \
   points_topic:=/n3mapping/cloud_world \
   use_tf:=false \
   assume_cloud_in_map_frame:=true \
@@ -149,7 +149,7 @@ if ! wait_for_service "/tgw_map/plan_path" "tgw_planner/srv/PlanPath"; then
   exit 1
 fi
 
-timeout "${play_seconds}s" ros2 bag play "${bag_path}" >"${log_dir}/bag.log" 2>&1 || true
+setsid timeout "${play_seconds}s" ros2 bag play "${bag_path}" >"${log_dir}/bag.log" 2>&1 || true
 sleep 3
 
 ros2 service call /tgw_mapping/get_snapshot tgw_planner/srv/GetSnapshot "{}" \
@@ -354,6 +354,7 @@ def main():
         f"path_length_m={stats.path_length_m:.3f} "
         f"min_path_clearance_m={stats.min_path_clearance_m:.3f} "
         f"mean_path_clearance_m={stats.mean_path_clearance_m:.3f} "
+        f"low_clearance_samples={stats.low_clearance_samples} "
         f"clearance_cost_sum={stats.clearance_cost_sum:.3f}")
     return 0 if response.success and stats.final_path_validated and stats.path_waypoints > 0 else 1
 

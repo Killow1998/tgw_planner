@@ -14,6 +14,7 @@ struct PathValidationOptions
 {
   double sample_step_m{0.05};
   double min_clearance_m{0.0};
+  double low_clearance_report_threshold_m{0.30};
   double max_step_height_m{0.30};
   bool require_footprint_support{true};
 };

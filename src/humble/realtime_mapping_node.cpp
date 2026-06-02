@@ -381,6 +381,8 @@ private:
     options.sample_step_m = declare_parameter<double>("validation_sample_step_m", options.sample_step_m);
     options.min_clearance_m =
       declare_parameter<double>("validation_min_clearance_m", options.min_clearance_m);
+    options.low_clearance_report_threshold_m = declare_parameter<double>(
+      "validation_low_clearance_report_threshold_m", options.low_clearance_report_threshold_m);
     options.max_step_height_m =
       declare_parameter<double>("validation_max_step_height_m", options.max_step_height_m);
     options.require_footprint_support =

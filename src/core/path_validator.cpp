@@ -13,6 +13,8 @@ PathValidator::PathValidator(RobotFootprint footprint, PathValidationOptions opt
 {
   options_.sample_step_m = std::max(0.01, options_.sample_step_m);
   options_.min_clearance_m = std::max(0.0, options_.min_clearance_m);
+  options_.low_clearance_report_threshold_m =
+    std::max(0.0, options_.low_clearance_report_threshold_m);
   options_.max_step_height_m = std::max(0.05, options_.max_step_height_m);
 }
 
@@ -129,8 +131,10 @@ bool PathValidator::validateSample(
   report.min_clearance_m = std::min(report.min_clearance_m, clearance);
   clearance_sum += clearance;
   ++report.checked_samples;
-  if (clearance < options_.min_clearance_m) {
+  if (clearance < options_.low_clearance_report_threshold_m) {
     ++report.low_clearance_samples;
+  }
+  if (clearance < options_.min_clearance_m) {
     report.failure_reason = "final path clearance below minimum";
     return false;
   }

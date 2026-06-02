@@ -164,6 +164,15 @@ int main()
   CHECK(!low_clearance_validation.valid);
   CHECK(low_clearance_validation.low_clearance_samples == 1U);
   CHECK(low_clearance_validation.failure_reason == "final path clearance below minimum");
+  PathValidationOptions clearance_report_options;
+  clearance_report_options.require_footprint_support = false;
+  clearance_report_options.low_clearance_report_threshold_m =
+    clearance.clearanceDistance(center) + 0.01;
+  PathValidator clearance_report_validator(footprint, clearance_report_options);
+  const auto low_clearance_report =
+    clearance_report_validator.validate(clearance_snapshot, {corridor_map.gridToWorld(center)});
+  CHECK(low_clearance_report.valid);
+  CHECK(low_clearance_report.low_clearance_samples == 1U);
 
   ProbabilisticVoxelMap floor_ceiling_map(options);
   for (int x = 0; x <= 2; ++x) {

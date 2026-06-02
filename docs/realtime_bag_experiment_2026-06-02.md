@@ -356,3 +356,54 @@ Interpretation:
   `surface_require_observed_free_space=false`.
 - Broader dirty-map and multi-scene validation is still needed before freezing
   the realtime global layer.
+
+## Realtime Probe After Validation Diagnostics 2026-06-03
+
+Command:
+
+```bash
+src/tgw_planner/scripts/run_realtime_bag_plan_probe.sh /home/user/ros_ws/bagfile/f7tof9_g2w_ros2
+```
+
+The probe script now launches FAST-LIO, n3mapping, and `tgw_realtime_mapping_node`
+in separate process groups so cleanup removes launch children and RViz children
+instead of leaving stale ROS graph state behind. It also prints
+`low_clearance_samples` from the final realtime path validation report.
+
+Latest result:
+
+```text
+received_clouds=653
+integrated_clouds=653
+dynamic_points=20371
+surface_points=12435
+traversable_points=12435
+surface_component_count=665
+largest_component_size=10102
+largest_component_z_span=3.200
+start=(4.4499998093, -2.8499999046, 2.3499999046)
+goal=(3.75, -3.6500000954, 2.3499999046)
+dxy=1.063
+success=True
+final_path_validated=True
+final_path_fallback_to_raw=False
+raw_path_waypoints=11
+shortcut_count=8
+path_waypoints=3
+path_length_m=1.223
+min_path_clearance_m=0.141
+mean_path_clearance_m=0.367
+low_clearance_samples=6
+```
+
+Interpretation:
+
+- The realtime bag chain still integrates the full bag segment and produces a
+  validated short same-height path on the largest traversable component.
+- `low_clearance_samples` is now diagnostic-only and independent from the hard
+  `validation_min_clearance_m` gate. Low clearance is counted against the
+  default 0.30 m reporting threshold, while hard failure remains controlled by
+  `validation_min_clearance_m`.
+- The path is valid but has nearby boundary/obstacle proximity. This confirms
+  that future deployment gates should evaluate corridor quality explicitly
+  rather than treating `success=True` alone as sufficient.
