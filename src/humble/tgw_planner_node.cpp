@@ -34,6 +34,7 @@ using tgw_planner::core::PlanResult;
 using tgw_planner::core::PlannerMetrics;
 using tgw_planner::core::Point3;
 using tgw_planner::core::StairFlight;
+using tgw_planner::core::StairFragmentRescueReason;
 using tgw_planner::core::StairFlightRejectReason;
 using tgw_planner::core::VoxelAstarPlanner;
 
@@ -62,6 +63,58 @@ std::size_t markerStride(std::size_t count, std::size_t limit)
     return 1U;
   }
   return static_cast<std::size_t>(std::ceil(static_cast<double>(count) / static_cast<double>(limit)));
+}
+
+const char * rejectReasonName(StairFlightRejectReason reason)
+{
+  switch (reason) {
+    case StairFlightRejectReason::None:
+      return "none";
+    case StairFlightRejectReason::TooFewCells:
+      return "too_few";
+    case StairFlightRejectReason::NoAxis:
+      return "no_axis";
+    case StairFlightRejectReason::TooShortOrLow:
+      return "short_or_low";
+    case StairFlightRejectReason::NegativeSlope:
+      return "negative_slope";
+    case StairFlightRejectReason::SlopeOutOfRange:
+      return "slope_out";
+    case StairFlightRejectReason::ResidualTooHigh:
+      return "residual";
+    case StairFlightRejectReason::NonMonotonic:
+      return "nonmonotonic";
+    case StairFlightRejectReason::TooNarrow:
+      return "narrow";
+    case StairFlightRejectReason::MissingPortals:
+      return "missing_portals";
+    case StairFlightRejectReason::SameFloorBothEnds:
+      return "same_floor_ends";
+    case StairFlightRejectReason::Count:
+      break;
+  }
+  return "unknown";
+}
+
+const char * rescueReasonName(StairFragmentRescueReason reason)
+{
+  switch (reason) {
+    case StairFragmentRescueReason::None:
+      return "none";
+    case StairFragmentRescueReason::Strict:
+      return "strict";
+    case StairFragmentRescueReason::ConnectsFloor:
+      return "connects_floor";
+    case StairFragmentRescueReason::BridgesFragments:
+      return "bridges_fragments";
+    case StairFragmentRescueReason::ExtendsFlight:
+      return "extends_flight";
+    case StairFragmentRescueReason::BetweenFloors:
+      return "between_floors";
+    case StairFragmentRescueReason::FillsGap:
+      return "fills_gap";
+  }
+  return "unknown";
 }
 }  // namespace
 
@@ -120,6 +173,16 @@ public:
       "/nav_map/rejected_collision_cloud", latched_qos);
     rejected_stair_noise_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/nav_map/rejected_stair_noise_cloud", latched_qos);
+    loose_stair_fragment_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/loose_stair_fragment_cloud", latched_qos);
+    rejected_short_low_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/rejected_short_low_cloud", latched_qos);
+    rejected_width_prefilter_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/rejected_width_prefilter_cloud", latched_qos);
+    rescued_stair_fragment_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/rescued_stair_fragment_cloud", latched_qos);
+    missing_stair_recovery_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/missing_stair_recovery_cloud", latched_qos);
     path_pub_ = create_publisher<nav_msgs::msg::Path>("/planned_path", latched_qos);
     path_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
       "/planned_path_marker", latched_qos);
@@ -131,6 +194,8 @@ public:
       "/nav_map/stair_entry_exit_markers", latched_qos);
     stair_safe_corridor_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
       "/nav_map/stair_safe_corridor_markers", latched_qos);
+    fragment_bridge_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/nav_map/fragment_bridge_markers", latched_qos);
     start_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>("/start_marker", latched_qos);
     goal_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>("/goal_marker", latched_qos);
     stats_pub_ = create_publisher<tgw_planner::msg::PlannerStats>(
@@ -251,6 +316,26 @@ private:
         StairFlightRejectReason::MissingPortals)],
       stair_diag.fit_reject_counts[static_cast<std::size_t>(
         StairFlightRejectReason::SameFloorBothEnds)]);
+    RCLCPP_INFO(
+      get_logger(),
+      "[NavMapBuilder] stair_fragment_rescue: loose_fragment_count=%zu "
+      "strict_fragment_count=%zu rescued_fragment_count=%zu recovered_stair_cell_count=%zu "
+      "final_stair_flight_count=%zu fragment_bridge_count=%zu",
+      stair_diag.loose_fragment_count, stair_diag.strict_fragment_count,
+      stair_diag.rescued_fragment_count, stair_diag.recovered_stair_cell_count,
+      stair_diag.final_stair_flight_count, map_.fragmentBridges().size());
+    for (const auto & fragment : map_.looseStairFragments()) {
+      RCLCPP_DEBUG(
+        get_logger(),
+        "[NavMapBuilder] LooseStairFragment id=%d cells=%zu width=%.3f length=%.3f "
+        "height=%.3f slope=%.3f residual=%.3f strict=%s rescued=%s reject=%s rescue=%s "
+        "components=[%d, %d]",
+        fragment.id, fragment.cells.size(), fragment.width_m, fragment.length_m,
+        fragment.height_m, fragment.slope, fragment.residual,
+        fragment.strict_fit_ok ? "true" : "false", fragment.rescued ? "true" : "false",
+        rejectReasonName(fragment.reject_reason), rescueReasonName(fragment.rescue_reason),
+        fragment.low_component_id, fragment.high_component_id);
+    }
     RCLCPP_INFO(
       get_logger(), "[NavMapBuilder] rejected_stair_noise_cells: %zu",
       map_.rejectedStairNoiseCells().size());
@@ -578,11 +663,17 @@ private:
     publishCellSetCloud(map_.rejectedClearanceCells(), rejected_clearance_cloud_pub_, 8.0F);
     publishCellSetCloud(map_.rejectedCollisionCells(), rejected_collision_cloud_pub_, 9.0F);
     publishCellSetCloud(map_.rejectedStairNoiseCells(), rejected_stair_noise_cloud_pub_, 10.0F);
+    publishCellSetCloud(map_.looseStairFragmentCells(), loose_stair_fragment_cloud_pub_, 11.0F);
+    publishCellSetCloud(map_.rejectedShortLowCells(), rejected_short_low_cloud_pub_, 12.0F);
+    publishCellSetCloud(map_.rejectedWidthPrefilterCells(), rejected_width_prefilter_cloud_pub_, 13.0F);
+    publishCellSetCloud(map_.rescuedStairFragmentCells(), rescued_stair_fragment_cloud_pub_, 14.0F);
+    publishCellSetCloud(map_.missingStairRecoveryCells(), missing_stair_recovery_cloud_pub_, 15.0F);
     publishRiskCloud();
     publishStairCenterlineMarkers();
     publishLandingComponentMarkers();
     publishStairEntryExitMarkers();
     publishStairSafeCorridorMarkers();
+    publishFragmentBridgeMarkers();
   }
 
   void publishCellSetMarker(
@@ -843,6 +934,31 @@ private:
     stair_safe_corridor_marker_pub_->publish(marker);
   }
 
+  void publishFragmentBridgeMarkers()
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.stamp = now();
+    marker.header.frame_id = map_.mapFrame();
+    marker.ns = "fragment_bridges";
+    marker.id = 0;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.type = visualization_msgs::msg::Marker::LINE_LIST;
+    marker.pose.orientation.w = 1.0;
+    marker.scale.x = 0.08;
+    marker.color.r = 1.0F;
+    marker.color.g = 1.0F;
+    marker.color.b = 0.1F;
+    marker.color.a = 0.95F;
+    for (const auto & bridge : map_.fragmentBridges()) {
+      marker.points.push_back(toRosPoint(bridge.from));
+      marker.points.push_back(toRosPoint(bridge.to));
+    }
+    if (marker.points.empty()) {
+      marker.action = visualization_msgs::msg::Marker::DELETE;
+    }
+    fragment_bridge_marker_pub_->publish(marker);
+  }
+
   void publishPathMarker(const PlanResult & result)
   {
     visualization_msgs::msg::Marker marker;
@@ -991,12 +1107,18 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_clearance_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_collision_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_stair_noise_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr loose_stair_fragment_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_short_low_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_width_prefilter_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rescued_stair_fragment_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr missing_stair_recovery_cloud_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr path_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr stair_centerline_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr landing_component_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr stair_entry_exit_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr stair_safe_corridor_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr fragment_bridge_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_marker_pub_;
   rclcpp::Publisher<tgw_planner::msg::PlannerStats>::SharedPtr stats_pub_;

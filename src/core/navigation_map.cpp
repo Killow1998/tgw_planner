@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <queue>
 
 #include "pcl/filters/filter.h"
 #include "pcl/io/pcd_io.h"
@@ -112,9 +113,25 @@ bool NavigationMap::loadFromPcd(
   rejected_clearance_cells_.clear();
   rejected_collision_cells_.clear();
   rejected_stair_noise_cells_.clear();
+  loose_stair_fragment_cells_.clear();
+  rejected_short_low_cells_.clear();
+  rejected_width_prefilter_cells_.clear();
+  rescued_stair_fragment_cells_.clear();
+  missing_stair_recovery_cells_.clear();
+  loose_stair_fragments_.clear();
+  fragment_bridges_.clear();
+  stair_flight_diagnostics_ = StairFlightDiagnostics{};
+  rejected_stair_noise_cells_.clear();
+  loose_stair_fragment_cells_.clear();
+  rejected_short_low_cells_.clear();
+  rejected_width_prefilter_cells_.clear();
+  rescued_stair_fragment_cells_.clear();
+  missing_stair_recovery_cells_.clear();
   floor_components_.clear();
   landing_components_.clear();
   stair_flights_.clear();
+  loose_stair_fragments_.clear();
+  fragment_bridges_.clear();
   stair_cell_info_.clear();
   stair_slopes_.clear();
   stair_segment_by_cell_.clear();
@@ -775,14 +792,147 @@ bool NavigationMap::isStairFlightEdgeAllowed(const GridIndex & from, const GridI
   const double along_to = (move_x / move_norm) * to_x + (move_y / move_norm) * to_y;
   constexpr double along_threshold = 0.35;
   if (dz == 0) {
-    // Same-height cells belong to one flight only across tread width. Walking along the
-    // stair axis at constant height is a landing/platform bridge and must split flights.
+    if (isTreadBridgeAllowed(from, to)) {
+      return true;
+    }
     return std::abs(along_from) <= along_threshold && std::abs(along_to) <= along_threshold;
   }
 
   const double vertical_direction = dz > 0 ? 1.0 : -1.0;
   return vertical_direction * along_from >= along_threshold &&
          vertical_direction * along_to >= along_threshold;
+}
+
+bool NavigationMap::isTreadBridgeAllowed(const GridIndex & from, const GridIndex & to) const
+{
+  if (!isStairTraversable(from) || !isStairTraversable(to) || from.z != to.z) {
+    return false;
+  }
+
+  double from_x = 0.0;
+  double from_y = 0.0;
+  double to_x = 0.0;
+  double to_y = 0.0;
+  if (!stairSlope(from, from_x, from_y) || !stairSlope(to, to_x, to_y)) {
+    return false;
+  }
+  if (from_x * to_x + from_y * to_y < 0.55) {
+    return false;
+  }
+
+  const double move_x = static_cast<double>(to.x - from.x);
+  const double move_y = static_cast<double>(to.y - from.y);
+  const double move_norm = std::hypot(move_x, move_y);
+  if (move_norm <= 1.0e-9) {
+    return false;
+  }
+
+  const double along_from = (move_x / move_norm) * from_x + (move_y / move_norm) * from_y;
+  const double along_to = (move_x / move_norm) * to_x + (move_y / move_norm) * to_y;
+  constexpr double along_threshold = 0.35;
+  if (std::abs(along_from) <= along_threshold && std::abs(along_to) <= along_threshold) {
+    return false;
+  }
+
+  if (hasLargeLandingPlateauAround(from) || hasLargeLandingPlateauAround(to)) {
+    return false;
+  }
+  if (!hasUpDownStairEvidenceAround(from) || !hasUpDownStairEvidenceAround(to)) {
+    return false;
+  }
+  return isFootprintTransitionSafe(from, to) && isFootprintTransitionSupported(from, to);
+}
+
+bool NavigationMap::hasUpDownStairEvidenceAround(const GridIndex & cell) const
+{
+  double slope_x = 0.0;
+  double slope_y = 0.0;
+  if (!stairSlope(cell, slope_x, slope_y)) {
+    return false;
+  }
+
+  const int search_radius = std::max(2, maxStepCells());
+  bool has_lower_behind = false;
+  bool has_higher_ahead = false;
+  for (int dx = -search_radius; dx <= search_radius; ++dx) {
+    for (int dy = -search_radius; dy <= search_radius; ++dy) {
+      if (dx == 0 && dy == 0) {
+        continue;
+      }
+      const double along =
+        (static_cast<double>(dx) * slope_x + static_cast<double>(dy) * slope_y) * resolution_m_;
+      if (std::abs(along) < 0.5 * resolution_m_) {
+        continue;
+      }
+      for (int dz = -maxStepCells(); dz <= maxStepCells(); ++dz) {
+        if (dz == 0) {
+          continue;
+        }
+        const GridIndex neighbor{cell.x + dx, cell.y + dy, cell.z + dz};
+        if (!isStairTraversable(neighbor)) {
+          continue;
+        }
+        if (dz < 0 && along < 0.0) {
+          has_lower_behind = true;
+        } else if (dz > 0 && along > 0.0) {
+          has_higher_ahead = true;
+        }
+        if (has_lower_behind && has_higher_ahead) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+bool NavigationMap::hasLargeLandingPlateauAround(const GridIndex & cell) const
+{
+  double slope_x = 0.0;
+  double slope_y = 0.0;
+  if (!stairSlope(cell, slope_x, slope_y)) {
+    return false;
+  }
+
+  auto same_height_stair_near = [&](int x, int y) {
+    for (int dz = -1; dz <= 1; ++dz) {
+      if (isStairTraversable({x, y, cell.z + dz})) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  int axis_x = 0;
+  int axis_y = 0;
+  if (std::abs(slope_x) >= 0.35) {
+    axis_x = slope_x > 0.0 ? 1 : -1;
+  }
+  if (std::abs(slope_y) >= 0.35) {
+    axis_y = slope_y > 0.0 ? 1 : -1;
+  }
+  if (axis_x == 0 && axis_y == 0) {
+    if (std::abs(slope_x) > std::abs(slope_y)) {
+      axis_x = slope_x > 0.0 ? 1 : -1;
+    } else {
+      axis_y = slope_y > 0.0 ? 1 : -1;
+    }
+  }
+
+  const int max_run_cells =
+    std::max(3, static_cast<int>(std::ceil(std::max(0.45, 4.0 * resolution_m_) / resolution_m_)));
+  int run_cells = 1;
+  for (int direction : {-1, 1}) {
+    for (int step = 1; step <= max_run_cells; ++step) {
+      const int x = cell.x + direction * axis_x * step;
+      const int y = cell.y + direction * axis_y * step;
+      if (!same_height_stair_near(x, y)) {
+        break;
+      }
+      ++run_cells;
+    }
+  }
+  return run_cells >= max_run_cells;
 }
 
 bool NavigationMap::isStairSegmentBridgeAllowed(const GridIndex & from, const GridIndex & to) const
@@ -936,7 +1086,6 @@ void NavigationMap::rebuildStairSegments()
   stair_slopes_.clear();
   stair_segment_by_cell_.clear();
   stair_segments_.clear();
-  stair_flight_diagnostics_ = StairFlightDiagnostics{};
   if (accepted_stair_cells_.empty()) {
     return;
   }
@@ -1072,7 +1221,9 @@ void NavigationMap::rebuildStairSegments()
     ++stair_flight_diagnostics_.raw_segments;
     if (!isStairFlightWideEnough(segment)) {
       ++stair_flight_diagnostics_.segment_width_rejected;
-      continue;
+      for (const auto & cell : segment.cells) {
+        rejected_width_prefilter_cells_.insert(cell);
+      }
     }
 
     segment.id = static_cast<int>(stair_segments_.size());
@@ -1326,6 +1477,228 @@ bool NavigationMap::isStairFlightWideEnough(const StairSegmentInfo & segment) co
   return wide_cells >= min_supported_cells && center_cells >= min_supported_cells;
 }
 
+void NavigationMap::recoverMissingStairCells()
+{
+  missing_stair_recovery_cells_.clear();
+
+  std::unordered_set<GridIndex, GridIndexHash> candidate_pool = rejected_stair_noise_cells_;
+  std::vector<GridIndex> recovered;
+  const int max_step_cells = maxStepCells();
+  const int search_radius = std::max(2, max_step_cells);
+  const int height_cells =
+    std::max(1, static_cast<int>(std::ceil(robot_height_m_ / resolution_m_)));
+
+  for (const auto & cell : candidate_pool) {
+    if (accepted_stair_cells_.find(cell) != accepted_stair_cells_.end()) {
+      continue;
+    }
+    if (accepted_floor_cells_.find(cell) != accepted_floor_cells_.end()) {
+      continue;
+    }
+    if (!isInsideBounds(cell) || isOccupied(cell) || isBlocked(cell)) {
+      continue;
+    }
+    if (!hasHeadClearanceInColumn(cell, height_cells)) {
+      continue;
+    }
+
+    bool near_floor = false;
+    bool near_stair = false;
+    int z_min = cell.z;
+    int z_max = cell.z;
+    int transition_neighbors = 0;
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    for (int dx = -search_radius; dx <= search_radius; ++dx) {
+      for (int dy = -search_radius; dy <= search_radius; ++dy) {
+        if (dx == 0 && dy == 0) {
+          continue;
+        }
+        for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
+          const GridIndex neighbor{cell.x + dx, cell.y + dy, cell.z + dz};
+          if (accepted_floor_cells_.find(neighbor) != accepted_floor_cells_.end()) {
+            near_floor = true;
+          }
+          const bool neighbor_is_stair_like =
+            accepted_stair_cells_.find(neighbor) != accepted_stair_cells_.end() ||
+            rejected_stair_noise_cells_.find(neighbor) != rejected_stair_noise_cells_.end();
+          if (!neighbor_is_stair_like || dz == 0) {
+            continue;
+          }
+          near_stair = true;
+          ++transition_neighbors;
+          z_min = std::min(z_min, neighbor.z);
+          z_max = std::max(z_max, neighbor.z);
+          const double direction = dz > 0 ? 1.0 : -1.0;
+          const double weight = static_cast<double>(std::abs(dz));
+          sum_x += direction * static_cast<double>(dx) * weight;
+          sum_y += direction * static_cast<double>(dy) * weight;
+        }
+      }
+    }
+
+    if (!near_floor || !near_stair || transition_neighbors < 4) {
+      continue;
+    }
+    const double norm = std::hypot(sum_x, sum_y);
+    if (norm <= 1.0e-9 || z_max - z_min < 2) {
+      continue;
+    }
+    recovered.push_back(cell);
+  }
+
+  for (const auto & cell : accepted_floor_cells_) {
+    if (!isInsideBounds(cell) || isOccupied(cell) || isBlocked(cell)) {
+      continue;
+    }
+    if (!hasHeadClearanceInColumn(cell, height_cells)) {
+      continue;
+    }
+
+    int transition_neighbors = 0;
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    for (int dx = -search_radius; dx <= search_radius; ++dx) {
+      for (int dy = -search_radius; dy <= search_radius; ++dy) {
+        if (dx == 0 && dy == 0) {
+          continue;
+        }
+        for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
+          if (dz == 0) {
+            continue;
+          }
+          const GridIndex neighbor{cell.x + dx, cell.y + dy, cell.z + dz};
+          if (accepted_stair_cells_.find(neighbor) == accepted_stair_cells_.end() &&
+            rejected_stair_noise_cells_.find(neighbor) == rejected_stair_noise_cells_.end())
+          {
+            continue;
+          }
+          ++transition_neighbors;
+          const double direction = dz > 0 ? 1.0 : -1.0;
+          const double weight = static_cast<double>(std::abs(dz));
+          sum_x += direction * static_cast<double>(dx) * weight;
+          sum_y += direction * static_cast<double>(dy) * weight;
+        }
+      }
+    }
+    const double norm = std::hypot(sum_x, sum_y);
+    if (transition_neighbors < 4 || norm <= 1.0e-9) {
+      continue;
+    }
+
+    const double axis_x = sum_x / norm;
+    const double axis_y = sum_y / norm;
+    bool has_lower_behind = false;
+    bool has_higher_ahead = false;
+    for (int dx = -search_radius; dx <= search_radius; ++dx) {
+      for (int dy = -search_radius; dy <= search_radius; ++dy) {
+        if (dx == 0 && dy == 0) {
+          continue;
+        }
+        const double along =
+          (static_cast<double>(dx) * axis_x + static_cast<double>(dy) * axis_y) * resolution_m_;
+        if (std::abs(along) < 0.5 * resolution_m_) {
+          continue;
+        }
+        for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
+          if (dz == 0) {
+            continue;
+          }
+          const GridIndex neighbor{cell.x + dx, cell.y + dy, cell.z + dz};
+          if (accepted_stair_cells_.find(neighbor) == accepted_stair_cells_.end() &&
+            rejected_stair_noise_cells_.find(neighbor) == rejected_stair_noise_cells_.end())
+          {
+            continue;
+          }
+          if (dz < 0 && along < 0.0) {
+            has_lower_behind = true;
+          } else if (dz > 0 && along > 0.0) {
+            has_higher_ahead = true;
+          }
+        }
+      }
+    }
+    if (!has_lower_behind || !has_higher_ahead) {
+      continue;
+    }
+
+    int axis_dx = 0;
+    int axis_dy = 0;
+    if (std::abs(axis_x) >= 0.35) {
+      axis_dx = axis_x > 0.0 ? 1 : -1;
+    }
+    if (std::abs(axis_y) >= 0.35) {
+      axis_dy = axis_y > 0.0 ? 1 : -1;
+    }
+    if (axis_dx == 0 && axis_dy == 0) {
+      if (std::abs(axis_x) > std::abs(axis_y)) {
+        axis_dx = axis_x > 0.0 ? 1 : -1;
+      } else {
+        axis_dy = axis_y > 0.0 ? 1 : -1;
+      }
+    }
+
+    const int max_tread_run_cells =
+      std::max(3, static_cast<int>(std::ceil(std::max(0.55, robot_length_m_) / resolution_m_)));
+    int same_height_run = 1;
+    for (int direction : {-1, 1}) {
+      for (int step = 1; step <= max_tread_run_cells; ++step) {
+        const GridIndex probe{
+          cell.x + direction * axis_dx * step, cell.y + direction * axis_dy * step, cell.z};
+        if (accepted_floor_cells_.find(probe) == accepted_floor_cells_.end()) {
+          break;
+        }
+        ++same_height_run;
+      }
+    }
+    if (same_height_run >= max_tread_run_cells) {
+      continue;
+    }
+
+    const int side_dx = -axis_dy;
+    const int side_dy = axis_dx;
+    const int required_side_cells =
+      std::max(1, static_cast<int>(std::ceil(0.5 * robot_width_m_ / resolution_m_)));
+    auto has_surface_at = [&](int x, int y) {
+      for (int dz = -1; dz <= 1; ++dz) {
+        const GridIndex probe{x, y, cell.z + dz};
+        if (accepted_floor_cells_.find(probe) != accepted_floor_cells_.end() ||
+          accepted_stair_cells_.find(probe) != accepted_stair_cells_.end() ||
+          rejected_stair_noise_cells_.find(probe) != rejected_stair_noise_cells_.end())
+        {
+          return true;
+        }
+      }
+      return false;
+    };
+    int left = 0;
+    int right = 0;
+    for (int step = 1; step <= required_side_cells; ++step) {
+      if (has_surface_at(cell.x + side_dx * step, cell.y + side_dy * step)) {
+        ++left;
+      }
+      if (has_surface_at(cell.x - side_dx * step, cell.y - side_dy * step)) {
+        ++right;
+      }
+    }
+    if (std::min(left, right) < required_side_cells) {
+      continue;
+    }
+
+    recovered.push_back(cell);
+  }
+
+  for (const auto & cell : recovered) {
+    accepted_stair_cells_.insert(cell);
+    traversable_cells_.insert(cell);
+    forbidden_cells_.erase(cell);
+    rejected_stair_noise_cells_.erase(cell);
+    accepted_floor_cells_.erase(cell);
+    missing_stair_recovery_cells_.insert(cell);
+  }
+  stair_flight_diagnostics_.recovered_stair_cell_count = missing_stair_recovery_cells_.size();
+}
+
 void NavigationMap::rebuildFloorComponents()
 {
   floor_components_.clear();
@@ -1474,6 +1847,447 @@ bool NavigationMap::hasFloorBetween(const Point3 & a, const Point3 & b) const
     }
   }
   return false;
+}
+
+bool NavigationMap::fitStairFragmentLoose(
+  const StairSegmentInfo & segment, LooseStairFragment & fragment,
+  StairFlightRejectReason * reject_reason) const
+{
+  auto set_reason = [&](StairFlightRejectReason reason) {
+    if (reject_reason != nullptr) {
+      *reject_reason = reason;
+    }
+    fragment.reject_reason = reason;
+  };
+  set_reason(StairFlightRejectReason::None);
+
+  if (segment.cells.size() < 5U) {
+    set_reason(StairFlightRejectReason::TooFewCells);
+    return false;
+  }
+
+  Vec2 uphill;
+  for (const auto & cell : segment.cells) {
+    double slope_x = 0.0;
+    double slope_y = 0.0;
+    if (stairSlope(cell, slope_x, slope_y)) {
+      uphill.x += slope_x;
+      uphill.y += slope_y;
+    }
+  }
+  uphill = uphill.normalized();
+
+  Point3 centroid;
+  for (const auto & cell : segment.cells) {
+    const Point3 point = gridToWorld(cell);
+    centroid.x += point.x;
+    centroid.y += point.y;
+    centroid.z += point.z;
+  }
+  const double inv_count = 1.0 / static_cast<double>(segment.cells.size());
+  centroid.x *= inv_count;
+  centroid.y *= inv_count;
+  centroid.z *= inv_count;
+
+  if (uphill.norm() <= 1.0e-9) {
+    double cxx = 0.0;
+    double cxy = 0.0;
+    double cyy = 0.0;
+    double sxz = 0.0;
+    double syz = 0.0;
+    for (const auto & cell : segment.cells) {
+      const Point3 point = gridToWorld(cell);
+      const double x = point.x - centroid.x;
+      const double y = point.y - centroid.y;
+      const double z = point.z - centroid.z;
+      cxx += x * x;
+      cxy += x * y;
+      cyy += y * y;
+      sxz += x * z;
+      syz += y * z;
+    }
+    const double angle = 0.5 * std::atan2(2.0 * cxy, cxx - cyy);
+    uphill = Vec2{std::cos(angle), std::sin(angle)}.normalized();
+    if (uphill.x * sxz + uphill.y * syz < 0.0) {
+      uphill.x = -uphill.x;
+      uphill.y = -uphill.y;
+    }
+  }
+  if (uphill.norm() <= 1.0e-9) {
+    set_reason(StairFlightRejectReason::NoAxis);
+    return false;
+  }
+
+  Vec2 side = uphill.perpendicular();
+  struct Projection
+  {
+    GridIndex cell;
+    Point3 point;
+    double s{0.0};
+    double t{0.0};
+  };
+
+  std::vector<Projection> projections;
+  projections.reserve(segment.cells.size());
+  auto rebuild_projections = [&]() {
+    projections.clear();
+    fragment.s_min = std::numeric_limits<double>::infinity();
+    fragment.s_max = -std::numeric_limits<double>::infinity();
+    fragment.t_min = std::numeric_limits<double>::infinity();
+    fragment.t_max = -std::numeric_limits<double>::infinity();
+    fragment.z_min = std::numeric_limits<double>::infinity();
+    fragment.z_max = -std::numeric_limits<double>::infinity();
+    for (const auto & cell : segment.cells) {
+      const Point3 point = gridToWorld(cell);
+      const double s = point.x * uphill.x + point.y * uphill.y;
+      const double t = point.x * side.x + point.y * side.y;
+      projections.push_back({cell, point, s, t});
+      fragment.s_min = std::min(fragment.s_min, s);
+      fragment.s_max = std::max(fragment.s_max, s);
+      fragment.t_min = std::min(fragment.t_min, t);
+      fragment.t_max = std::max(fragment.t_max, t);
+      fragment.z_min = std::min(fragment.z_min, point.z);
+      fragment.z_max = std::max(fragment.z_max, point.z);
+    }
+  };
+  rebuild_projections();
+
+  fragment.length_m = fragment.s_max - fragment.s_min;
+  fragment.height_m = fragment.z_max - fragment.z_min;
+  if (fragment.length_m < std::max(0.20, 2.0 * resolution_m_) &&
+    fragment.height_m < std::max(0.15, 1.5 * resolution_m_))
+  {
+    set_reason(StairFlightRejectReason::TooFewCells);
+    return false;
+  }
+
+  double low_z_sum = 0.0;
+  double high_z_sum = 0.0;
+  std::size_t low_z_count = 0U;
+  std::size_t high_z_count = 0U;
+  const double terminal_s_window =
+    std::max(2.0 * resolution_m_, 0.20 * std::max(fragment.length_m, resolution_m_));
+  for (const auto & p : projections) {
+    if (p.s <= fragment.s_min + terminal_s_window) {
+      low_z_sum += p.point.z;
+      ++low_z_count;
+    }
+    if (p.s >= fragment.s_max - terminal_s_window) {
+      high_z_sum += p.point.z;
+      ++high_z_count;
+    }
+  }
+  if (low_z_count > 0U && high_z_count > 0U &&
+    high_z_sum / static_cast<double>(high_z_count) <
+    low_z_sum / static_cast<double>(low_z_count))
+  {
+    uphill.x = -uphill.x;
+    uphill.y = -uphill.y;
+    side = uphill.perpendicular();
+    rebuild_projections();
+    fragment.length_m = fragment.s_max - fragment.s_min;
+    fragment.height_m = fragment.z_max - fragment.z_min;
+  }
+
+  double s_mean = 0.0;
+  double z_mean = 0.0;
+  for (const auto & p : projections) {
+    s_mean += p.s;
+    z_mean += p.point.z;
+  }
+  s_mean /= static_cast<double>(projections.size());
+  z_mean /= static_cast<double>(projections.size());
+
+  double s_var = 0.0;
+  double sz_cov = 0.0;
+  for (const auto & p : projections) {
+    const double ds = p.s - s_mean;
+    s_var += ds * ds;
+    sz_cov += ds * (p.point.z - z_mean);
+  }
+  if (s_var <= 1.0e-9) {
+    set_reason(StairFlightRejectReason::NoAxis);
+    return false;
+  }
+
+  const double signed_slope = sz_cov / s_var;
+  if (signed_slope < -0.05) {
+    set_reason(StairFlightRejectReason::NegativeSlope);
+    return false;
+  }
+  fragment.slope = std::abs(signed_slope);
+  if (fragment.slope < 0.12 || fragment.slope > 2.20) {
+    set_reason(StairFlightRejectReason::SlopeOutOfRange);
+    return false;
+  }
+
+  const double intercept = z_mean - signed_slope * s_mean;
+  double residual_sum = 0.0;
+  int monotonic_edges = 0;
+  int nonmonotonic_edges = 0;
+  for (const auto & p : projections) {
+    const double dz = p.point.z - (signed_slope * p.s + intercept);
+    residual_sum += dz * dz;
+  }
+  fragment.residual = std::sqrt(residual_sum / static_cast<double>(projections.size()));
+  if (fragment.residual > std::max(0.45, 5.0 * resolution_m_)) {
+    set_reason(StairFlightRejectReason::ResidualTooHigh);
+    return false;
+  }
+
+  for (const auto & a : projections) {
+    for (const auto & b : projections) {
+      const double ds = b.s - a.s;
+      if (std::abs(ds) < resolution_m_ || std::abs(ds) > 2.5 * resolution_m_) {
+        continue;
+      }
+      const double dz = b.point.z - a.point.z;
+      if (ds * dz >= -resolution_m_) {
+        ++monotonic_edges;
+      } else {
+        ++nonmonotonic_edges;
+      }
+    }
+  }
+  if (monotonic_edges > 0 && nonmonotonic_edges * 3 > monotonic_edges) {
+    set_reason(StairFlightRejectReason::NonMonotonic);
+    return false;
+  }
+
+  std::vector<double> t_values;
+  t_values.reserve(projections.size());
+  for (const auto & p : projections) {
+    t_values.push_back(p.t);
+  }
+  std::sort(t_values.begin(), t_values.end());
+  auto percentile = [&](double q) {
+    const std::size_t index = static_cast<std::size_t>(
+      clampValue(q, 0.0, 1.0) * static_cast<double>(t_values.size() - 1U));
+    return t_values[index];
+  };
+  const double t_low = percentile(0.05);
+  const double t_high = percentile(0.95);
+  fragment.width_m = std::max(0.0, t_high - t_low + resolution_m_);
+  const double center_t = 0.5 * (t_low + t_high);
+  const double portal_search_m = std::max(1.25, 3.0 * robot_length_m_);
+
+  fragment.id = segment.id;
+  fragment.cells = segment.cells;
+  fragment.uphill_axis = uphill;
+  fragment.side_axis = side;
+  fragment.t_min = t_low;
+  fragment.t_max = t_high;
+  fragment.low_endpoint = {
+    uphill.x * fragment.s_min + side.x * center_t,
+    uphill.y * fragment.s_min + side.y * center_t,
+    signed_slope * fragment.s_min + intercept};
+  fragment.high_endpoint = {
+    uphill.x * fragment.s_max + side.x * center_t,
+    uphill.y * fragment.s_max + side.y * center_t,
+    signed_slope * fragment.s_max + intercept};
+  fragment.low_component_id = nearestFloorComponent(fragment.low_endpoint, portal_search_m);
+  fragment.high_component_id = nearestFloorComponent(fragment.high_endpoint, portal_search_m);
+  fragment.prefilter_width_ok = isStairFlightWideEnough(segment);
+
+  const double min_flight_height_m = std::max(0.45, 4.0 * resolution_m_);
+  const double min_flight_length_m = std::max(0.60, robot_length_m_);
+  const double safety_margin_m = std::max(0.25, 0.5 * resolution_m_);
+  fragment.strict_fit_ok =
+    fragment.length_m >= min_flight_length_m &&
+    fragment.height_m >= min_flight_height_m &&
+    fragment.slope >= 0.30 && fragment.slope <= 1.65 &&
+    fragment.residual <= std::max(0.35, 3.5 * resolution_m_) &&
+    fragment.width_m >= robot_width_m_ + safety_margin_m &&
+    (fragment.low_component_id >= 0 || fragment.high_component_id >= 0) &&
+    !(fragment.low_component_id >= 0 && fragment.high_component_id >= 0 &&
+    fragment.low_component_id == fragment.high_component_id &&
+    fragment.height_m > std::max(0.5, 4.0 * resolution_m_));
+
+  if (!fragment.strict_fit_ok) {
+    if (fragment.length_m < min_flight_length_m || fragment.height_m < min_flight_height_m) {
+      set_reason(StairFlightRejectReason::TooShortOrLow);
+    } else if (fragment.slope < 0.30 || fragment.slope > 1.65) {
+      set_reason(StairFlightRejectReason::SlopeOutOfRange);
+    } else if (fragment.residual > std::max(0.35, 3.5 * resolution_m_)) {
+      set_reason(StairFlightRejectReason::ResidualTooHigh);
+    } else if (fragment.width_m < robot_width_m_ + safety_margin_m) {
+      set_reason(StairFlightRejectReason::TooNarrow);
+    } else if (fragment.low_component_id < 0 && fragment.high_component_id < 0) {
+      set_reason(StairFlightRejectReason::MissingPortals);
+    } else {
+      set_reason(StairFlightRejectReason::SameFloorBothEnds);
+    }
+  }
+
+  return true;
+}
+
+bool NavigationMap::fitStairFlightStrict(
+  const LooseStairFragment & fragment, StairFlight & flight,
+  StairFlightRejectReason * reject_reason) const
+{
+  StairSegmentInfo segment;
+  segment.id = fragment.id;
+  segment.cells = fragment.cells;
+  segment.z_min = fragment.cells.empty() ? 0 : fragment.cells.front().z;
+  segment.z_max = segment.z_min;
+  for (const auto & cell : segment.cells) {
+    segment.z_min = std::min(segment.z_min, cell.z);
+    segment.z_max = std::max(segment.z_max, cell.z);
+  }
+  return fitStairFlightFromSegment(segment, flight, reject_reason);
+}
+
+bool NavigationMap::areLooseFragmentsCompatible(
+  const LooseStairFragment & a, const LooseStairFragment & b, FragmentBridge * bridge) const
+{
+  const double axis_dot = a.uphill_axis.dot(b.uphill_axis);
+  if (axis_dot < 0.82) {
+    return false;
+  }
+  if (std::abs(a.side_axis.dot(b.side_axis)) < 0.75) {
+    return false;
+  }
+
+  const double side_gap =
+    std::max({a.t_min - b.t_max, b.t_min - a.t_max, 0.0});
+  if (side_gap > std::max(0.75, 1.5 * robot_width_m_ + 2.0 * resolution_m_)) {
+    return false;
+  }
+
+  const double a_to_b = pointDistance3d(a.high_endpoint, b.low_endpoint);
+  const double b_to_a = pointDistance3d(b.high_endpoint, a.low_endpoint);
+  const bool forward_ab = a.high_endpoint.z <= b.low_endpoint.z + std::max(0.30, 3.0 * resolution_m_);
+  const bool forward_ba = b.high_endpoint.z <= a.low_endpoint.z + std::max(0.30, 3.0 * resolution_m_);
+  const bool use_ab = a_to_b <= b_to_a;
+  const Point3 from = use_ab ? a.high_endpoint : b.high_endpoint;
+  const Point3 to = use_ab ? b.low_endpoint : a.low_endpoint;
+  const double endpoint_distance = use_ab ? a_to_b : b_to_a;
+  if ((use_ab && !forward_ab) || (!use_ab && !forward_ba)) {
+    return false;
+  }
+  if (endpoint_distance > std::max(1.60, 10.0 * resolution_m_)) {
+    return false;
+  }
+
+  const double dz = to.z - from.z;
+  const double xy = std::hypot(to.x - from.x, to.y - from.y);
+  if (xy > 1.0e-6) {
+    const double bridge_slope = std::abs(dz) / xy;
+    if (bridge_slope > 2.20) {
+      return false;
+    }
+  }
+  if (std::abs(dz) > std::max(0.80, 8.0 * resolution_m_)) {
+    return false;
+  }
+  if (hasFloorBetween(from, to)) {
+    return false;
+  }
+
+  const double merged_height =
+    std::max(a.z_max, b.z_max) - std::min(a.z_min, b.z_min);
+  const double merged_length =
+    std::max(a.s_max, b.s_max) - std::min(a.s_min, b.s_min);
+  if (merged_length > 1.0e-6) {
+    const double merged_slope = merged_height / merged_length;
+    if (merged_slope < 0.12 || merged_slope > 2.20) {
+      return false;
+    }
+  }
+
+  if (bridge != nullptr) {
+    bridge->from_fragment_id = use_ab ? a.id : b.id;
+    bridge->to_fragment_id = use_ab ? b.id : a.id;
+    bridge->from = from;
+    bridge->to = to;
+  }
+  return true;
+}
+
+bool NavigationMap::rescueLooseFragment(
+  const LooseStairFragment & fragment, const std::vector<std::vector<int>> & graph,
+  const std::vector<bool> & strict_ok, StairFragmentRescueReason & reason) const
+{
+  reason = StairFragmentRescueReason::None;
+  if (fragment.id < 0 || static_cast<std::size_t>(fragment.id) >= graph.size()) {
+    return false;
+  }
+
+  int strict_neighbors = 0;
+  int loose_neighbors = 0;
+  for (const int neighbor_id : graph[static_cast<std::size_t>(fragment.id)]) {
+    if (neighbor_id < 0 || static_cast<std::size_t>(neighbor_id) >= strict_ok.size()) {
+      continue;
+    }
+    ++loose_neighbors;
+    if (strict_ok[static_cast<std::size_t>(neighbor_id)]) {
+      ++strict_neighbors;
+    }
+  }
+
+  const bool has_portal = fragment.low_component_id >= 0 || fragment.high_component_id >= 0;
+  const bool has_two_portals =
+    fragment.low_component_id >= 0 && fragment.high_component_id >= 0 &&
+    fragment.low_component_id != fragment.high_component_id;
+  const bool monotonic = fragment.slope >= 0.12 && fragment.residual <= std::max(0.45, 5.0 * resolution_m_);
+
+  if (fragment.strict_fit_ok) {
+    reason = StairFragmentRescueReason::Strict;
+    return true;
+  }
+  if (has_portal && strict_neighbors > 0) {
+    reason = StairFragmentRescueReason::ConnectsFloor;
+    return true;
+  }
+  if (strict_neighbors >= 2 || loose_neighbors >= 2) {
+    reason = StairFragmentRescueReason::BridgesFragments;
+    return true;
+  }
+  if (strict_neighbors == 1 && fragment.reject_reason == StairFlightRejectReason::TooShortOrLow) {
+    reason = StairFragmentRescueReason::ExtendsFlight;
+    return true;
+  }
+  if (has_two_portals && monotonic && fragment.height_m >= std::max(0.25, 2.0 * resolution_m_)) {
+    reason = StairFragmentRescueReason::BetweenFloors;
+    return true;
+  }
+  return false;
+}
+
+StairSegmentInfo NavigationMap::makeSegmentFromFragmentIds(const std::vector<int> & fragment_ids) const
+{
+  StairSegmentInfo segment;
+  for (const int fragment_id : fragment_ids) {
+    if (fragment_id < 0 ||
+      static_cast<std::size_t>(fragment_id) >= loose_stair_fragments_.size())
+    {
+      continue;
+    }
+    const auto & fragment = loose_stair_fragments_[static_cast<std::size_t>(fragment_id)];
+    segment.cells.insert(segment.cells.end(), fragment.cells.begin(), fragment.cells.end());
+  }
+  std::sort(
+    segment.cells.begin(), segment.cells.end(),
+    [](const GridIndex & lhs, const GridIndex & rhs) {
+      if (lhs.x != rhs.x) {
+        return lhs.x < rhs.x;
+      }
+      if (lhs.y != rhs.y) {
+        return lhs.y < rhs.y;
+      }
+      return lhs.z < rhs.z;
+    });
+  segment.cells.erase(std::unique(segment.cells.begin(), segment.cells.end()), segment.cells.end());
+  if (!segment.cells.empty()) {
+    segment.z_min = segment.cells.front().z;
+    segment.z_max = segment.cells.front().z;
+    for (const auto & cell : segment.cells) {
+      segment.z_min = std::min(segment.z_min, cell.z);
+      segment.z_max = std::max(segment.z_max, cell.z);
+    }
+  }
+  return segment;
 }
 
 bool NavigationMap::fitStairFlightFromSegment(
@@ -1698,6 +2512,48 @@ bool NavigationMap::fitStairFlightFromSegment(
     return reject(StairFlightRejectReason::TooNarrow);
   }
 
+  struct TreadSliceEvidence
+  {
+    std::vector<double> s_values;
+    std::vector<double> t_values;
+  };
+  std::unordered_map<int, TreadSliceEvidence> tread_slices;
+  tread_slices.reserve(projections.size());
+  for (const auto & p : projections) {
+    auto & slice = tread_slices[p.cell.z];
+    slice.s_values.push_back(p.s);
+    slice.t_values.push_back(p.t);
+  }
+
+  int supported_tread_levels = 0;
+  int min_supported_z = std::numeric_limits<int>::max();
+  int max_supported_z = std::numeric_limits<int>::min();
+  const double min_tread_lateral_width_m = robot_width_m_ + std::max(0.10, resolution_m_);
+  const double min_tread_along_span_m = std::max(0.15, 1.5 * resolution_m_);
+  for (auto & entry : tread_slices) {
+    auto & slice = entry.second;
+    if (slice.s_values.size() < 4U || slice.t_values.size() < 4U) {
+      continue;
+    }
+    std::sort(slice.s_values.begin(), slice.s_values.end());
+    std::sort(slice.t_values.begin(), slice.t_values.end());
+    const double s_span = slice.s_values.back() - slice.s_values.front() + resolution_m_;
+    const double t_span = slice.t_values.back() - slice.t_values.front() + resolution_m_;
+    if (s_span < min_tread_along_span_m || t_span < min_tread_lateral_width_m) {
+      continue;
+    }
+    ++supported_tread_levels;
+    min_supported_z = std::min(min_supported_z, entry.first);
+    max_supported_z = std::max(max_supported_z, entry.first);
+  }
+  const int min_supported_tread_levels =
+    std::max(3, static_cast<int>(std::ceil(min_flight_height_m / resolution_m_)));
+  if (supported_tread_levels < min_supported_tread_levels ||
+    (max_supported_z - min_supported_z) * resolution_m_ < min_flight_height_m)
+  {
+    return reject(StairFlightRejectReason::TooShortOrLow);
+  }
+
   const double safe_half_width_m =
     std::max(0.5 * resolution_m_, 0.5 * width_m - 0.5 * robot_width_m_ - safety_margin_m);
   const double center_t = 0.5 * (t_low + t_high);
@@ -1749,9 +2605,6 @@ bool NavigationMap::fitStairFlightFromSegment(
     std::sort(slice_t.begin(), slice_t.end());
     const double left_t = slice_t.front();
     const double right_t = slice_t.back();
-    if (right_t - left_t + resolution_m_ < robot_width_m_ + safety_margin_m) {
-      continue;
-    }
     const double s = s_sum / static_cast<double>(slice.size());
     const double t = 0.5 * (left_t + right_t);
     centerline.push_back({
@@ -1791,12 +2644,16 @@ void NavigationMap::rebuildStairFlights()
   stair_flights_.clear();
   stair_cell_info_.clear();
   rejected_stair_noise_cells_.clear();
+  loose_stair_fragments_.clear();
+  fragment_bridges_.clear();
+  loose_stair_fragment_cells_.clear();
+  rejected_short_low_cells_.clear();
+  rescued_stair_fragment_cells_.clear();
 
-  std::vector<StairFlight> candidate_flights;
   for (const auto & segment : stair_segments_) {
-    StairFlight flight;
+    LooseStairFragment fragment;
     StairFlightRejectReason reject_reason = StairFlightRejectReason::None;
-    if (!fitStairFlightFromSegment(segment, flight, &reject_reason)) {
+    if (!fitStairFragmentLoose(segment, fragment, &reject_reason)) {
       ++stair_flight_diagnostics_.fit_rejected;
       const auto reject_index = static_cast<std::size_t>(reject_reason);
       if (reject_index < stair_flight_diagnostics_.fit_reject_counts.size()) {
@@ -1807,72 +2664,123 @@ void NavigationMap::rebuildStairFlights()
       }
       continue;
     }
-    candidate_flights.push_back(std::move(flight));
+    fragment.id = static_cast<int>(loose_stair_fragments_.size());
+    if (fragment.reject_reason == StairFlightRejectReason::None && !fragment.strict_fit_ok) {
+      fragment.reject_reason = reject_reason;
+    }
+    for (const auto & cell : fragment.cells) {
+      loose_stair_fragment_cells_.insert(cell);
+    }
+    loose_stair_fragments_.push_back(std::move(fragment));
   }
-  stair_flight_diagnostics_.accepted_candidates = candidate_flights.size();
 
-  const bool merge_stair_fragments = false;
-  bool merged_any = merge_stair_fragments;
-  while (merged_any) {
-    merged_any = false;
-    for (std::size_t i = 0; i < candidate_flights.size() && !merged_any; ++i) {
-      for (std::size_t j = i + 1; j < candidate_flights.size(); ++j) {
-        const auto & a = candidate_flights[i];
-        const auto & b = candidate_flights[j];
-        if (std::abs(a.uphill_axis.dot(b.uphill_axis)) < 0.92) {
-          continue;
-        }
-        const double high_low_distance = pointDistance3d(a.high_endpoint, b.low_endpoint);
-        const double low_high_distance = pointDistance3d(a.low_endpoint, b.high_endpoint);
-        const double endpoint_distance = std::min(high_low_distance, low_high_distance);
-        const double merge_distance_m = std::max(0.35, 3.0 * resolution_m_);
-        if (endpoint_distance > merge_distance_m) {
-          continue;
-        }
-        if (std::abs(a.width_m - b.width_m) > std::max(0.45, 0.35 * std::max(a.width_m, b.width_m))) {
-          continue;
-        }
+  stair_flight_diagnostics_.loose_fragment_count = loose_stair_fragments_.size();
 
-        StairSegmentInfo merged_segment;
-        merged_segment.cells = a.cells;
-        merged_segment.cells.insert(merged_segment.cells.end(), b.cells.begin(), b.cells.end());
-        std::sort(
-          merged_segment.cells.begin(), merged_segment.cells.end(),
-          [](const GridIndex & lhs, const GridIndex & rhs) {
-            if (lhs.x != rhs.x) {
-              return lhs.x < rhs.x;
-            }
-            if (lhs.y != rhs.y) {
-              return lhs.y < rhs.y;
-            }
-            return lhs.z < rhs.z;
-          });
-        merged_segment.cells.erase(
-          std::unique(merged_segment.cells.begin(), merged_segment.cells.end()),
-          merged_segment.cells.end());
-        if (merged_segment.cells.empty()) {
-          continue;
-        }
-        merged_segment.z_min = merged_segment.cells.front().z;
-        merged_segment.z_max = merged_segment.cells.front().z;
-        for (const auto & cell : merged_segment.cells) {
-          merged_segment.z_min = std::min(merged_segment.z_min, cell.z);
-          merged_segment.z_max = std::max(merged_segment.z_max, cell.z);
-        }
+  std::vector<std::vector<int>> fragment_graph(loose_stair_fragments_.size());
+  for (std::size_t i = 0; i < loose_stair_fragments_.size(); ++i) {
+    for (std::size_t j = i + 1; j < loose_stair_fragments_.size(); ++j) {
+      FragmentBridge bridge;
+      if (!areLooseFragmentsCompatible(loose_stair_fragments_[i], loose_stair_fragments_[j], &bridge)) {
+        continue;
+      }
+      fragment_graph[i].push_back(static_cast<int>(j));
+      fragment_graph[j].push_back(static_cast<int>(i));
+      fragment_bridges_.push_back(bridge);
+    }
+  }
 
-        StairFlight merged_flight;
-        if (!fitStairFlightFromSegment(merged_segment, merged_flight)) {
-          continue;
-        }
-        candidate_flights[i] = std::move(merged_flight);
-        candidate_flights.erase(candidate_flights.begin() + static_cast<std::ptrdiff_t>(j));
-        merged_any = true;
-        break;
+  std::vector<bool> strict_ok(loose_stair_fragments_.size(), false);
+  for (std::size_t i = 0; i < loose_stair_fragments_.size(); ++i) {
+    StairFlight strict_flight;
+    StairFlightRejectReason strict_reason = StairFlightRejectReason::None;
+    strict_ok[i] = fitStairFlightStrict(loose_stair_fragments_[i], strict_flight, &strict_reason);
+    loose_stair_fragments_[i].strict_fit_ok = strict_ok[i];
+    if (strict_ok[i]) {
+      ++stair_flight_diagnostics_.strict_fragment_count;
+      loose_stair_fragments_[i].rescue_reason = StairFragmentRescueReason::Strict;
+    } else {
+      loose_stair_fragments_[i].reject_reason = strict_reason;
+      const auto reject_index = static_cast<std::size_t>(strict_reason);
+      if (reject_index < stair_flight_diagnostics_.fit_reject_counts.size()) {
+        ++stair_flight_diagnostics_.fit_reject_counts[reject_index];
       }
     }
   }
-  stair_flight_diagnostics_.merged_candidates = candidate_flights.size();
 
+  std::vector<bool> accepted_fragment(loose_stair_fragments_.size(), false);
+  for (std::size_t i = 0; i < loose_stair_fragments_.size(); ++i) {
+    StairFragmentRescueReason rescue_reason = StairFragmentRescueReason::None;
+    if (rescueLooseFragment(
+        loose_stair_fragments_[i], fragment_graph, strict_ok, rescue_reason))
+    {
+      accepted_fragment[i] = true;
+      loose_stair_fragments_[i].rescued = !strict_ok[i];
+      loose_stair_fragments_[i].rescue_reason = rescue_reason;
+      if (!strict_ok[i]) {
+        ++stair_flight_diagnostics_.rescued_fragment_count;
+        for (const auto & cell : loose_stair_fragments_[i].cells) {
+          rescued_stair_fragment_cells_.insert(cell);
+        }
+      }
+    } else if (loose_stair_fragments_[i].reject_reason == StairFlightRejectReason::TooShortOrLow) {
+      for (const auto & cell : loose_stair_fragments_[i].cells) {
+        rejected_short_low_cells_.insert(cell);
+      }
+    }
+  }
+
+  std::vector<StairFlight> candidate_flights;
+  std::vector<bool> visited(loose_stair_fragments_.size(), false);
+  for (std::size_t seed = 0; seed < loose_stair_fragments_.size(); ++seed) {
+    if (!accepted_fragment[seed] || visited[seed]) {
+      continue;
+    }
+    std::vector<int> chain;
+    std::deque<int> queue;
+    visited[seed] = true;
+    queue.push_back(static_cast<int>(seed));
+    bool chain_has_strict = false;
+    while (!queue.empty()) {
+      const int current = queue.front();
+      queue.pop_front();
+      chain.push_back(current);
+      chain_has_strict = chain_has_strict || strict_ok[static_cast<std::size_t>(current)];
+      for (const int neighbor : fragment_graph[static_cast<std::size_t>(current)]) {
+        if (neighbor < 0 || static_cast<std::size_t>(neighbor) >= accepted_fragment.size()) {
+          continue;
+        }
+        if (!accepted_fragment[static_cast<std::size_t>(neighbor)] ||
+          visited[static_cast<std::size_t>(neighbor)])
+        {
+          continue;
+        }
+        visited[static_cast<std::size_t>(neighbor)] = true;
+        queue.push_back(neighbor);
+      }
+    }
+
+    StairSegmentInfo merged_segment = makeSegmentFromFragmentIds(chain);
+    StairFlight merged_flight;
+    StairFlightRejectReason chain_reject = StairFlightRejectReason::None;
+    if (chain_has_strict && fitStairFlightFromSegment(merged_segment, merged_flight, &chain_reject)) {
+      candidate_flights.push_back(std::move(merged_flight));
+      continue;
+    }
+
+    for (const int fragment_id : chain) {
+      if (!strict_ok[static_cast<std::size_t>(fragment_id)]) {
+        continue;
+      }
+      StairFlight flight;
+      if (fitStairFlightStrict(loose_stair_fragments_[static_cast<std::size_t>(fragment_id)], flight)) {
+        candidate_flights.push_back(std::move(flight));
+      }
+    }
+  }
+
+  stair_flight_diagnostics_.accepted_candidates = candidate_flights.size();
+  stair_flight_diagnostics_.merged_candidates = candidate_flights.size();
+  stair_flight_diagnostics_.final_stair_flight_count = candidate_flights.size();
   std::unordered_set<GridIndex, GridIndexHash> accepted_flight_cells;
   accepted_flight_cells.reserve(accepted_stair_cells_.size());
 
@@ -1888,7 +2796,7 @@ void NavigationMap::rebuildStairFlights()
       info.along_s = point.x * flight.uphill_axis.x + point.y * flight.uphill_axis.y;
       info.lateral_t = point.x * flight.side_axis.x + point.y * flight.side_axis.y;
       info.lateral_error_m = std::abs(info.lateral_t - center_t);
-      if (info.lateral_error_m <= flight.safe_half_width_m + 0.5 * resolution_m_) {
+      if (info.lateral_error_m <= flight.safe_half_width_m + 1.0e-9) {
         stair_cell_info_[cell] = info;
         accepted_flight_cells.insert(cell);
       } else {
@@ -2234,6 +3142,8 @@ void NavigationMap::rebuildTraversableLayer()
   }
 
   rebuildFloorComponents();
+  recoverMissingStairCells();
+  rebuildFloorComponents();
   rebuildStairSegments();
   rebuildStairFlights();
 
@@ -2245,7 +3155,7 @@ void NavigationMap::rebuildTraversableLayer()
 void NavigationMap::rebuildRiskLayer()
 {
   risk_cost_.clear();
-  if (blocked_cells_.empty() || traversable_cells_.empty()) {
+  if (traversable_cells_.empty()) {
     return;
   }
 
@@ -2271,6 +3181,108 @@ void NavigationMap::rebuildRiskLayer()
           }
         }
       }
+    }
+  }
+
+  struct ClearanceNode
+  {
+    GridIndex cell;
+    double distance_m{0.0};
+  };
+
+  struct ClearanceNodeCompare
+  {
+    bool operator()(const ClearanceNode & lhs, const ClearanceNode & rhs) const
+    {
+      return lhs.distance_m > rhs.distance_m;
+    }
+  };
+
+  const double boundary_cost_weight = 0.35;
+  const int z_tolerance = 1;
+  auto is_floor_surface = [&](const GridIndex & idx) {
+    return isTraversable(idx) && !isStairTraversable(idx);
+  };
+  auto has_nearby_floor_surface = [&](const GridIndex & idx) {
+    for (int dz = -z_tolerance; dz <= z_tolerance; ++dz) {
+      if (is_floor_surface({idx.x, idx.y, idx.z + dz})) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  std::priority_queue<
+    ClearanceNode, std::vector<ClearanceNode>, ClearanceNodeCompare> clearance_queue;
+  std::unordered_map<GridIndex, double, GridIndexHash> clearance_m;
+  clearance_m.reserve(accepted_floor_cells_.size());
+
+  for (const auto & cell : traversable_cells_) {
+    if (!is_floor_surface(cell)) {
+      continue;
+    }
+    bool boundary = false;
+    for (int dx = -1; dx <= 1 && !boundary; ++dx) {
+      for (int dy = -1; dy <= 1 && !boundary; ++dy) {
+        if (dx == 0 && dy == 0) {
+          continue;
+        }
+        if (!has_nearby_floor_surface({cell.x + dx, cell.y + dy, cell.z})) {
+          boundary = true;
+        }
+      }
+    }
+    if (!boundary) {
+      continue;
+    }
+    clearance_m[cell] = 0.0;
+    clearance_queue.push({cell, 0.0});
+  }
+
+  while (!clearance_queue.empty()) {
+    const ClearanceNode current = clearance_queue.top();
+    clearance_queue.pop();
+    const auto best_it = clearance_m.find(current.cell);
+    if (best_it == clearance_m.end() || current.distance_m > best_it->second + 1.0e-9) {
+      continue;
+    }
+    if (current.distance_m > risk_inflation_radius_m_) {
+      continue;
+    }
+
+    for (int dx = -1; dx <= 1; ++dx) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        if (dx == 0 && dy == 0) {
+          continue;
+        }
+        for (int dz = -z_tolerance; dz <= z_tolerance; ++dz) {
+          const GridIndex neighbor{current.cell.x + dx, current.cell.y + dy, current.cell.z + dz};
+          if (!is_floor_surface(neighbor)) {
+            continue;
+          }
+          const double step_distance =
+            std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz)) * resolution_m_;
+          const double candidate_distance = current.distance_m + step_distance;
+          if (candidate_distance > risk_inflation_radius_m_) {
+            continue;
+          }
+          const auto old_it = clearance_m.find(neighbor);
+          if (old_it != clearance_m.end() && candidate_distance >= old_it->second - 1.0e-9) {
+            continue;
+          }
+          clearance_m[neighbor] = candidate_distance;
+          clearance_queue.push({neighbor, candidate_distance});
+        }
+      }
+    }
+  }
+
+  for (const auto & entry : clearance_m) {
+    const double normalized = std::max(0.0, 1.0 - entry.second / risk_inflation_radius_m_);
+    const double cost = boundary_cost_weight * normalized * normalized;
+    auto it = risk_cost_.find(entry.first);
+    if (it == risk_cost_.end() || cost > it->second) {
+      risk_cost_[entry.first] = cost;
     }
   }
 }
@@ -2406,6 +3418,31 @@ const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::rejectedStai
   return rejected_stair_noise_cells_;
 }
 
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::looseStairFragmentCells() const
+{
+  return loose_stair_fragment_cells_;
+}
+
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::rejectedShortLowCells() const
+{
+  return rejected_short_low_cells_;
+}
+
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::rejectedWidthPrefilterCells() const
+{
+  return rejected_width_prefilter_cells_;
+}
+
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::rescuedStairFragmentCells() const
+{
+  return rescued_stair_fragment_cells_;
+}
+
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::missingStairRecoveryCells() const
+{
+  return missing_stair_recovery_cells_;
+}
+
 const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::blockedCells() const
 {
   return blocked_cells_;
@@ -2429,6 +3466,16 @@ const std::vector<FloorComponent> & NavigationMap::landingComponents() const
 const std::vector<StairFlight> & NavigationMap::stairFlights() const
 {
   return stair_flights_;
+}
+
+const std::vector<LooseStairFragment> & NavigationMap::looseStairFragments() const
+{
+  return loose_stair_fragments_;
+}
+
+const std::vector<FragmentBridge> & NavigationMap::fragmentBridges() const
+{
+  return fragment_bridges_;
 }
 
 const StairFlightDiagnostics & NavigationMap::stairFlightDiagnostics() const

@@ -149,6 +149,53 @@ enum class StairFlightRejectReason
   Count
 };
 
+enum class StairFragmentRescueReason
+{
+  None = 0,
+  Strict,
+  ConnectsFloor,
+  BridgesFragments,
+  ExtendsFlight,
+  BetweenFloors,
+  FillsGap
+};
+
+struct LooseStairFragment
+{
+  int id{-1};
+  std::vector<GridIndex> cells;
+  Vec2 uphill_axis;
+  Vec2 side_axis;
+  double s_min{0.0};
+  double s_max{0.0};
+  double t_min{0.0};
+  double t_max{0.0};
+  double z_min{0.0};
+  double z_max{0.0};
+  double length_m{0.0};
+  double height_m{0.0};
+  double width_m{0.0};
+  double slope{0.0};
+  double residual{0.0};
+  int low_component_id{-1};
+  int high_component_id{-1};
+  Point3 low_endpoint;
+  Point3 high_endpoint;
+  bool prefilter_width_ok{false};
+  bool strict_fit_ok{false};
+  bool rescued{false};
+  StairFlightRejectReason reject_reason{StairFlightRejectReason::None};
+  StairFragmentRescueReason rescue_reason{StairFragmentRescueReason::None};
+};
+
+struct FragmentBridge
+{
+  int from_fragment_id{-1};
+  int to_fragment_id{-1};
+  Point3 from;
+  Point3 to;
+};
+
 struct StairFlightDiagnostics
 {
   std::size_t raw_segments{0U};
@@ -156,6 +203,11 @@ struct StairFlightDiagnostics
   std::size_t fit_rejected{0U};
   std::size_t accepted_candidates{0U};
   std::size_t merged_candidates{0U};
+  std::size_t loose_fragment_count{0U};
+  std::size_t strict_fragment_count{0U};
+  std::size_t rescued_fragment_count{0U};
+  std::size_t recovered_stair_cell_count{0U};
+  std::size_t final_stair_flight_count{0U};
   std::array<std::size_t, static_cast<std::size_t>(StairFlightRejectReason::Count)> fit_reject_counts{};
 };
 
@@ -263,11 +315,18 @@ public:
   const std::unordered_set<GridIndex, GridIndexHash> & rejectedClearanceCells() const;
   const std::unordered_set<GridIndex, GridIndexHash> & rejectedCollisionCells() const;
   const std::unordered_set<GridIndex, GridIndexHash> & rejectedStairNoiseCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & looseStairFragmentCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & rejectedShortLowCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & rejectedWidthPrefilterCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & rescuedStairFragmentCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & missingStairRecoveryCells() const;
   const std::unordered_set<GridIndex, GridIndexHash> & blockedCells() const;
   const std::unordered_map<GridIndex, double, GridIndexHash> & riskCosts() const;
   const std::vector<FloorComponent> & floorComponents() const;
   const std::vector<FloorComponent> & landingComponents() const;
   const std::vector<StairFlight> & stairFlights() const;
+  const std::vector<LooseStairFragment> & looseStairFragments() const;
+  const std::vector<FragmentBridge> & fragmentBridges() const;
   const StairFlightDiagnostics & stairFlightDiagnostics() const;
 
   double resolution() const;
@@ -297,6 +356,9 @@ private:
   int stairSegmentId(const GridIndex & idx) const;
   bool stairCellsSlopeCompatible(const GridIndex & from, const GridIndex & to) const;
   bool isStairFlightEdgeAllowed(const GridIndex & from, const GridIndex & to) const;
+  bool isTreadBridgeAllowed(const GridIndex & from, const GridIndex & to) const;
+  bool hasUpDownStairEvidenceAround(const GridIndex & cell) const;
+  bool hasLargeLandingPlateauAround(const GridIndex & cell) const;
   bool isStairSegmentBridgeAllowed(const GridIndex & from, const GridIndex & to) const;
   bool isStairSameHeightTransferAllowed(const GridIndex & from, const GridIndex & to) const;
   bool stairSideDirection(const GridIndex & idx, int & side_dx, int & side_dy) const;
@@ -308,8 +370,22 @@ private:
   bool hasTraversableSupportNearColumn(int x, int y, int z, int max_dz) const;
   bool isFootprintSupportedAtPoint(
     const Point3 & origin, int stand_z, double heading_x, double heading_y) const;
+  void recoverMissingStairCells();
   void rebuildFloorComponents();
   void rebuildStairFlights();
+  bool fitStairFragmentLoose(
+    const StairSegmentInfo & segment, LooseStairFragment & fragment,
+    StairFlightRejectReason * reject_reason = nullptr) const;
+  bool fitStairFlightStrict(
+    const LooseStairFragment & fragment, StairFlight & flight,
+    StairFlightRejectReason * reject_reason = nullptr) const;
+  bool areLooseFragmentsCompatible(
+    const LooseStairFragment & a, const LooseStairFragment & b,
+    FragmentBridge * bridge = nullptr) const;
+  bool rescueLooseFragment(
+    const LooseStairFragment & fragment, const std::vector<std::vector<int>> & graph,
+    const std::vector<bool> & strict_ok, StairFragmentRescueReason & reason) const;
+  StairSegmentInfo makeSegmentFromFragmentIds(const std::vector<int> & fragment_ids) const;
   bool fitStairFlightFromSegment(
     const StairSegmentInfo & segment, StairFlight & flight,
     StairFlightRejectReason * reject_reason = nullptr) const;
@@ -329,6 +405,11 @@ private:
   std::unordered_set<GridIndex, GridIndexHash> rejected_clearance_cells_;
   std::unordered_set<GridIndex, GridIndexHash> rejected_collision_cells_;
   std::unordered_set<GridIndex, GridIndexHash> rejected_stair_noise_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> loose_stair_fragment_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> rejected_short_low_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> rejected_width_prefilter_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> rescued_stair_fragment_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> missing_stair_recovery_cells_;
   std::unordered_set<GridIndex, GridIndexHash> blocked_cells_;
   std::unordered_map<GridIndex, double, GridIndexHash> risk_cost_;
   std::unordered_map<XYIndex, ColumnInfo, XYIndexHash> columns_;
@@ -338,6 +419,8 @@ private:
   std::vector<FloorComponent> floor_components_;
   std::vector<FloorComponent> landing_components_;
   std::vector<StairFlight> stair_flights_;
+  std::vector<LooseStairFragment> loose_stair_fragments_;
+  std::vector<FragmentBridge> fragment_bridges_;
   std::unordered_map<GridIndex, StairCellInfo, GridIndexHash> stair_cell_info_;
   StairFlightDiagnostics stair_flight_diagnostics_;
 
