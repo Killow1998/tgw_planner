@@ -1,5 +1,6 @@
 #include "tgw_planner/core/clearance_field.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -96,6 +97,45 @@ double ClearanceField::clearancePenalty(const GridIndex & cell) const
     return 0.0;
   }
   return 1.0 / (distance + 0.05);
+}
+
+std::vector<GridIndex> ClearanceField::medialAxisCells(
+  double min_clearance_m, double ridge_tolerance_m) const
+{
+  std::vector<GridIndex> out;
+  const double min_clearance = std::max(0.0, min_clearance_m);
+  const double tolerance = std::max(0.0, ridge_tolerance_m);
+  for (const auto & entry : distance_m_) {
+    const GridIndex & cell = entry.first;
+    const double distance = entry.second;
+    if (!std::isfinite(distance) || distance < min_clearance) {
+      continue;
+    }
+
+    bool local_maximum = true;
+    for (int dx = -1; dx <= 1 && local_maximum; ++dx) {
+      for (int dy = -1; dy <= 1 && local_maximum; ++dy) {
+        for (int dz = -1; dz <= 1; ++dz) {
+          if (dx == 0 && dy == 0 && dz == 0) {
+            continue;
+          }
+          const GridIndex neighbor{cell.x + dx, cell.y + dy, cell.z + dz};
+          const auto neighbor_it = distance_m_.find(neighbor);
+          if (neighbor_it == distance_m_.end() || !std::isfinite(neighbor_it->second)) {
+            continue;
+          }
+          if (neighbor_it->second > distance + tolerance) {
+            local_maximum = false;
+            break;
+          }
+        }
+      }
+    }
+    if (local_maximum) {
+      out.push_back(cell);
+    }
+  }
+  return out;
 }
 
 const std::unordered_map<GridIndex, double, GridIndexHash> & ClearanceField::distances() const

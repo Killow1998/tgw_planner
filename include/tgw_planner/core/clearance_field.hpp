@@ -2,6 +2,7 @@
 
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "tgw_planner/core/grid_index.hpp"
 
@@ -18,6 +19,8 @@ public:
 
   double clearanceDistance(const GridIndex & cell) const;
   double clearancePenalty(const GridIndex & cell) const;
+  std::vector<GridIndex> medialAxisCells(
+    double min_clearance_m = 0.0, double ridge_tolerance_m = 1.0e-6) const;
 
   const std::unordered_map<GridIndex, double, GridIndexHash> & distances() const;
 

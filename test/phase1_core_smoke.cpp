@@ -104,6 +104,15 @@ int main()
   clearance.compute(surface.traversable_cells, surface.boundary_cells, options.resolution_m);
   CHECK(clearance.clearanceDistance(center) > clearance.clearanceDistance(edge));
   CHECK(clearance.clearancePenalty(center) < clearance.clearancePenalty(edge));
+  const auto medial_axis = clearance.medialAxisCells(0.10);
+  bool medial_has_center = false;
+  bool medial_has_edge = false;
+  for (const GridIndex & cell : medial_axis) {
+    medial_has_center = medial_has_center || cell == center;
+    medial_has_edge = medial_has_edge || cell == edge;
+  }
+  CHECK(medial_has_center);
+  CHECK(!medial_has_edge);
 
   ProbabilisticVoxelMap planner_map(options);
   for (int x = -6; x <= 18; ++x) {

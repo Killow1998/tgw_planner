@@ -131,6 +131,8 @@ public:
     mapping_enabled_ = declare_parameter<bool>("start_enabled", true);
     max_points_per_scan_ = declare_parameter<int>("max_points_per_scan", 120000);
     publish_period_ms_ = declare_parameter<int>("publish_period_ms", 1000);
+    medial_axis_min_clearance_m_ =
+      declare_parameter<double>("medial_axis_min_clearance_m", medial_axis_min_clearance_m_);
 
     rclcpp::QoS cloud_qos{rclcpp::SensorDataQoS()};
     points_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
@@ -154,6 +156,8 @@ public:
     wall_boundary_pub_ =
       create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/wall_boundary_cloud", latched_qos);
     clearance_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/clearance_cloud", latched_qos);
+    medial_axis_pub_ =
+      create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/medial_axis_cloud", latched_qos);
     forbidden_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/forbidden_cloud", latched_qos);
     planned_path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_map/planned_path", latched_qos);
     stats_json_pub_ = create_publisher<std_msgs::msg::String>("/tgw_map/stats_json", latched_qos);
@@ -415,8 +419,11 @@ private:
     wall_boundary_pub_->publish(makeCloud(setToVector(surface.wall_boundary_cells), 9.0F));
     clearance_pub_->publish(
       makeCloud(setToVector(surface.traversable_cells), 0.0F, true, &clearance));
+    const std::vector<GridIndex> medial_axis =
+      clearance.medialAxisCells(medial_axis_min_clearance_m_);
+    medial_axis_pub_->publish(makeCloud(medial_axis, 11.0F, true, &clearance));
     forbidden_pub_->publish(makeCloud(setToVector(surface.forbidden_cells), 10.0F));
-    publishStatsJson(&surface, &clearance);
+    publishStatsJson(&surface, &clearance, medial_axis.size());
   }
 
   NavigationSnapshot buildNavigationSnapshot() const
@@ -594,7 +601,8 @@ private:
   }
 
   void publishStatsJson(
-    const SurfaceMap * surface = nullptr, const ClearanceField * clearance = nullptr)
+    const SurfaceMap * surface = nullptr, const ClearanceField * clearance = nullptr,
+    std::size_t medial_axis_cells = 0U)
   {
     std_msgs::msg::String msg;
     std::ostringstream out;
@@ -625,6 +633,7 @@ private:
     }
     if (clearance != nullptr) {
       out << ",\"clearance_cells\":" << clearance->distances().size();
+      out << ",\"medial_axis_cells\":" << medial_axis_cells;
     }
     out << "}";
     msg.data = out.str();
@@ -677,6 +686,7 @@ private:
   bool mapping_enabled_{true};
   int max_points_per_scan_{120000};
   int publish_period_ms_{1000};
+  double medial_axis_min_clearance_m_{0.20};
   int view_id_{0};
 
   bool latest_pose_valid_{false};
@@ -699,6 +709,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr dropoff_boundary_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr wall_boundary_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr clearance_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr medial_axis_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr forbidden_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr planned_path_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr stats_json_pub_;

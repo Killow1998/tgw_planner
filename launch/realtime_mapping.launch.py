@@ -25,6 +25,7 @@ def generate_launch_description():
     enable_dynamic_filter = LaunchConfiguration("enable_dynamic_filter")
     max_points_per_scan = LaunchConfiguration("max_points_per_scan")
     publish_period_ms = LaunchConfiguration("publish_period_ms")
+    medial_axis_min_clearance_m = LaunchConfiguration("medial_axis_min_clearance_m")
     surface_min_static_hits = LaunchConfiguration("surface_min_static_hits")
     surface_require_static_support = LaunchConfiguration("surface_require_static_support")
     robot_height_m = LaunchConfiguration("robot_height_m")
@@ -65,6 +66,7 @@ def generate_launch_description():
             DeclareLaunchArgument("enable_dynamic_filter", default_value="true"),
             DeclareLaunchArgument("max_points_per_scan", default_value="120000"),
             DeclareLaunchArgument("publish_period_ms", default_value="1000"),
+            DeclareLaunchArgument("medial_axis_min_clearance_m", default_value="0.20"),
             DeclareLaunchArgument("surface_min_static_hits", default_value="1"),
             DeclareLaunchArgument("surface_require_static_support", default_value="false"),
             DeclareLaunchArgument("robot_height_m", default_value="0.50"),
@@ -109,6 +111,7 @@ def generate_launch_description():
                         "enable_dynamic_filter": enable_dynamic_filter,
                         "max_points_per_scan": max_points_per_scan,
                         "publish_period_ms": publish_period_ms,
+                        "medial_axis_min_clearance_m": medial_axis_min_clearance_m,
                         "surface_min_static_hits": surface_min_static_hits,
                         "surface_require_static_support": surface_require_static_support,
                         "robot_height_m": robot_height_m,

@@ -43,6 +43,7 @@ Realtime debug topics:
 - `/tgw_map/dropoff_boundary_cloud`
 - `/tgw_map/wall_boundary_cloud`
 - `/tgw_map/clearance_cloud`
+- `/tgw_map/medial_axis_cloud`
 - `/tgw_map/forbidden_cloud`
 - `/tgw_map/planned_path`
 - `/tgw_map/stats_json`
@@ -92,6 +93,10 @@ configured rectangular footprint at start/goal, at each neighbor cell, and along
 sampled swept transitions. This prevents many invalid point-center paths from
 being generated in the first place. Final validation remains as a second proof
 before publishing `/tgw_map/planned_path`.
+
+`/tgw_map/medial_axis_cloud` publishes clearance ridges filtered by
+`medial_axis_min_clearance_m`. This is a debug layer for checking whether the
+clearance map places high-safety cells near corridor or passage centers.
 
 ## Verified Smoke
 
