@@ -876,6 +876,22 @@ private:
     return static_cast<bool>(in >> value);
   }
 
+  bool parseYamlScalarString(
+    const std::string & line, const std::string & key, std::string & value) const
+  {
+    const std::string pattern = key + ":";
+    const auto key_pos = line.find(pattern);
+    if (key_pos == std::string::npos) {
+      return false;
+    }
+    std::string payload = trim(line.substr(key_pos + pattern.size()));
+    if (payload.size() >= 2U && payload.front() == '"' && payload.back() == '"') {
+      payload = payload.substr(1U, payload.size() - 2U);
+    }
+    value = payload;
+    return true;
+  }
+
   bool validateMapMetadata(
     const std::filesystem::path & path, std::string & message) const
   {
@@ -891,15 +907,27 @@ private:
 
     bool have_resolution = false;
     double saved_resolution = 0.0;
+    std::string map_format;
+    std::string map_input_mode;
     std::string line;
     while (std::getline(in, line)) {
       const std::string stripped = trim(line);
       if (stripped.empty()) {
         continue;
       }
+      parseYamlScalarString(stripped, "map_format", map_format);
+      parseYamlScalarString(stripped, "map_input_mode", map_input_mode);
       if (parseYamlScalarDouble(stripped, "resolution_m", saved_resolution)) {
         have_resolution = true;
       }
+    }
+    if (map_format != "tgw_realtime_map_v1") {
+      message = "unsupported realtime map format in " + path.string() + ": " + map_format;
+      return false;
+    }
+    if (map_input_mode != "realtime_raycast") {
+      message = "unsupported map input mode in " + path.string() + ": " + map_input_mode;
+      return false;
     }
     if (!have_resolution) {
       message = "map metadata missing resolution_m: " + path.string();
