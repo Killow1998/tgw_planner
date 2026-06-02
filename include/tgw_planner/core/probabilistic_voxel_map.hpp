@@ -43,6 +43,7 @@ public:
 
   void updateHit(const GridIndex & idx, double stamp_sec, int view_id);
   void updateMiss(const GridIndex & idx, double stamp_sec, int view_id);
+  void setVoxelState(const GridIndex & idx, const VoxelState & state);
 
   bool isOccupied(const GridIndex & idx) const;
   bool isFree(const GridIndex & idx) const;

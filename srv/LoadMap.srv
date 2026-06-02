@@ -1,0 +1,9 @@
+string input_dir
+---
+bool success
+string message
+uint32 occupied_points
+uint32 free_points
+uint32 static_points
+uint32 dynamic_points
+uint32 blocked_points

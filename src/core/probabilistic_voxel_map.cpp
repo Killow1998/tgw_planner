@@ -76,6 +76,11 @@ void ProbabilisticVoxelMap::updateMiss(const GridIndex & idx, double stamp_sec, 
   refreshClassification(state);
 }
 
+void ProbabilisticVoxelMap::setVoxelState(const GridIndex & idx, const VoxelState & state)
+{
+  voxels_[idx] = state;
+}
+
 bool ProbabilisticVoxelMap::isOccupied(const GridIndex & idx) const
 {
   const VoxelState * state = lookup(idx);

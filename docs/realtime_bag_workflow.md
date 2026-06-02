@@ -56,6 +56,7 @@ Control services:
 - `/tgw_mapping/stop`
 - `/tgw_mapping/clear`
 - `/tgw_mapping/save_map` (`tgw_planner/srv/SaveMap`)
+- `/tgw_mapping/load_map` (`tgw_planner/srv/LoadMap`)
 - `/tgw_mapping/export_static_pcd` (`tgw_planner/srv/ExportStaticCloud`)
 
 Planning service:
@@ -139,12 +140,19 @@ ros2 service call /tgw_mapping/export_static_pcd tgw_planner/srv/ExportStaticClo
 
 ros2 service call /tgw_mapping/save_map tgw_planner/srv/SaveMap \
   "{output_dir: /tmp/tgw_realtime_map}"
+
+ros2 service call /tgw_mapping/load_map tgw_planner/srv/LoadMap \
+  "{input_dir: /tmp/tgw_realtime_map}"
 ```
 
 `save_map` writes `occupied_cloud.pcd`, `free_cloud.pcd`,
 `static_candidate_cloud.pcd`, `dynamic_suspect_cloud.pcd`,
 `blocked_cloud.pcd`, `blocked_regions.yaml`, and `stats.json`. The exported PCD
-intensity is the current occupancy probability for each voxel center.
+intensity is the current occupancy probability for each voxel center. `load_map`
+reconstructs the realtime probabilistic voxel layers from those PCD assets and
+restores `blocked_cloud.pcd` as explicit blocked cells. The region objects in
+`blocked_regions.yaml` are saved for operator review; the loaded hard
+constraints come from `blocked_cloud.pcd`.
 
 ## Verified Smoke
 

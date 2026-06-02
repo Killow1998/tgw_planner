@@ -8,6 +8,8 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -38,6 +40,7 @@
 #include "tgw_planner/core/surface_extractor.hpp"
 #include "tgw_planner/msg/planner_stats.hpp"
 #include "tgw_planner/srv/export_static_cloud.hpp"
+#include "tgw_planner/srv/load_map.hpp"
 #include "tgw_planner/srv/plan_path.hpp"
 #include "tgw_planner/srv/save_map.hpp"
 #include "tgw_planner/srv/set_blocked_region.hpp"
@@ -188,6 +191,9 @@ public:
     save_map_srv_ = create_service<tgw_planner::srv::SaveMap>(
       "/tgw_mapping/save_map",
       std::bind(&TgwRealtimeMappingNode::handleSaveMap, this, std::placeholders::_1, std::placeholders::_2));
+    load_map_srv_ = create_service<tgw_planner::srv::LoadMap>(
+      "/tgw_mapping/load_map",
+      std::bind(&TgwRealtimeMappingNode::handleLoadMap, this, std::placeholders::_1, std::placeholders::_2));
     export_static_cloud_srv_ = create_service<tgw_planner::srv::ExportStaticCloud>(
       "/tgw_mapping/export_static_pcd",
       std::bind(
@@ -545,6 +551,11 @@ private:
   void applyBlockedRegions(SurfaceMap & surface) const
   {
     surface.blocked_cells = collectBlockedCells(surface);
+    for (const GridIndex & cell : loaded_blocked_cells_) {
+      if (surface.traversable_cells.find(cell) != surface.traversable_cells.end()) {
+        surface.blocked_cells.insert(cell);
+      }
+    }
     for (const GridIndex & cell : surface.blocked_cells) {
       surface.traversable_cells.erase(cell);
       surface.forbidden_cells.insert(cell);
@@ -618,6 +629,97 @@ private:
       message = error.what();
       return false;
     }
+  }
+
+  struct LoadedPcdCells
+  {
+    std::vector<std::pair<GridIndex, float>> cells;
+    bool exists{false};
+  };
+
+  LoadedPcdCells loadPcdCells(const std::filesystem::path & path, std::string & message) const
+  {
+    LoadedPcdCells loaded;
+    if (!std::filesystem::exists(path)) {
+      return loaded;
+    }
+    loaded.exists = true;
+    pcl::PointCloud<pcl::PointXYZI> cloud;
+    if (pcl::io::loadPCDFile<pcl::PointXYZI>(path.string(), cloud) != 0) {
+      if (pcdDeclaresZeroPoints(path)) {
+        return loaded;
+      }
+      message = "failed to load PCD: " + path.string();
+      loaded.exists = false;
+      return loaded;
+    }
+    loaded.cells.reserve(cloud.size());
+    for (const auto & point : cloud) {
+      if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+        continue;
+      }
+      loaded.cells.emplace_back(
+        map_.worldToGrid({point.x, point.y, point.z}),
+        std::isfinite(point.intensity) ? point.intensity : 0.5F);
+    }
+    return loaded;
+  }
+
+  bool pcdDeclaresZeroPoints(const std::filesystem::path & path) const
+  {
+    std::ifstream in(path);
+    std::string line;
+    while (std::getline(in, line)) {
+      if (line == "POINTS 0" || line == "WIDTH 0") {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  float probabilityToLogOddsForLoad(float probability) const
+  {
+    const float p = std::clamp(probability, 1.0e-6F, 1.0F - 1.0e-6F);
+    return std::log(p / (1.0F - p));
+  }
+
+  tgw_planner::core::VoxelState makeLoadedVoxel(
+    float probability, bool occupied, bool free, bool static_candidate, bool dynamic_suspect) const
+  {
+    tgw_planner::core::VoxelState state;
+    state.log_odds = probabilityToLogOddsForLoad(probability);
+    state.occupied = occupied;
+    state.free = free;
+    state.static_candidate = static_candidate;
+    state.dynamic_suspect = dynamic_suspect;
+    state.hit_count = occupied ? static_cast<std::uint16_t>(
+      std::max(1, map_.options().min_static_hits)) : 0U;
+    state.miss_count = free ? 1U : 0U;
+    state.ray_pass_count = free ? 1U : 0U;
+    state.distinct_view_count = occupied ? static_cast<std::uint16_t>(
+      std::max(1, map_.options().min_distinct_views)) : 0U;
+    state.first_seen_time = 0.0;
+    state.last_seen_time = std::max(1.0, map_.options().min_static_lifetime_sec);
+    state.last_hit_time = occupied ? state.last_seen_time : 0.0;
+    state.last_miss_time = free ? state.last_seen_time : 0.0;
+    state.last_view_id = 0;
+    return state;
+  }
+
+  std::uint32_t loadLayer(
+    const LoadedPcdCells & loaded, bool occupied, bool free, bool static_candidate,
+    bool dynamic_suspect)
+  {
+    for (const auto & entry : loaded.cells) {
+      const float fallback_probability = occupied ? 0.90F : (free ? 0.10F : 0.50F);
+      const float probability = std::isfinite(entry.second) ?
+        std::clamp(entry.second, 1.0e-4F, 1.0F - 1.0e-4F) : fallback_probability;
+      map_.setVoxelState(
+        entry.first,
+        makeLoadedVoxel(
+          probability, occupied, free, static_candidate, dynamic_suspect));
+    }
+    return static_cast<std::uint32_t>(loaded.cells.size());
   }
 
   bool writeTextFile(
@@ -961,6 +1063,8 @@ private:
     std::shared_ptr<std_srvs::srv::Trigger::Response> response)
   {
     map_.clear();
+    blocked_regions_.clear();
+    loaded_blocked_cells_.clear();
     response->success = true;
     response->message = "realtime map cleared";
     publishStatsJson();
@@ -976,6 +1080,7 @@ private:
 
     if (operation == "clear") {
       blocked_regions_.clear();
+      loaded_blocked_cells_.clear();
       response->success = true;
       response->message = "cleared realtime blocked regions";
       response->affected_cells = static_cast<std::uint32_t>(before_count);
@@ -1008,6 +1113,14 @@ private:
           blocked_regions_.begin(), blocked_regions_.end(),
           [&](const BlockedRegion & existing) {return regionsIntersect(existing, region);}),
         blocked_regions_.end());
+      for (auto it = loaded_blocked_cells_.begin(); it != loaded_blocked_cells_.end(); ) {
+        const Point3 point = map_.gridToWorld(*it);
+        if (pointInsideRegion(point, region)) {
+          it = loaded_blocked_cells_.erase(it);
+        } else {
+          ++it;
+        }
+      }
       const SurfaceMap after_surface = extractSurfaceWithBlocked();
       response->success = true;
       response->message =
@@ -1042,6 +1155,57 @@ private:
     response->success = true;
     response->message = "exported static candidate cloud to " + output.string();
     response->saved_points = static_cast<std::uint32_t>(static_cells.size());
+  }
+
+  void handleLoadMap(
+    const std::shared_ptr<tgw_planner::srv::LoadMap::Request> request,
+    std::shared_ptr<tgw_planner::srv::LoadMap::Response> response)
+  {
+    const std::filesystem::path input_dir =
+      request->input_dir.empty() ? std::filesystem::path{"./tgw_realtime_map"} :
+      std::filesystem::path{request->input_dir};
+    const std::filesystem::path occupied_path = input_dir / "occupied_cloud.pcd";
+    const std::filesystem::path free_path = input_dir / "free_cloud.pcd";
+    const std::filesystem::path static_path = input_dir / "static_candidate_cloud.pcd";
+    const std::filesystem::path dynamic_path = input_dir / "dynamic_suspect_cloud.pcd";
+    const std::filesystem::path blocked_path = input_dir / "blocked_cloud.pcd";
+
+    std::string message;
+    const LoadedPcdCells occupied_cells = loadPcdCells(occupied_path, message);
+    if (!message.empty()) {
+      response->success = false;
+      response->message = message;
+      return;
+    }
+    if (!occupied_cells.exists) {
+      response->success = false;
+      response->message = "missing required map asset: " + occupied_path.string();
+      return;
+    }
+    const LoadedPcdCells free_cells = loadPcdCells(free_path, message);
+    const LoadedPcdCells static_cells = loadPcdCells(static_path, message);
+    const LoadedPcdCells dynamic_cells = loadPcdCells(dynamic_path, message);
+    const LoadedPcdCells blocked_cells = loadPcdCells(blocked_path, message);
+    if (!message.empty()) {
+      response->success = false;
+      response->message = message;
+      return;
+    }
+
+    map_.clear();
+    blocked_regions_.clear();
+    loaded_blocked_cells_.clear();
+    response->free_points = loadLayer(free_cells, false, true, false, false);
+    response->occupied_points = loadLayer(occupied_cells, true, false, false, false);
+    response->static_points = loadLayer(static_cells, true, false, true, false);
+    response->dynamic_points = loadLayer(dynamic_cells, true, false, false, true);
+    for (const auto & entry : blocked_cells.cells) {
+      loaded_blocked_cells_.insert(entry.first);
+    }
+    response->blocked_points = static_cast<std::uint32_t>(loaded_blocked_cells_.size());
+    response->success = true;
+    response->message = "loaded realtime map package from " + input_dir.string();
+    publishSnapshot();
   }
 
   void handleSaveMap(
@@ -1127,6 +1291,7 @@ private:
   double medial_axis_min_clearance_m_{0.20};
   int view_id_{0};
   std::vector<BlockedRegion> blocked_regions_;
+  std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> loaded_blocked_cells_;
 
   bool latest_pose_valid_{false};
   double latest_pose_stamp_sec_{0.0};
@@ -1158,6 +1323,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_srv_;
   rclcpp::Service<tgw_planner::srv::SaveMap>::SharedPtr save_map_srv_;
+  rclcpp::Service<tgw_planner::srv::LoadMap>::SharedPtr load_map_srv_;
   rclcpp::Service<tgw_planner::srv::ExportStaticCloud>::SharedPtr export_static_cloud_srv_;
   rclcpp::Service<tgw_planner::srv::PlanPath>::SharedPtr plan_srv_;
   rclcpp::Service<tgw_planner::srv::SetBlockedRegion>::SharedPtr set_blocked_region_srv_;
