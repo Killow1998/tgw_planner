@@ -63,6 +63,25 @@ struct QueueCompare
   }
 };
 
+struct ComponentDiagnostics
+{
+  std::size_t component_count{0U};
+  std::size_t largest_component_size{0U};
+  int start_component{-1};
+  int goal_component{-1};
+  std::size_t start_component_size{0U};
+  std::size_t goal_component_size{0U};
+  double start_goal_component_gap_m{0.0};
+  Node gap_start_node;
+  Node gap_goal_node;
+  double gap_start_ground_m{0.0};
+  double gap_goal_ground_m{0.0};
+  double gap_start_cost{0.0};
+  double gap_goal_cost{0.0};
+  int gap_start_gateway{0};
+  int gap_goal_gateway{0};
+};
+
 double argDouble(char ** argv, int index)
 {
   return std::strtod(argv[index], nullptr);
@@ -260,6 +279,107 @@ public:
       std::count_if(gateway_.begin(), gateway_.end(), [](int gateway) {return gateway != 0;}));
   }
 
+  ComponentDiagnostics componentDiagnostics(const Node & start, const Node & goal) const
+  {
+    ComponentDiagnostics diagnostics;
+    std::unordered_set<Node, NodeHash> unvisited;
+    unvisited.reserve(traversableCount());
+    for (int layer = 0; layer < nlayers_; ++layer) {
+      for (int y = 0; y < ny_; ++y) {
+        for (int x = 0; x < nx_; ++x) {
+          const Node node{layer, x, y};
+          if (traversable(node)) {
+            unvisited.insert(node);
+          }
+        }
+      }
+    }
+
+    std::vector<std::vector<Node>> components;
+    while (!unvisited.empty()) {
+      const Node seed = *unvisited.begin();
+      unvisited.erase(seed);
+      std::vector<Node> component;
+      std::queue<Node> queue;
+      queue.push(seed);
+      component.push_back(seed);
+      while (!queue.empty()) {
+        const Node current = queue.front();
+        queue.pop();
+        for (const Node & neighbor : neighbors(current)) {
+          const auto it = unvisited.find(neighbor);
+          if (it == unvisited.end()) {
+            continue;
+          }
+          queue.push(neighbor);
+          component.push_back(neighbor);
+          unvisited.erase(it);
+        }
+      }
+      diagnostics.largest_component_size =
+        std::max(diagnostics.largest_component_size, component.size());
+      components.push_back(std::move(component));
+    }
+    diagnostics.component_count = components.size();
+
+    auto component_index = [&](const Node & node) {
+      for (std::size_t i = 0; i < components.size(); ++i) {
+        if (std::find(components[i].begin(), components[i].end(), node) != components[i].end()) {
+          return static_cast<int>(i);
+        }
+      }
+      return -1;
+    };
+    diagnostics.start_component = component_index(start);
+    diagnostics.goal_component = component_index(goal);
+    if (diagnostics.start_component >= 0) {
+      diagnostics.start_component_size =
+        components[static_cast<std::size_t>(diagnostics.start_component)].size();
+    }
+    if (diagnostics.goal_component >= 0) {
+      diagnostics.goal_component_size =
+        components[static_cast<std::size_t>(diagnostics.goal_component)].size();
+    }
+    if (diagnostics.start_component < 0 || diagnostics.goal_component < 0) {
+      return diagnostics;
+    }
+    if (diagnostics.start_component == diagnostics.goal_component) {
+      diagnostics.start_goal_component_gap_m = 0.0;
+      diagnostics.gap_start_node = start;
+      diagnostics.gap_goal_node = goal;
+    } else {
+      const auto & start_component =
+        components[static_cast<std::size_t>(diagnostics.start_component)];
+      const auto & goal_component =
+        components[static_cast<std::size_t>(diagnostics.goal_component)];
+      double best_distance = std::numeric_limits<double>::infinity();
+      for (const Node & a : start_component) {
+        const Point3 aw = nodeWorld(a);
+        for (const Node & b : goal_component) {
+          const Point3 bw = nodeWorld(b);
+          const double distance = std::sqrt(
+            (aw.x - bw.x) * (aw.x - bw.x) + (aw.y - bw.y) * (aw.y - bw.y) +
+            (aw.z - bw.z) * (aw.z - bw.z));
+          if (distance < best_distance) {
+            best_distance = distance;
+            diagnostics.gap_start_node = a;
+            diagnostics.gap_goal_node = b;
+          }
+        }
+      }
+      diagnostics.start_goal_component_gap_m =
+        std::isfinite(best_distance) ? best_distance : 0.0;
+    }
+
+    diagnostics.gap_start_ground_m = groundAt(diagnostics.gap_start_node);
+    diagnostics.gap_goal_ground_m = groundAt(diagnostics.gap_goal_node);
+    diagnostics.gap_start_cost = costAt(diagnostics.gap_start_node);
+    diagnostics.gap_goal_cost = costAt(diagnostics.gap_goal_node);
+    diagnostics.gap_start_gateway = gatewayAt(diagnostics.gap_start_node);
+    diagnostics.gap_goal_gateway = gatewayAt(diagnostics.gap_goal_node);
+    return diagnostics;
+  }
+
 private:
   std::size_t size() const
   {
@@ -300,6 +420,21 @@ private:
   {
     return inside(node.x, node.y) && node.layer >= 0 && node.layer < nlayers_ &&
            cost_[index(node.layer, node.x, node.y)] < kBarrierCost;
+  }
+
+  double groundAt(const Node & node) const
+  {
+    return ground_[index(node.layer, node.x, node.y)];
+  }
+
+  double costAt(const Node & node) const
+  {
+    return cost_[index(node.layer, node.x, node.y)];
+  }
+
+  int gatewayAt(const Node & node) const
+  {
+    return gateway_[index(node.layer, node.x, node.y)];
   }
 
   Point3 nodeWorld(const Node & node) const
@@ -614,12 +749,31 @@ int main(int argc, char ** argv)
   std::vector<Node> path;
   std::uint32_t expanded = 0U;
   const bool success = tomogram.plan(snapped_start, snapped_goal, path, expanded);
+  const ComponentDiagnostics components =
+    tomogram.componentDiagnostics(snapped_start, snapped_goal);
   std::cout << "success=" << (success ? "true" : "false")
     << " source_points=" << cloud.size()
     << " tomogram_grid=[" << tomogram.nx() << "," << tomogram.ny() << "," <<
       tomogram.nlayers() << "]"
     << " traversable_cells=" << tomogram.traversableCount()
     << " gateway_cells=" << tomogram.gatewayCount()
+    << " component_count=" << components.component_count
+    << " largest_component_size=" << components.largest_component_size
+    << " start_component=" << components.start_component
+    << " goal_component=" << components.goal_component
+    << " start_component_size=" << components.start_component_size
+    << " goal_component_size=" << components.goal_component_size
+    << " start_goal_component_gap_m=" << components.start_goal_component_gap_m
+    << " gap_start_node=[" << components.gap_start_node.layer << "," <<
+      components.gap_start_node.x << "," << components.gap_start_node.y << "]"
+    << " gap_goal_node=[" << components.gap_goal_node.layer << "," <<
+      components.gap_goal_node.x << "," << components.gap_goal_node.y << "]"
+    << " gap_start_ground_m=" << components.gap_start_ground_m
+    << " gap_goal_ground_m=" << components.gap_goal_ground_m
+    << " gap_start_cost=" << components.gap_start_cost
+    << " gap_goal_cost=" << components.gap_goal_cost
+    << " gap_start_gateway=" << components.gap_start_gateway
+    << " gap_goal_gateway=" << components.gap_goal_gateway
     << " start_snap_distance_m=" << start_snap
     << " goal_snap_distance_m=" << goal_snap
     << " start_node=[" << snapped_start.layer << "," << snapped_start.x << "," <<

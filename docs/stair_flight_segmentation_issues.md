@@ -275,6 +275,32 @@ goal_node=[1,182,141]
 expanded_nodes=55837
 ```
 
+On 2026-06-03, the tomogram probe was extended with connected-component
+diagnostics. `spiral0.3_2.pcd` still fails because the snapped endpoints are in
+different tomogram components, and the nearest component gap is not a simple
+single-cell obstacle:
+
+```text
+component_count=1958
+largest_component_size=36521
+start_component=997
+goal_component=1269
+start_component_size=36521
+goal_component_size=34043
+start_goal_component_gap_m=1.09545
+gap_start_node=[3,204,182]
+gap_goal_node=[0,199,184]
+gap_start_cost=0
+gap_goal_cost=0
+gap_start_gateway=0
+gap_goal_gateway=0
+```
+
+The same simplified tomogram probe also splits `building2_9.pcd`, even though
+the realtime/surface PCD planner succeeds on that map. This confirms that
+`tgw_tomogram_pcd_smoke` is currently a diagnostic probe, not an acceptance
+path for PCT maps.
+
 The useful conclusion is negative but concrete: PCT's result is not reproduced
 by only adding slices, layer simplification, and gateway-aware A*. Their
 planner also uses inflated cost fields, traversability gradients, and unsafe
