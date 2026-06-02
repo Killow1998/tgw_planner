@@ -44,6 +44,30 @@ double pointDistance3d(const Point3 & a, const Point3 & b)
 
 }  // namespace
 
+double Vec2::norm() const
+{
+  return std::hypot(x, y);
+}
+
+Vec2 Vec2::normalized() const
+{
+  const double n = norm();
+  if (n <= 1.0e-9) {
+    return {};
+  }
+  return {x / n, y / n};
+}
+
+double Vec2::dot(const Vec2 & other) const
+{
+  return x * other.x + y * other.y;
+}
+
+Vec2 Vec2::perpendicular() const
+{
+  return {-y, x};
+}
+
 bool NavigationMap::loadFromPcd(
   const std::string & pcd_file, double requested_resolution_m, double robot_radius_m,
   double robot_height_m, const std::string & map_frame, const std::string & map_id,
@@ -87,9 +111,15 @@ bool NavigationMap::loadFromPcd(
   rejected_ceiling_cells_.clear();
   rejected_clearance_cells_.clear();
   rejected_collision_cells_.clear();
+  rejected_stair_noise_cells_.clear();
+  floor_components_.clear();
+  landing_components_.clear();
+  stair_flights_.clear();
+  stair_cell_info_.clear();
   stair_slopes_.clear();
   stair_segment_by_cell_.clear();
   stair_segments_.clear();
+  stair_flight_diagnostics_ = StairFlightDiagnostics{};
   blocked_cells_.clear();
   risk_cost_.clear();
   columns_.clear();
@@ -567,6 +597,90 @@ bool NavigationMap::isStairTraversable(const GridIndex & idx) const
   return accepted_stair_cells_.find(idx) != accepted_stair_cells_.end() && !isBlocked(idx);
 }
 
+int NavigationMap::stairFlightId(const GridIndex & cell) const
+{
+  const auto it = stair_cell_info_.find(cell);
+  return it == stair_cell_info_.end() ? -1 : it->second.stair_flight_id;
+}
+
+bool NavigationMap::isStairCell(const GridIndex & cell) const
+{
+  return isStairTraversable(cell);
+}
+
+bool NavigationMap::isFloorOrLandingCell(const GridIndex & cell) const
+{
+  return accepted_floor_cells_.find(cell) != accepted_floor_cells_.end() && !isBlocked(cell);
+}
+
+bool NavigationMap::isInsideStairSafeCorridor(
+  const GridIndex & cell, int stair_flight_id) const
+{
+  if (stair_flight_id < 0 ||
+    static_cast<std::size_t>(stair_flight_id) >= stair_flights_.size())
+  {
+    return false;
+  }
+  const auto info_it = stair_cell_info_.find(cell);
+  if (info_it == stair_cell_info_.end() || info_it->second.stair_flight_id != stair_flight_id) {
+    return false;
+  }
+  const auto & flight = stair_flights_[stair_flight_id];
+  return info_it->second.lateral_error_m <= flight.safe_half_width_m + 1.0e-9;
+}
+
+double NavigationMap::lateralDistanceToStairCenterline(
+  const GridIndex & cell, int stair_flight_id) const
+{
+  if (stair_flight_id < 0 ||
+    static_cast<std::size_t>(stair_flight_id) >= stair_flights_.size())
+  {
+    return std::numeric_limits<double>::infinity();
+  }
+  const auto info_it = stair_cell_info_.find(cell);
+  if (info_it == stair_cell_info_.end() || info_it->second.stair_flight_id != stair_flight_id) {
+    return std::numeric_limits<double>::infinity();
+  }
+  return info_it->second.lateral_error_m;
+}
+
+bool NavigationMap::isNearFlightEndpoint(
+  const GridIndex & cell, const StairFlight & flight, const Point3 & endpoint) const
+{
+  (void)flight;
+  const Point3 point = gridToWorld(cell);
+  const double portal_radius_m =
+    std::max({0.45, 2.0 * robot_width_m_, 3.0 * resolution_m_});
+  return pointDistance3d(point, endpoint) <= portal_radius_m;
+}
+
+bool NavigationMap::isNearLowPortal(const GridIndex & cell, int stair_flight_id) const
+{
+  if (stair_flight_id < 0 ||
+    static_cast<std::size_t>(stair_flight_id) >= stair_flights_.size())
+  {
+    return false;
+  }
+  return isNearFlightEndpoint(cell, stair_flights_[stair_flight_id],
+    stair_flights_[stair_flight_id].low_endpoint);
+}
+
+bool NavigationMap::isNearHighPortal(const GridIndex & cell, int stair_flight_id) const
+{
+  if (stair_flight_id < 0 ||
+    static_cast<std::size_t>(stair_flight_id) >= stair_flights_.size())
+  {
+    return false;
+  }
+  return isNearFlightEndpoint(cell, stair_flights_[stair_flight_id],
+    stair_flights_[stair_flight_id].high_endpoint);
+}
+
+bool NavigationMap::isNearStairPortal(const GridIndex & cell, int stair_flight_id) const
+{
+  return isNearLowPortal(cell, stair_flight_id) || isNearHighPortal(cell, stair_flight_id);
+}
+
 bool NavigationMap::hasContinuousSupport(const GridIndex & idx) const
 {
   int support_count = 0;
@@ -822,6 +936,7 @@ void NavigationMap::rebuildStairSegments()
   stair_slopes_.clear();
   stair_segment_by_cell_.clear();
   stair_segments_.clear();
+  stair_flight_diagnostics_ = StairFlightDiagnostics{};
   if (accepted_stair_cells_.empty()) {
     return;
   }
@@ -954,7 +1069,9 @@ void NavigationMap::rebuildStairSegments()
     segment.spiral_like =
       average_slope_norm < 0.65 && comparable_edges > 0 && turning_edges * 4 > comparable_edges;
 
+    ++stair_flight_diagnostics_.raw_segments;
     if (!isStairFlightWideEnough(segment)) {
+      ++stair_flight_diagnostics_.segment_width_rejected;
       continue;
     }
 
@@ -1041,36 +1158,81 @@ bool NavigationMap::isStairTransitionAllowed(const GridIndex & from, const GridI
     return true;
   }
 
-  const int center_side_cells =
-    std::max(1, static_cast<int>(std::ceil(0.5 * robot_width_m_ / resolution_m_)));
   if (from_stair != to_stair) {
     const GridIndex stair_cell = from_stair ? from : to;
+    const GridIndex floor_cell = from_stair ? to : from;
+    const int flight_id = stairFlightId(stair_cell);
+    if (flight_id < 0) {
+      return false;
+    }
+    if (!isInsideStairSafeCorridor(stair_cell, flight_id)) {
+      return false;
+    }
+    if (isNearStairPortal(stair_cell, flight_id) || isNearStairPortal(floor_cell, flight_id)) {
+      return true;
+    }
+    const int center_side_cells =
+      std::max(1, static_cast<int>(std::ceil(0.5 * robot_width_m_ / resolution_m_)));
     return isStairEndpointCell(stair_cell) && isStairCenterCell(stair_cell, center_side_cells);
   }
 
-  if (!isStairSameHeightTransferAllowed(from, to)) {
+  const int from_flight = stairFlightId(from);
+  const int to_flight = stairFlightId(to);
+  if (from_flight < 0 || to_flight < 0) {
+    return false;
+  }
+  if (from_flight != to_flight) {
+    const auto & from_info = stair_flights_[from_flight];
+    const auto & to_info = stair_flights_[to_flight];
+    const bool shared_component =
+      (from_info.low_component_id >= 0 &&
+      (from_info.low_component_id == to_info.low_component_id ||
+      from_info.low_component_id == to_info.high_component_id)) ||
+      (from_info.high_component_id >= 0 &&
+      (from_info.high_component_id == to_info.low_component_id ||
+      from_info.high_component_id == to_info.high_component_id));
+    return shared_component && isNearStairPortal(from, from_flight) &&
+           isNearStairPortal(to, to_flight);
+  }
+  if (!isInsideStairSafeCorridor(from, from_flight) ||
+    !isInsideStairSafeCorridor(to, to_flight))
+  {
     return false;
   }
 
-  const int from_segment = stairSegmentId(from);
-  const int to_segment = stairSegmentId(to);
-  if (from_segment >= 0 && to_segment >= 0) {
-    return from_segment == to_segment || isStairSegmentBridgeAllowed(from, to);
-  }
-
-  int from_axis_x = 0;
-  int from_axis_y = 0;
-  int to_axis_x = 0;
-  int to_axis_y = 0;
-  if (!stairAxis(from, from_axis_x, from_axis_y) || !stairAxis(to, to_axis_x, to_axis_y)) {
-    return true;
-  }
-  const bool compatible_axis = from_axis_x == to_axis_x && from_axis_y == to_axis_y;
-  if (!compatible_axis && from.z != to.z && !isStairCenterCell(from, 1) && !isStairCenterCell(to, 1)) {
+  const auto & flight = stair_flights_[from_flight];
+  const double move_x = static_cast<double>(to.x - from.x) * resolution_m_;
+  const double move_y = static_cast<double>(to.y - from.y) * resolution_m_;
+  const double move_norm = std::hypot(move_x, move_y);
+  if (move_norm <= 1.0e-9) {
     return false;
   }
 
-  return stairCellsSlopeCompatible(from, to);
+  const auto from_info_it = stair_cell_info_.find(from);
+  const auto to_info_it = stair_cell_info_.find(to);
+  if (from_info_it == stair_cell_info_.end() || to_info_it == stair_cell_info_.end()) {
+    return false;
+  }
+
+  const double along = (move_x / move_norm) * flight.uphill_axis.x +
+    (move_y / move_norm) * flight.uphill_axis.y;
+  const double lateral_delta =
+    std::abs(to_info_it->second.lateral_t - from_info_it->second.lateral_t);
+  const double lateral_limit = std::max(0.25, 0.65 * robot_width_m_);
+  if (lateral_delta > lateral_limit) {
+    return false;
+  }
+
+  const int dz = to.z - from.z;
+  if (dz != 0) {
+    const double vertical_direction = dz > 0 ? 1.0 : -1.0;
+    return vertical_direction * along >= 0.25;
+  }
+
+  const double from_error = from_info_it->second.lateral_error_m;
+  const double to_error = to_info_it->second.lateral_error_m;
+  const bool centering_move = to_error <= from_error + 0.05 && std::abs(along) < 0.55;
+  return std::abs(along) >= 0.25 || centering_move;
 }
 
 bool NavigationMap::isStairCenterCell(const GridIndex & idx, int min_side_cells) const
@@ -1164,8 +1326,611 @@ bool NavigationMap::isStairFlightWideEnough(const StairSegmentInfo & segment) co
   return wide_cells >= min_supported_cells && center_cells >= min_supported_cells;
 }
 
+void NavigationMap::rebuildFloorComponents()
+{
+  floor_components_.clear();
+  landing_components_.clear();
+  if (accepted_floor_cells_.empty()) {
+    return;
+  }
+
+  const int flat_z_tolerance =
+    std::max(1, static_cast<int>(std::ceil(0.25 / resolution_m_)));
+  std::unordered_set<GridIndex, GridIndexHash> visited;
+  visited.reserve(accepted_floor_cells_.size());
+
+  for (const auto & seed : accepted_floor_cells_) {
+    if (visited.find(seed) != visited.end()) {
+      continue;
+    }
+
+    FloorComponent component;
+    component.id = static_cast<int>(floor_components_.size());
+    component.min_idx = seed;
+    component.max_idx = seed;
+
+    std::deque<GridIndex> queue;
+    visited.insert(seed);
+    queue.push_back(seed);
+    Point3 sum;
+    double z_sum = 0.0;
+
+    while (!queue.empty()) {
+      const GridIndex current = queue.front();
+      queue.pop_front();
+      component.cells.push_back(current);
+      component.min_idx.x = std::min(component.min_idx.x, current.x);
+      component.min_idx.y = std::min(component.min_idx.y, current.y);
+      component.min_idx.z = std::min(component.min_idx.z, current.z);
+      component.max_idx.x = std::max(component.max_idx.x, current.x);
+      component.max_idx.y = std::max(component.max_idx.y, current.y);
+      component.max_idx.z = std::max(component.max_idx.z, current.z);
+
+      const Point3 point = gridToWorld(current);
+      sum.x += point.x;
+      sum.y += point.y;
+      sum.z += point.z;
+      z_sum += point.z;
+
+      for (int dx = -1; dx <= 1; ++dx) {
+        for (int dy = -1; dy <= 1; ++dy) {
+          if (dx == 0 && dy == 0) {
+            continue;
+          }
+          for (int dz = -flat_z_tolerance; dz <= flat_z_tolerance; ++dz) {
+            const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
+            if (accepted_floor_cells_.find(neighbor) == accepted_floor_cells_.end() ||
+              visited.find(neighbor) != visited.end())
+            {
+              continue;
+            }
+            visited.insert(neighbor);
+            queue.push_back(neighbor);
+          }
+        }
+      }
+    }
+
+    if (component.cells.empty()) {
+      continue;
+    }
+    const double scale = 1.0 / static_cast<double>(component.cells.size());
+    component.centroid = {sum.x * scale, sum.y * scale, sum.z * scale};
+    component.mean_z = z_sum * scale;
+    component.min_z = gridToWorld(component.min_idx).z;
+    component.max_z = gridToWorld(component.max_idx).z;
+
+    bool near_stair = false;
+    const int stair_radius_cells = std::max(2, maxStepCells());
+    for (const auto & cell : component.cells) {
+      for (int dx = -stair_radius_cells; dx <= stair_radius_cells && !near_stair; ++dx) {
+        for (int dy = -stair_radius_cells; dy <= stair_radius_cells && !near_stair; ++dy) {
+          for (int dz = -maxStepCells(); dz <= maxStepCells(); ++dz) {
+            if (accepted_stair_cells_.find({cell.x + dx, cell.y + dy, cell.z + dz}) !=
+              accepted_stair_cells_.end())
+            {
+              near_stair = true;
+              break;
+            }
+          }
+        }
+      }
+      if (near_stair) {
+        break;
+      }
+    }
+
+    component.is_landing =
+      near_stair && component.cells.size() < std::max<std::size_t>(
+        80U, static_cast<std::size_t>(std::ceil(80.0 / (resolution_m_ * resolution_m_))));
+    floor_components_.push_back(component);
+    if (component.is_landing) {
+      landing_components_.push_back(component);
+    }
+  }
+}
+
+int NavigationMap::nearestFloorComponent(const Point3 & point, double max_distance_m) const
+{
+  int best_id = -1;
+  double best_distance = max_distance_m;
+  for (const auto & component : floor_components_) {
+    for (const auto & cell : component.cells) {
+      const Point3 cell_point = gridToWorld(cell);
+      const double dz = std::abs(cell_point.z - point.z);
+      if (dz > std::max(0.45, 3.0 * resolution_m_)) {
+        continue;
+      }
+      const double distance = pointDistance3d(point, cell_point);
+      if (distance < best_distance) {
+        best_distance = distance;
+        best_id = component.id;
+      }
+    }
+  }
+  return best_id;
+}
+
+bool NavigationMap::hasFloorBetween(const Point3 & a, const Point3 & b) const
+{
+  constexpr int samples = 12;
+  for (int i = 2; i < samples - 2; ++i) {
+    const double ratio = static_cast<double>(i) / static_cast<double>(samples - 1);
+    const Point3 point{
+      a.x + (b.x - a.x) * ratio,
+      a.y + (b.y - a.y) * ratio,
+      a.z + (b.z - a.z) * ratio};
+    const GridIndex center = worldToGrid(point);
+    for (int dx = -1; dx <= 1; ++dx) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dz = -1; dz <= 1; ++dz) {
+          if (accepted_floor_cells_.find({center.x + dx, center.y + dy, center.z + dz}) !=
+            accepted_floor_cells_.end())
+          {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+bool NavigationMap::fitStairFlightFromSegment(
+  const StairSegmentInfo & segment, StairFlight & flight,
+  StairFlightRejectReason * reject_reason) const
+{
+  auto reject = [&](StairFlightRejectReason reason) {
+    if (reject_reason != nullptr) {
+      *reject_reason = reason;
+    }
+    return false;
+  };
+  if (reject_reason != nullptr) {
+    *reject_reason = StairFlightRejectReason::None;
+  }
+
+  if (segment.cells.size() < 8U) {
+    return reject(StairFlightRejectReason::TooFewCells);
+  }
+
+  Vec2 axis_sum;
+  for (const auto & cell : segment.cells) {
+    double slope_x = 0.0;
+    double slope_y = 0.0;
+    if (stairSlope(cell, slope_x, slope_y)) {
+      axis_sum.x += slope_x;
+      axis_sum.y += slope_y;
+    }
+  }
+
+  Vec2 uphill = axis_sum.normalized();
+  if (uphill.norm() <= 1.0e-9) {
+    Point3 centroid;
+    for (const auto & cell : segment.cells) {
+      const Point3 point = gridToWorld(cell);
+      centroid.x += point.x;
+      centroid.y += point.y;
+      centroid.z += point.z;
+    }
+    const double inv_count = 1.0 / static_cast<double>(segment.cells.size());
+    centroid.x *= inv_count;
+    centroid.y *= inv_count;
+    centroid.z *= inv_count;
+
+    double cxx = 0.0;
+    double cxy = 0.0;
+    double cyy = 0.0;
+    double sxz = 0.0;
+    double syz = 0.0;
+    for (const auto & cell : segment.cells) {
+      const Point3 point = gridToWorld(cell);
+      const double x = point.x - centroid.x;
+      const double y = point.y - centroid.y;
+      const double z = point.z - centroid.z;
+      cxx += x * x;
+      cxy += x * y;
+      cyy += y * y;
+      sxz += x * z;
+      syz += y * z;
+    }
+    const double angle = 0.5 * std::atan2(2.0 * cxy, cxx - cyy);
+    uphill = Vec2{std::cos(angle), std::sin(angle)}.normalized();
+    if (uphill.x * sxz + uphill.y * syz < 0.0) {
+      uphill.x = -uphill.x;
+      uphill.y = -uphill.y;
+    }
+  }
+  if (uphill.norm() <= 1.0e-9) {
+    return reject(StairFlightRejectReason::NoAxis);
+  }
+
+  Vec2 side = uphill.perpendicular();
+  struct Projection
+  {
+    GridIndex cell;
+    Point3 point;
+    double s{0.0};
+    double t{0.0};
+  };
+
+  std::vector<Projection> projections;
+  projections.reserve(segment.cells.size());
+  double s_min = 0.0;
+  double s_max = 0.0;
+  double t_min = 0.0;
+  double t_max = 0.0;
+  double z_min = 0.0;
+  double z_max = 0.0;
+
+  auto rebuild_projections = [&]() {
+    projections.clear();
+    s_min = std::numeric_limits<double>::infinity();
+    s_max = -std::numeric_limits<double>::infinity();
+    t_min = std::numeric_limits<double>::infinity();
+    t_max = -std::numeric_limits<double>::infinity();
+    z_min = std::numeric_limits<double>::infinity();
+    z_max = -std::numeric_limits<double>::infinity();
+    for (const auto & cell : segment.cells) {
+      const Point3 point = gridToWorld(cell);
+      const double s = point.x * uphill.x + point.y * uphill.y;
+      const double t = point.x * side.x + point.y * side.y;
+      projections.push_back({cell, point, s, t});
+      s_min = std::min(s_min, s);
+      s_max = std::max(s_max, s);
+      t_min = std::min(t_min, t);
+      t_max = std::max(t_max, t);
+      z_min = std::min(z_min, point.z);
+      z_max = std::max(z_max, point.z);
+    }
+  };
+  rebuild_projections();
+
+  const double length_m = s_max - s_min;
+  const double height_m = z_max - z_min;
+  const double min_flight_height_m = std::max(0.45, 4.0 * resolution_m_);
+  const double min_flight_length_m = std::max(0.60, robot_length_m_);
+  if (length_m < min_flight_length_m || height_m < min_flight_height_m) {
+    return reject(StairFlightRejectReason::TooShortOrLow);
+  }
+
+  double low_z_sum = 0.0;
+  double high_z_sum = 0.0;
+  std::size_t low_z_count = 0U;
+  std::size_t high_z_count = 0U;
+  const double terminal_s_window = std::max(2.0 * resolution_m_, 0.20 * length_m);
+  for (const auto & p : projections) {
+    if (p.s <= s_min + terminal_s_window) {
+      low_z_sum += p.point.z;
+      ++low_z_count;
+    }
+    if (p.s >= s_max - terminal_s_window) {
+      high_z_sum += p.point.z;
+      ++high_z_count;
+    }
+  }
+  if (low_z_count > 0U && high_z_count > 0U &&
+    high_z_sum / static_cast<double>(high_z_count) <
+    low_z_sum / static_cast<double>(low_z_count))
+  {
+    uphill.x = -uphill.x;
+    uphill.y = -uphill.y;
+    side = uphill.perpendicular();
+    rebuild_projections();
+  }
+
+  double s_mean = 0.0;
+  double z_mean = 0.0;
+  for (const auto & p : projections) {
+    s_mean += p.s;
+    z_mean += p.point.z;
+  }
+  s_mean /= static_cast<double>(projections.size());
+  z_mean /= static_cast<double>(projections.size());
+
+  double s_var = 0.0;
+  double sz_cov = 0.0;
+  for (const auto & p : projections) {
+    const double ds = p.s - s_mean;
+    s_var += ds * ds;
+    sz_cov += ds * (p.point.z - z_mean);
+  }
+  if (s_var <= 1.0e-9) {
+    return reject(StairFlightRejectReason::NoAxis);
+  }
+  const double slope = sz_cov / s_var;
+  if (slope < 0.0) {
+    return reject(StairFlightRejectReason::NegativeSlope);
+  }
+  const double abs_slope = std::abs(slope);
+  if (abs_slope < 0.30 || abs_slope > 1.65) {
+    return reject(StairFlightRejectReason::SlopeOutOfRange);
+  }
+
+  double residual_sum = 0.0;
+  int monotonic_edges = 0;
+  int nonmonotonic_edges = 0;
+  const double intercept = z_mean - slope * s_mean;
+  for (const auto & p : projections) {
+    const double dz = p.point.z - (slope * p.s + intercept);
+    residual_sum += dz * dz;
+  }
+  const double rms_residual =
+    std::sqrt(residual_sum / static_cast<double>(projections.size()));
+  if (rms_residual > std::max(0.35, 3.5 * resolution_m_)) {
+    return reject(StairFlightRejectReason::ResidualTooHigh);
+  }
+
+  for (const auto & a : projections) {
+    for (const auto & b : projections) {
+      const double ds = b.s - a.s;
+      if (std::abs(ds) < resolution_m_ || std::abs(ds) > 2.5 * resolution_m_) {
+        continue;
+      }
+      const double dz = b.point.z - a.point.z;
+      if (ds * dz >= -resolution_m_) {
+        ++monotonic_edges;
+      } else {
+        ++nonmonotonic_edges;
+      }
+    }
+  }
+  if (monotonic_edges > 0 && nonmonotonic_edges * 4 > monotonic_edges) {
+    return reject(StairFlightRejectReason::NonMonotonic);
+  }
+
+  std::vector<double> t_values;
+  t_values.reserve(projections.size());
+  for (const auto & p : projections) {
+    t_values.push_back(p.t);
+  }
+  std::sort(t_values.begin(), t_values.end());
+  const auto percentile = [&](double q) {
+    const std::size_t index = static_cast<std::size_t>(
+      clampValue(q, 0.0, 1.0) * static_cast<double>(t_values.size() - 1U));
+    return t_values[index];
+  };
+  const double t_low = percentile(0.05);
+  const double t_high = percentile(0.95);
+  const double width_m = std::max(0.0, t_high - t_low + resolution_m_);
+  const double safety_margin_m = std::max(0.25, 0.5 * resolution_m_);
+  if (width_m < robot_width_m_ + safety_margin_m) {
+    return reject(StairFlightRejectReason::TooNarrow);
+  }
+
+  const double safe_half_width_m =
+    std::max(0.5 * resolution_m_, 0.5 * width_m - 0.5 * robot_width_m_ - safety_margin_m);
+  const double center_t = 0.5 * (t_low + t_high);
+
+  const double portal_search_m = std::max(1.25, 3.0 * robot_length_m_);
+  Point3 low_endpoint{
+    uphill.x * s_min + side.x * center_t,
+    uphill.y * s_min + side.y * center_t,
+    slope * s_min + intercept};
+  Point3 high_endpoint{
+    uphill.x * s_max + side.x * center_t,
+    uphill.y * s_max + side.y * center_t,
+    slope * s_max + intercept};
+  const int low_component = nearestFloorComponent(low_endpoint, portal_search_m);
+  const int high_component = nearestFloorComponent(high_endpoint, portal_search_m);
+  if (low_component < 0 && high_component < 0) {
+    return reject(StairFlightRejectReason::MissingPortals);
+  }
+  if (low_component >= 0 && high_component >= 0 && low_component == high_component &&
+    height_m > std::max(0.5, 4.0 * resolution_m_))
+  {
+    return reject(StairFlightRejectReason::SameFloorBothEnds);
+  }
+  const double slice_m = std::max(2.0 * resolution_m_, 0.20);
+  const int bin_count = std::max(2, static_cast<int>(std::ceil(length_m / slice_m)));
+  std::vector<std::vector<const Projection *>> bins(static_cast<std::size_t>(bin_count));
+  for (const auto & p : projections) {
+    const int bin = clampValue(
+      static_cast<int>(std::floor((p.s - s_min) / slice_m)), 0, bin_count - 1);
+    bins[static_cast<std::size_t>(bin)].push_back(&p);
+  }
+
+  std::vector<Point3> centerline;
+  centerline.reserve(static_cast<std::size_t>(bin_count));
+  for (int bin = 0; bin < bin_count; ++bin) {
+    auto & slice = bins[static_cast<std::size_t>(bin)];
+    if (slice.size() < 2U) {
+      continue;
+    }
+    std::vector<double> slice_t;
+    slice_t.reserve(slice.size());
+    double s_sum = 0.0;
+    double z_sum = 0.0;
+    for (const auto * p : slice) {
+      slice_t.push_back(p->t);
+      s_sum += p->s;
+      z_sum += p->point.z;
+    }
+    std::sort(slice_t.begin(), slice_t.end());
+    const double left_t = slice_t.front();
+    const double right_t = slice_t.back();
+    if (right_t - left_t + resolution_m_ < robot_width_m_ + safety_margin_m) {
+      continue;
+    }
+    const double s = s_sum / static_cast<double>(slice.size());
+    const double t = 0.5 * (left_t + right_t);
+    centerline.push_back({
+      uphill.x * s + side.x * t,
+      uphill.y * s + side.y * t,
+      z_sum / static_cast<double>(slice.size())});
+  }
+
+  if (centerline.size() < 2U) {
+    centerline = {low_endpoint, high_endpoint};
+  } else {
+    centerline.front() = low_endpoint;
+    centerline.back() = high_endpoint;
+  }
+
+  flight.cells = segment.cells;
+  flight.uphill_axis = uphill;
+  flight.side_axis = side;
+  flight.z_min = z_min;
+  flight.z_max = z_max;
+  flight.length_m = length_m;
+  flight.width_m = width_m;
+  flight.slope = abs_slope;
+  flight.low_component_id = low_component;
+  flight.high_component_id = high_component;
+  flight.low_endpoint = low_endpoint;
+  flight.high_endpoint = high_endpoint;
+  flight.centerline = std::move(centerline);
+  flight.safe_half_width_m = safe_half_width_m;
+  flight.score = static_cast<double>(segment.cells.size()) /
+    (1.0 + rms_residual + std::max(0.0, robot_width_m_ + safety_margin_m - width_m));
+  return true;
+}
+
+void NavigationMap::rebuildStairFlights()
+{
+  stair_flights_.clear();
+  stair_cell_info_.clear();
+  rejected_stair_noise_cells_.clear();
+
+  std::vector<StairFlight> candidate_flights;
+  for (const auto & segment : stair_segments_) {
+    StairFlight flight;
+    StairFlightRejectReason reject_reason = StairFlightRejectReason::None;
+    if (!fitStairFlightFromSegment(segment, flight, &reject_reason)) {
+      ++stair_flight_diagnostics_.fit_rejected;
+      const auto reject_index = static_cast<std::size_t>(reject_reason);
+      if (reject_index < stair_flight_diagnostics_.fit_reject_counts.size()) {
+        ++stair_flight_diagnostics_.fit_reject_counts[reject_index];
+      }
+      for (const auto & cell : segment.cells) {
+        rejected_stair_noise_cells_.insert(cell);
+      }
+      continue;
+    }
+    candidate_flights.push_back(std::move(flight));
+  }
+  stair_flight_diagnostics_.accepted_candidates = candidate_flights.size();
+
+  const bool merge_stair_fragments = false;
+  bool merged_any = merge_stair_fragments;
+  while (merged_any) {
+    merged_any = false;
+    for (std::size_t i = 0; i < candidate_flights.size() && !merged_any; ++i) {
+      for (std::size_t j = i + 1; j < candidate_flights.size(); ++j) {
+        const auto & a = candidate_flights[i];
+        const auto & b = candidate_flights[j];
+        if (std::abs(a.uphill_axis.dot(b.uphill_axis)) < 0.92) {
+          continue;
+        }
+        const double high_low_distance = pointDistance3d(a.high_endpoint, b.low_endpoint);
+        const double low_high_distance = pointDistance3d(a.low_endpoint, b.high_endpoint);
+        const double endpoint_distance = std::min(high_low_distance, low_high_distance);
+        const double merge_distance_m = std::max(0.35, 3.0 * resolution_m_);
+        if (endpoint_distance > merge_distance_m) {
+          continue;
+        }
+        if (std::abs(a.width_m - b.width_m) > std::max(0.45, 0.35 * std::max(a.width_m, b.width_m))) {
+          continue;
+        }
+
+        StairSegmentInfo merged_segment;
+        merged_segment.cells = a.cells;
+        merged_segment.cells.insert(merged_segment.cells.end(), b.cells.begin(), b.cells.end());
+        std::sort(
+          merged_segment.cells.begin(), merged_segment.cells.end(),
+          [](const GridIndex & lhs, const GridIndex & rhs) {
+            if (lhs.x != rhs.x) {
+              return lhs.x < rhs.x;
+            }
+            if (lhs.y != rhs.y) {
+              return lhs.y < rhs.y;
+            }
+            return lhs.z < rhs.z;
+          });
+        merged_segment.cells.erase(
+          std::unique(merged_segment.cells.begin(), merged_segment.cells.end()),
+          merged_segment.cells.end());
+        if (merged_segment.cells.empty()) {
+          continue;
+        }
+        merged_segment.z_min = merged_segment.cells.front().z;
+        merged_segment.z_max = merged_segment.cells.front().z;
+        for (const auto & cell : merged_segment.cells) {
+          merged_segment.z_min = std::min(merged_segment.z_min, cell.z);
+          merged_segment.z_max = std::max(merged_segment.z_max, cell.z);
+        }
+
+        StairFlight merged_flight;
+        if (!fitStairFlightFromSegment(merged_segment, merged_flight)) {
+          continue;
+        }
+        candidate_flights[i] = std::move(merged_flight);
+        candidate_flights.erase(candidate_flights.begin() + static_cast<std::ptrdiff_t>(j));
+        merged_any = true;
+        break;
+      }
+    }
+  }
+  stair_flight_diagnostics_.merged_candidates = candidate_flights.size();
+
+  std::unordered_set<GridIndex, GridIndexHash> accepted_flight_cells;
+  accepted_flight_cells.reserve(accepted_stair_cells_.size());
+
+  for (auto & flight : candidate_flights) {
+    flight.id = static_cast<int>(stair_flights_.size());
+    const double center_t = 0.5 *
+      (flight.low_endpoint.x * flight.side_axis.x + flight.low_endpoint.y * flight.side_axis.y +
+      flight.high_endpoint.x * flight.side_axis.x + flight.high_endpoint.y * flight.side_axis.y);
+    for (const auto & cell : flight.cells) {
+      const Point3 point = gridToWorld(cell);
+      StairCellInfo info;
+      info.stair_flight_id = flight.id;
+      info.along_s = point.x * flight.uphill_axis.x + point.y * flight.uphill_axis.y;
+      info.lateral_t = point.x * flight.side_axis.x + point.y * flight.side_axis.y;
+      info.lateral_error_m = std::abs(info.lateral_t - center_t);
+      if (info.lateral_error_m <= flight.safe_half_width_m + 0.5 * resolution_m_) {
+        stair_cell_info_[cell] = info;
+        accepted_flight_cells.insert(cell);
+      } else {
+        rejected_stair_noise_cells_.insert(cell);
+      }
+    }
+    stair_flights_.push_back(std::move(flight));
+  }
+
+  for (const auto & cell : accepted_stair_cells_) {
+    if (accepted_flight_cells.find(cell) == accepted_flight_cells.end()) {
+      if (hasNearbyAcceptedFloor(cell)) {
+        rejected_stair_noise_cells_.erase(cell);
+        forbidden_cells_.erase(cell);
+        accepted_floor_cells_.insert(cell);
+        traversable_cells_.insert(cell);
+      } else {
+        rejected_stair_noise_cells_.insert(cell);
+        traversable_cells_.erase(cell);
+        forbidden_cells_.insert(cell);
+      }
+    }
+  }
+  accepted_stair_cells_ = std::move(accepted_flight_cells);
+  rebuildFloorComponents();
+}
+
 double NavigationMap::getStairCenterCost(const GridIndex & idx) const
 {
+  const int flight_id = stairFlightId(idx);
+  if (flight_id >= 0 && static_cast<std::size_t>(flight_id) < stair_flights_.size()) {
+    const auto info_it = stair_cell_info_.find(idx);
+    if (info_it == stair_cell_info_.end()) {
+      return 4.0;
+    }
+    const auto & flight = stair_flights_[flight_id];
+    const double normalized_error =
+      flight.safe_half_width_m > 1.0e-9 ?
+      info_it->second.lateral_error_m / flight.safe_half_width_m : 1.0;
+    return 1.2 * normalized_error * normalized_error;
+  }
+
   int side_dx = 0;
   int side_dy = 0;
   if (!stairSideDirection(idx, side_dx, side_dy)) {
@@ -1190,251 +1955,14 @@ double NavigationMap::getStairCenterCost(const GridIndex & idx) const
 
 std::vector<std::vector<Point3>> NavigationMap::stairCenterlines() const
 {
-  std::vector<std::vector<Point3>> raw_centerlines;
-  raw_centerlines.reserve(stair_segments_.size());
-  const int max_step_cells = maxStepCells();
-  const int min_z_range_cells = std::max(1, max_step_cells / 2);
-  const std::size_t min_centerline_cells = 8U;
-  constexpr double min_centerline_length_m = 1.30;
-  constexpr double min_spiral_height_m = 1.50;
-
-  for (const auto & segment : stair_segments_) {
-    if (segment.cells.size() < min_centerline_cells ||
-      segment.z_max - segment.z_min < min_z_range_cells)
-    {
-      continue;
-    }
-
-    if (!segment.spiral_like) {
-      const int terminal_window = std::max(1, max_step_cells);
-      auto average_terminal = [&](bool high_end) {
-        Point3 sum;
-        std::size_t count = 0U;
-        for (const auto & cell : segment.cells) {
-          if (high_end && cell.z < segment.z_max - terminal_window) {
-            continue;
-          }
-          if (!high_end && cell.z > segment.z_min + terminal_window) {
-            continue;
-          }
-          const Point3 point = gridToWorld(cell);
-          sum.x += point.x;
-          sum.y += point.y;
-          sum.z += point.z;
-          ++count;
-        }
-        if (count == 0U) {
-          return gridToWorld(segment.cells.front());
-        }
-        const double scale = 1.0 / static_cast<double>(count);
-        return Point3{sum.x * scale, sum.y * scale, sum.z * scale};
-      };
-
-      std::vector<Point3> centerline{average_terminal(false), average_terminal(true)};
-      const double line_dx = centerline.front().x - centerline.back().x;
-      const double line_dy = centerline.front().y - centerline.back().y;
-      const double line_dz = centerline.front().z - centerline.back().z;
-      if (std::sqrt(line_dx * line_dx + line_dy * line_dy + line_dz * line_dz) >=
-        min_centerline_length_m)
-      {
-        raw_centerlines.push_back(std::move(centerline));
-      }
-      continue;
-    }
-
-    if (static_cast<double>(segment.z_max - segment.z_min) * resolution_m_ < min_spiral_height_m) {
-      continue;
-    }
-
-    std::unordered_map<int, std::vector<GridIndex>> cells_by_z;
-    cells_by_z.reserve(static_cast<std::size_t>(segment.z_max - segment.z_min + 1));
-    for (const auto & cell : segment.cells) {
-      cells_by_z[cell.z].push_back(cell);
-    }
-
-    std::vector<std::pair<int, Point3>> ordered_points;
-    ordered_points.reserve(cells_by_z.size());
-    for (const auto & entry : cells_by_z) {
-      Point3 sum;
-      for (const auto & cell : entry.second) {
-        const Point3 point = gridToWorld(cell);
-        sum.x += point.x;
-        sum.y += point.y;
-        sum.z += point.z;
-      }
-      const double scale = 1.0 / static_cast<double>(entry.second.size());
-      ordered_points.push_back({entry.first, {sum.x * scale, sum.y * scale, sum.z * scale}});
-    }
-
-    std::sort(
-      ordered_points.begin(), ordered_points.end(),
-      [](const auto & lhs, const auto & rhs) { return lhs.first < rhs.first; });
-
-    std::vector<Point3> centerline;
-    centerline.reserve(ordered_points.size());
-    for (const auto & point : ordered_points) {
-      centerline.push_back(point.second);
-    }
-    double length_m = 0.0;
-    for (std::size_t i = 1; i < centerline.size(); ++i) {
-      const double dx = centerline[i].x - centerline[i - 1].x;
-      const double dy = centerline[i].y - centerline[i - 1].y;
-      const double dz = centerline[i].z - centerline[i - 1].z;
-      length_m += std::sqrt(dx * dx + dy * dy + dz * dz);
-    }
-    if (centerline.size() >= 2U && length_m >= min_centerline_length_m) {
-      raw_centerlines.push_back(std::move(centerline));
+  std::vector<std::vector<Point3>> centerlines;
+  centerlines.reserve(stair_flights_.size());
+  for (const auto & flight : stair_flights_) {
+    if (flight.centerline.size() >= 2U) {
+      centerlines.push_back(flight.centerline);
     }
   }
-
-  if (raw_centerlines.size() < 2U) {
-    return raw_centerlines;
-  }
-
-  double axis_sum_x = 0.0;
-  double axis_sum_y = 0.0;
-  for (const auto & line : raw_centerlines) {
-    if (line.size() < 2U) {
-      continue;
-    }
-    const Point3 & a = line.front();
-    const Point3 & b = line.back();
-    const double dx = b.x - a.x;
-    const double dy = b.y - a.y;
-    const double xy = std::hypot(dx, dy);
-    const double dz = std::abs(b.z - a.z);
-    if (xy < 1.0e-9 || pointDistance3d(a, b) < 1.0 || dz < 0.3) {
-      continue;
-    }
-    const double ux = dx / xy;
-    const double uy = dy / xy;
-    const double weight = pointDistance3d(a, b);
-    axis_sum_x += weight * (ux * ux - uy * uy);
-    axis_sum_y += weight * (2.0 * ux * uy);
-  }
-
-  const double axis_angle = 0.5 * std::atan2(axis_sum_y, axis_sum_x);
-  const double axis_x = std::cos(axis_angle);
-  const double axis_y = std::sin(axis_angle);
-  const double perp_x = -axis_y;
-  const double perp_y = axis_x;
-
-  struct Candidate
-  {
-    std::vector<Point3> line;
-    double length{0.0};
-    double xy{0.0};
-    double dz{0.0};
-    double axis_alignment{0.0};
-    double u_min{0.0};
-    double u_max{0.0};
-    double z_min{0.0};
-    double z_max{0.0};
-    double v{0.0};
-    int direction{1};
-  };
-
-  std::vector<Candidate> candidates;
-  candidates.reserve(raw_centerlines.size());
-  for (auto & line : raw_centerlines) {
-    if (line.size() < 2U) {
-      continue;
-    }
-    const Point3 a = line.front();
-    const Point3 b = line.back();
-    const double dx = b.x - a.x;
-    const double dy = b.y - a.y;
-    const double xy = std::hypot(dx, dy);
-    const double dz = std::abs(b.z - a.z);
-    const double length = pointDistance3d(a, b);
-    if (xy < 1.0e-9 || length < 0.65 || dz < 0.25) {
-      continue;
-    }
-    const double ux = dx / xy;
-    const double uy = dy / xy;
-    const double axis_dot = ux * axis_x + uy * axis_y;
-    const double alignment = std::abs(axis_dot);
-    const double slope = dz / xy;
-    if (alignment < 0.88 || slope < 0.25 || slope > 1.35) {
-      continue;
-    }
-
-    Candidate candidate;
-    candidate.line = std::move(line);
-    candidate.length = length;
-    candidate.xy = xy;
-    candidate.dz = dz;
-    candidate.axis_alignment = alignment;
-    candidate.direction = axis_dot >= 0.0 ? 1 : -1;
-    const double u0 = a.x * axis_x + a.y * axis_y;
-    const double u1 = b.x * axis_x + b.y * axis_y;
-    candidate.u_min = std::min(u0, u1);
-    candidate.u_max = std::max(u0, u1);
-    candidate.z_min = std::min(a.z, b.z);
-    candidate.z_max = std::max(a.z, b.z);
-    candidate.v = 0.5 * ((a.x + b.x) * perp_x + (a.y + b.y) * perp_y);
-    candidates.push_back(std::move(candidate));
-  }
-
-  std::vector<bool> merged(candidates.size(), false);
-  std::vector<std::vector<Point3>> merged_lines;
-  for (std::size_t i = 0; i < candidates.size(); ++i) {
-    if (merged[i]) {
-      continue;
-    }
-    std::vector<Point3> points = candidates[i].line;
-    merged[i] = true;
-    bool changed = true;
-    while (changed) {
-      changed = false;
-      for (std::size_t j = 0; j < candidates.size(); ++j) {
-        if (merged[j] || candidates[i].direction != candidates[j].direction) {
-          continue;
-        }
-        if (std::abs(candidates[i].v - candidates[j].v) > 0.45) {
-          continue;
-        }
-        const double z_gap =
-          std::max(0.0, std::max(candidates[i].z_min, candidates[j].z_min) -
-            std::min(candidates[i].z_max, candidates[j].z_max));
-        if (z_gap > 0.75) {
-          continue;
-        }
-        const double gap =
-          std::max(0.0, std::max(candidates[i].u_min, candidates[j].u_min) -
-            std::min(candidates[i].u_max, candidates[j].u_max));
-        if (gap > 0.85) {
-          continue;
-        }
-        points.insert(points.end(), candidates[j].line.begin(), candidates[j].line.end());
-        candidates[i].u_min = std::min(candidates[i].u_min, candidates[j].u_min);
-        candidates[i].u_max = std::max(candidates[i].u_max, candidates[j].u_max);
-        candidates[i].z_min = std::min(candidates[i].z_min, candidates[j].z_min);
-        candidates[i].z_max = std::max(candidates[i].z_max, candidates[j].z_max);
-        candidates[i].v =
-          0.5 * (candidates[i].v + candidates[j].v);
-        merged[j] = true;
-        changed = true;
-      }
-    }
-
-    auto projection = [&](const Point3 & p) { return p.x * axis_x + p.y * axis_y; };
-    const auto low_it = std::min_element(
-      points.begin(), points.end(),
-      [&](const Point3 & lhs, const Point3 & rhs) { return projection(lhs) < projection(rhs); });
-    const auto high_it = std::max_element(
-      points.begin(), points.end(),
-      [&](const Point3 & lhs, const Point3 & rhs) { return projection(lhs) < projection(rhs); });
-    if (low_it == points.end() || high_it == points.end()) {
-      continue;
-    }
-    std::vector<Point3> line{*low_it, *high_it};
-    if (pointDistance3d(line.front(), line.back()) >= min_centerline_length_m) {
-      merged_lines.push_back(std::move(line));
-    }
-  }
-
-  return merged_lines;
+  return centerlines;
 }
 
 int NavigationMap::maxStepCells() const
@@ -1592,10 +2120,10 @@ void NavigationMap::rebuildTraversableLayer()
     const bool has_landing =
       largest_z_slice >= std::max<std::size_t>(8U, component.size() / 5U);
 
-    SurfaceKind kind = SurfaceKind::Noise;
+    SurfaceKind kind = SurfaceKind::NoiseRejected;
     if (component.size() >= min_flat_component_size && z_range <= flat_z_range_cells) {
       kind = overhead_ratio >= min_floor_overhead_ratio ?
-        SurfaceKind::Floor : SurfaceKind::CeilingLike;
+        SurfaceKind::Floor : SurfaceKind::CeilingRejected;
     } else if (
       component.size() >= min_stair_component_size && z_range > flat_z_range_cells &&
       overhead_ratio >= min_stair_overhead_ratio && has_landing)
@@ -1651,7 +2179,7 @@ void NavigationMap::rebuildTraversableLayer()
         }
       }
       if (!has_internal_landing) {
-        component_kind[component_id] = SurfaceKind::Noise;
+        component_kind[component_id] = SurfaceKind::NoiseRejected;
       }
     }
   }
@@ -1693,18 +2221,21 @@ void NavigationMap::rebuildTraversableLayer()
           accepted_floor_cells_.insert(candidate.stand);
         }
         traversable_cells_.insert(candidate.stand);
-      } else if (kind == SurfaceKind::CeilingLike) {
+      } else if (kind == SurfaceKind::CeilingRejected) {
         candidate.reject_reason = SurfaceRejectReason::CeilingLike;
         rejected_ceiling_cells_.insert(candidate.stand);
         forbidden_cells_.insert(candidate.stand);
       } else {
         candidate.reject_reason = SurfaceRejectReason::Noise;
+        rejected_stair_noise_cells_.insert(candidate.stand);
         forbidden_cells_.insert(candidate.stand);
       }
     }
   }
 
+  rebuildFloorComponents();
   rebuildStairSegments();
+  rebuildStairFlights();
 
   for (const auto & blocked : blocked_cells_) {
     forbidden_cells_.insert(blocked);
@@ -1870,6 +2401,11 @@ const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::rejectedColl
   return rejected_collision_cells_;
 }
 
+const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::rejectedStairNoiseCells() const
+{
+  return rejected_stair_noise_cells_;
+}
+
 const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::blockedCells() const
 {
   return blocked_cells_;
@@ -1878,6 +2414,26 @@ const std::unordered_set<GridIndex, GridIndexHash> & NavigationMap::blockedCells
 const std::unordered_map<GridIndex, double, GridIndexHash> & NavigationMap::riskCosts() const
 {
   return risk_cost_;
+}
+
+const std::vector<FloorComponent> & NavigationMap::floorComponents() const
+{
+  return floor_components_;
+}
+
+const std::vector<FloorComponent> & NavigationMap::landingComponents() const
+{
+  return landing_components_;
+}
+
+const std::vector<StairFlight> & NavigationMap::stairFlights() const
+{
+  return stair_flights_;
+}
+
+const StairFlightDiagnostics & NavigationMap::stairFlightDiagnostics() const
+{
+  return stair_flight_diagnostics_;
 }
 
 double NavigationMap::resolution() const

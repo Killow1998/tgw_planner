@@ -33,6 +33,8 @@ using tgw_planner::core::NavigationMap;
 using tgw_planner::core::PlanResult;
 using tgw_planner::core::PlannerMetrics;
 using tgw_planner::core::Point3;
+using tgw_planner::core::StairFlight;
+using tgw_planner::core::StairFlightRejectReason;
 using tgw_planner::core::VoxelAstarPlanner;
 
 Point3 toCorePoint(const geometry_msgs::msg::Point & point)
@@ -108,17 +110,27 @@ public:
       "/nav_map/accepted_floor_cloud", latched_qos);
     accepted_stair_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/nav_map/accepted_stair_cloud", latched_qos);
+    stair_flight_id_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/stair_flight_id_cloud", latched_qos);
     rejected_ceiling_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/nav_map/rejected_ceiling_cloud", latched_qos);
     rejected_clearance_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/nav_map/rejected_clearance_cloud", latched_qos);
     rejected_collision_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/nav_map/rejected_collision_cloud", latched_qos);
+    rejected_stair_noise_cloud_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/nav_map/rejected_stair_noise_cloud", latched_qos);
     path_pub_ = create_publisher<nav_msgs::msg::Path>("/planned_path", latched_qos);
     path_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
       "/planned_path_marker", latched_qos);
     stair_centerline_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
       "/nav_map/stair_centerline_markers", latched_qos);
+    landing_component_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/nav_map/landing_component_markers", latched_qos);
+    stair_entry_exit_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/nav_map/stair_entry_exit_markers", latched_qos);
+    stair_safe_corridor_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/nav_map/stair_safe_corridor_markers", latched_qos);
     start_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>("/start_marker", latched_qos);
     goal_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>("/goal_marker", latched_qos);
     stats_pub_ = create_publisher<tgw_planner::msg::PlannerStats>(
@@ -197,6 +209,61 @@ private:
     RCLCPP_INFO(
       get_logger(), "[NavMapBuilder] stair_centerlines: %zu",
       map_.stairCenterlines().size());
+    RCLCPP_INFO(
+      get_logger(), "[NavMapBuilder] floor_component_count: %zu",
+      map_.floorComponents().size());
+    RCLCPP_INFO(
+      get_logger(), "[NavMapBuilder] landing_component_count: %zu",
+      map_.landingComponents().size());
+    RCLCPP_INFO(
+      get_logger(), "[NavMapBuilder] accepted_stair_flight_count: %zu",
+      map_.stairFlights().size());
+    const auto & stair_diag = map_.stairFlightDiagnostics();
+    RCLCPP_INFO(
+      get_logger(),
+      "[NavMapBuilder] stair_flight_diagnostics: raw_segments=%zu "
+      "segment_width_rejected=%zu fit_rejected=%zu accepted_candidates=%zu "
+      "merged_candidates=%zu",
+      stair_diag.raw_segments, stair_diag.segment_width_rejected, stair_diag.fit_rejected,
+      stair_diag.accepted_candidates, stair_diag.merged_candidates);
+    RCLCPP_INFO(
+      get_logger(),
+      "[NavMapBuilder] stair_flight_fit_rejects: too_few=%zu no_axis=%zu short_or_low=%zu "
+      "negative_slope=%zu slope_out=%zu residual=%zu nonmonotonic=%zu narrow=%zu "
+      "missing_portals=%zu same_floor_ends=%zu",
+      stair_diag.fit_reject_counts[static_cast<std::size_t>(
+        StairFlightRejectReason::TooFewCells)],
+      stair_diag.fit_reject_counts[static_cast<std::size_t>(
+        StairFlightRejectReason::NoAxis)],
+      stair_diag.fit_reject_counts[static_cast<std::size_t>(
+        StairFlightRejectReason::TooShortOrLow)],
+      stair_diag.fit_reject_counts[static_cast<std::size_t>(
+        StairFlightRejectReason::NegativeSlope)],
+      stair_diag.fit_reject_counts[static_cast<std::size_t>(
+        StairFlightRejectReason::SlopeOutOfRange)],
+      stair_diag.fit_reject_counts[static_cast<std::size_t>(
+        StairFlightRejectReason::ResidualTooHigh)],
+      stair_diag.fit_reject_counts[static_cast<std::size_t>(
+        StairFlightRejectReason::NonMonotonic)],
+      stair_diag.fit_reject_counts[static_cast<std::size_t>(
+        StairFlightRejectReason::TooNarrow)],
+      stair_diag.fit_reject_counts[static_cast<std::size_t>(
+        StairFlightRejectReason::MissingPortals)],
+      stair_diag.fit_reject_counts[static_cast<std::size_t>(
+        StairFlightRejectReason::SameFloorBothEnds)]);
+    RCLCPP_INFO(
+      get_logger(), "[NavMapBuilder] rejected_stair_noise_cells: %zu",
+      map_.rejectedStairNoiseCells().size());
+    for (const auto & flight : map_.stairFlights()) {
+      RCLCPP_INFO(
+        get_logger(),
+        "[NavMapBuilder] StairFlight id=%d cells=%zu width=%.3f length=%.3f slope=%.3f "
+        "z=[%.3f, %.3f] components=[%d, %d] low=[%.3f, %.3f, %.3f] high=[%.3f, %.3f, %.3f]",
+        flight.id, flight.cells.size(), flight.width_m, flight.length_m, flight.slope,
+        flight.z_min, flight.z_max, flight.low_component_id, flight.high_component_id,
+        flight.low_endpoint.x, flight.low_endpoint.y, flight.low_endpoint.z,
+        flight.high_endpoint.x, flight.high_endpoint.y, flight.high_endpoint.z);
+    }
     RCLCPP_INFO(
       get_logger(), "[NavMapBuilder] forbidden_cells: %zu", map_.forbiddenCells().size());
     RCLCPP_INFO(
@@ -506,11 +573,16 @@ private:
     publishCellSetCloud(map_.surfaceCandidateCells(), surface_candidates_cloud_pub_, 4.0F);
     publishCellSetCloud(map_.acceptedFloorCells(), accepted_floor_cloud_pub_, 5.0F);
     publishCellSetCloud(map_.acceptedStairCells(), accepted_stair_cloud_pub_, 6.0F);
+    publishStairFlightIdCloud();
     publishCellSetCloud(map_.rejectedCeilingCells(), rejected_ceiling_cloud_pub_, 7.0F);
     publishCellSetCloud(map_.rejectedClearanceCells(), rejected_clearance_cloud_pub_, 8.0F);
     publishCellSetCloud(map_.rejectedCollisionCells(), rejected_collision_cloud_pub_, 9.0F);
+    publishCellSetCloud(map_.rejectedStairNoiseCells(), rejected_stair_noise_cloud_pub_, 10.0F);
     publishRiskCloud();
     publishStairCenterlineMarkers();
+    publishLandingComponentMarkers();
+    publishStairEntryExitMarkers();
+    publishStairSafeCorridorMarkers();
   }
 
   void publishCellSetMarker(
@@ -611,6 +683,43 @@ private:
     risk_cloud_pub_->publish(cloud);
   }
 
+  void publishStairFlightIdCloud()
+  {
+    std::size_t cell_count = 0U;
+    for (const auto & flight : map_.stairFlights()) {
+      cell_count += flight.cells.size();
+    }
+
+    sensor_msgs::msg::PointCloud2 cloud;
+    cloud.header.stamp = now();
+    cloud.header.frame_id = map_.mapFrame();
+    sensor_msgs::PointCloud2Modifier modifier(cloud);
+    modifier.setPointCloud2Fields(
+      4, "x", 1, sensor_msgs::msg::PointField::FLOAT32, "y", 1,
+      sensor_msgs::msg::PointField::FLOAT32, "z", 1, sensor_msgs::msg::PointField::FLOAT32,
+      "intensity", 1, sensor_msgs::msg::PointField::FLOAT32);
+    modifier.resize(cell_count);
+
+    sensor_msgs::PointCloud2Iterator<float> iter_x(cloud, "x");
+    sensor_msgs::PointCloud2Iterator<float> iter_y(cloud, "y");
+    sensor_msgs::PointCloud2Iterator<float> iter_z(cloud, "z");
+    sensor_msgs::PointCloud2Iterator<float> iter_i(cloud, "intensity");
+    for (const auto & flight : map_.stairFlights()) {
+      for (const auto & cell : flight.cells) {
+        const Point3 point = map_.gridToWorld(cell);
+        *iter_x = static_cast<float>(point.x);
+        *iter_y = static_cast<float>(point.y);
+        *iter_z = static_cast<float>(point.z);
+        *iter_i = static_cast<float>(flight.id + 1);
+        ++iter_x;
+        ++iter_y;
+        ++iter_z;
+        ++iter_i;
+      }
+    }
+    stair_flight_id_cloud_pub_->publish(cloud);
+  }
+
   void publishStairCenterlineMarkers()
   {
     visualization_msgs::msg::Marker marker;
@@ -641,6 +750,97 @@ private:
       marker.action = visualization_msgs::msg::Marker::DELETE;
     }
     stair_centerline_marker_pub_->publish(marker);
+  }
+
+  void publishLandingComponentMarkers()
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.stamp = now();
+    marker.header.frame_id = map_.mapFrame();
+    marker.ns = "landing_components";
+    marker.id = 0;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+    marker.pose.orientation.w = 1.0;
+    marker.scale.x = 0.45;
+    marker.scale.y = 0.45;
+    marker.scale.z = 0.18;
+    marker.color.r = 1.0F;
+    marker.color.g = 0.9F;
+    marker.color.b = 0.0F;
+    marker.color.a = 0.9F;
+    for (const auto & component : map_.landingComponents()) {
+      marker.points.push_back(toRosPoint(component.centroid));
+    }
+    if (marker.points.empty()) {
+      marker.action = visualization_msgs::msg::Marker::DELETE;
+    }
+    landing_component_marker_pub_->publish(marker);
+  }
+
+  void publishStairEntryExitMarkers()
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.stamp = now();
+    marker.header.frame_id = map_.mapFrame();
+    marker.ns = "stair_portals";
+    marker.id = 0;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+    marker.pose.orientation.w = 1.0;
+    marker.scale.x = 0.42;
+    marker.scale.y = 0.42;
+    marker.scale.z = 0.42;
+    marker.color.r = 1.0F;
+    marker.color.g = 0.35F;
+    marker.color.b = 0.0F;
+    marker.color.a = 1.0F;
+    for (const auto & flight : map_.stairFlights()) {
+      marker.points.push_back(toRosPoint(flight.low_endpoint));
+      marker.points.push_back(toRosPoint(flight.high_endpoint));
+    }
+    if (marker.points.empty()) {
+      marker.action = visualization_msgs::msg::Marker::DELETE;
+    }
+    stair_entry_exit_marker_pub_->publish(marker);
+  }
+
+  void publishStairSafeCorridorMarkers()
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.stamp = now();
+    marker.header.frame_id = map_.mapFrame();
+    marker.ns = "stair_safe_corridors";
+    marker.id = 0;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.type = visualization_msgs::msg::Marker::LINE_LIST;
+    marker.pose.orientation.w = 1.0;
+    marker.scale.x = 0.05;
+    marker.color.r = 0.25F;
+    marker.color.g = 0.65F;
+    marker.color.b = 1.0F;
+    marker.color.a = 0.8F;
+    for (const auto & flight : map_.stairFlights()) {
+      if (flight.centerline.size() < 2U) {
+        continue;
+      }
+      for (std::size_t i = 1; i < flight.centerline.size(); ++i) {
+        for (const double sign : {-1.0, 1.0}) {
+          Point3 a = flight.centerline[i - 1];
+          Point3 b = flight.centerline[i];
+          a.x += sign * flight.side_axis.x * flight.safe_half_width_m;
+          a.y += sign * flight.side_axis.y * flight.safe_half_width_m;
+          b.x += sign * flight.side_axis.x * flight.safe_half_width_m;
+          b.y += sign * flight.side_axis.y * flight.safe_half_width_m;
+          marker.points.push_back(toRosPoint(a));
+          marker.points.push_back(toRosPoint(b));
+        }
+      }
+    }
+    if (marker.points.empty()) {
+      marker.action = visualization_msgs::msg::Marker::DELETE;
+    }
+    stair_safe_corridor_marker_pub_->publish(marker);
   }
 
   void publishPathMarker(const PlanResult & result)
@@ -738,6 +938,16 @@ private:
       get_logger(), "[Planner] goal_snapped: [%d, %d, %d]", result.goal_cell.x,
       result.goal_cell.y, result.goal_cell.z);
     RCLCPP_INFO(
+      get_logger(), "[Planner] start_cell_type: stair=%s floor_or_landing=%s flight_id=%d",
+      map_.isStairCell(result.start_cell) ? "true" : "false",
+      map_.isFloorOrLandingCell(result.start_cell) ? "true" : "false",
+      map_.stairFlightId(result.start_cell));
+    RCLCPP_INFO(
+      get_logger(), "[Planner] goal_cell_type: stair=%s floor_or_landing=%s flight_id=%d",
+      map_.isStairCell(result.goal_cell) ? "true" : "false",
+      map_.isFloorOrLandingCell(result.goal_cell) ? "true" : "false",
+      map_.stairFlightId(result.goal_cell));
+    RCLCPP_INFO(
       get_logger(), "[Planner] start_snap_distance_m: %.3f",
       result.metrics.start_snap_distance_m);
     RCLCPP_INFO(
@@ -776,12 +986,17 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr surface_candidates_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr accepted_floor_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr accepted_stair_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr stair_flight_id_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_ceiling_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_clearance_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_collision_cloud_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr rejected_stair_noise_cloud_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr path_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr stair_centerline_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr landing_component_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr stair_entry_exit_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr stair_safe_corridor_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_marker_pub_;
   rclcpp::Publisher<tgw_planner::msg::PlannerStats>::SharedPtr stats_pub_;

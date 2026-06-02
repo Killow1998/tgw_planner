@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -19,6 +20,17 @@ struct Point3
   double x{0.0};
   double y{0.0};
   double z{0.0};
+};
+
+struct Vec2
+{
+  double x{0.0};
+  double y{0.0};
+
+  double norm() const;
+  Vec2 normalized() const;
+  double dot(const Vec2 & other) const;
+  Vec2 perpendicular() const;
 };
 
 struct MapCounts
@@ -78,9 +90,10 @@ enum class SurfaceKind
 {
   Unknown,
   Floor,
+  Landing,
   Stair,
-  CeilingLike,
-  Noise
+  CeilingRejected,
+  NoiseRejected
 };
 
 enum class SurfaceRejectReason
@@ -120,6 +133,73 @@ struct StairSegmentInfo
   bool spiral_like{false};
 };
 
+enum class StairFlightRejectReason
+{
+  None = 0,
+  TooFewCells,
+  NoAxis,
+  TooShortOrLow,
+  NegativeSlope,
+  SlopeOutOfRange,
+  ResidualTooHigh,
+  NonMonotonic,
+  TooNarrow,
+  MissingPortals,
+  SameFloorBothEnds,
+  Count
+};
+
+struct StairFlightDiagnostics
+{
+  std::size_t raw_segments{0U};
+  std::size_t segment_width_rejected{0U};
+  std::size_t fit_rejected{0U};
+  std::size_t accepted_candidates{0U};
+  std::size_t merged_candidates{0U};
+  std::array<std::size_t, static_cast<std::size_t>(StairFlightRejectReason::Count)> fit_reject_counts{};
+};
+
+struct FloorComponent
+{
+  int id{-1};
+  std::vector<GridIndex> cells;
+  double mean_z{0.0};
+  double min_z{0.0};
+  double max_z{0.0};
+  Point3 centroid;
+  GridIndex min_idx;
+  GridIndex max_idx;
+  bool is_landing{false};
+};
+
+struct StairFlight
+{
+  int id{-1};
+  std::vector<GridIndex> cells;
+  Vec2 uphill_axis;
+  Vec2 side_axis;
+  double z_min{0.0};
+  double z_max{0.0};
+  double length_m{0.0};
+  double width_m{0.0};
+  double slope{0.0};
+  double score{0.0};
+  int low_component_id{-1};
+  int high_component_id{-1};
+  Point3 low_endpoint;
+  Point3 high_endpoint;
+  std::vector<Point3> centerline;
+  double safe_half_width_m{0.0};
+};
+
+struct StairCellInfo
+{
+  int stair_flight_id{-1};
+  double along_s{0.0};
+  double lateral_t{0.0};
+  double lateral_error_m{0.0};
+};
+
 class NavigationMap
 {
 public:
@@ -153,6 +233,14 @@ public:
   bool isStairTransitionAllowed(const GridIndex & from, const GridIndex & to) const;
   double getStairCenterCost(const GridIndex & idx) const;
   std::vector<std::vector<Point3>> stairCenterlines() const;
+  int stairFlightId(const GridIndex & cell) const;
+  bool isStairCell(const GridIndex & cell) const;
+  bool isFloorOrLandingCell(const GridIndex & cell) const;
+  bool isInsideStairSafeCorridor(const GridIndex & cell, int stair_flight_id) const;
+  double lateralDistanceToStairCenterline(const GridIndex & cell, int stair_flight_id) const;
+  bool isNearStairPortal(const GridIndex & cell, int stair_flight_id) const;
+  bool isNearLowPortal(const GridIndex & cell, int stair_flight_id) const;
+  bool isNearHighPortal(const GridIndex & cell, int stair_flight_id) const;
   int maxStepCells() const;
 
   void rebuildTraversableLayer();
@@ -174,8 +262,13 @@ public:
   const std::unordered_set<GridIndex, GridIndexHash> & rejectedCeilingCells() const;
   const std::unordered_set<GridIndex, GridIndexHash> & rejectedClearanceCells() const;
   const std::unordered_set<GridIndex, GridIndexHash> & rejectedCollisionCells() const;
+  const std::unordered_set<GridIndex, GridIndexHash> & rejectedStairNoiseCells() const;
   const std::unordered_set<GridIndex, GridIndexHash> & blockedCells() const;
   const std::unordered_map<GridIndex, double, GridIndexHash> & riskCosts() const;
+  const std::vector<FloorComponent> & floorComponents() const;
+  const std::vector<FloorComponent> & landingComponents() const;
+  const std::vector<StairFlight> & stairFlights() const;
+  const StairFlightDiagnostics & stairFlightDiagnostics() const;
 
   double resolution() const;
   double robotRadius() const;
@@ -215,6 +308,15 @@ private:
   bool hasTraversableSupportNearColumn(int x, int y, int z, int max_dz) const;
   bool isFootprintSupportedAtPoint(
     const Point3 & origin, int stand_z, double heading_x, double heading_y) const;
+  void rebuildFloorComponents();
+  void rebuildStairFlights();
+  bool fitStairFlightFromSegment(
+    const StairSegmentInfo & segment, StairFlight & flight,
+    StairFlightRejectReason * reject_reason = nullptr) const;
+  int nearestFloorComponent(const Point3 & point, double max_distance_m) const;
+  bool hasFloorBetween(const Point3 & a, const Point3 & b) const;
+  bool isNearFlightEndpoint(
+    const GridIndex & cell, const StairFlight & flight, const Point3 & endpoint) const;
 
   std::shared_ptr<octomap::OcTree> octree_;
   std::unordered_set<GridIndex, GridIndexHash> occupied_cells_;
@@ -226,12 +328,18 @@ private:
   std::unordered_set<GridIndex, GridIndexHash> rejected_ceiling_cells_;
   std::unordered_set<GridIndex, GridIndexHash> rejected_clearance_cells_;
   std::unordered_set<GridIndex, GridIndexHash> rejected_collision_cells_;
+  std::unordered_set<GridIndex, GridIndexHash> rejected_stair_noise_cells_;
   std::unordered_set<GridIndex, GridIndexHash> blocked_cells_;
   std::unordered_map<GridIndex, double, GridIndexHash> risk_cost_;
   std::unordered_map<XYIndex, ColumnInfo, XYIndexHash> columns_;
   std::unordered_map<GridIndex, StairSlope, GridIndexHash> stair_slopes_;
   std::unordered_map<GridIndex, int, GridIndexHash> stair_segment_by_cell_;
   std::vector<StairSegmentInfo> stair_segments_;
+  std::vector<FloorComponent> floor_components_;
+  std::vector<FloorComponent> landing_components_;
+  std::vector<StairFlight> stair_flights_;
+  std::unordered_map<GridIndex, StairCellInfo, GridIndexHash> stair_cell_info_;
+  StairFlightDiagnostics stair_flight_diagnostics_;
 
   double resolution_m_{0.20};
   double robot_radius_m_{0.35};

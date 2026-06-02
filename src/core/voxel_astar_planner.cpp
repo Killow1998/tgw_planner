@@ -12,9 +12,30 @@ namespace tgw_planner::core
 {
 namespace
 {
+struct SearchState
+{
+  GridIndex cell;
+  int stair_flight_id{-1};
+
+  bool operator==(const SearchState & other) const
+  {
+    return cell == other.cell && stair_flight_id == other.stair_flight_id;
+  }
+};
+
+struct SearchStateHash
+{
+  std::size_t operator()(const SearchState & state) const
+  {
+    std::size_t seed = GridIndexHash{}(state.cell);
+    seed ^= std::hash<int>{}(state.stair_flight_id) + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
+    return seed;
+  }
+};
+
 struct QueueNode
 {
-  GridIndex idx;
+  SearchState state;
   double f{0.0};
   double g{0.0};
 };
@@ -76,12 +97,14 @@ PlanResult VoxelAstarPlanner::plan(
 
   const auto search_t0 = std::chrono::steady_clock::now();
   std::priority_queue<QueueNode, std::vector<QueueNode>, QueueNodeCompare> open_set;
-  std::unordered_map<GridIndex, double, GridIndexHash> g_score;
-  std::unordered_map<GridIndex, GridIndex, GridIndexHash> came_from;
-  std::unordered_set<GridIndex, GridIndexHash> closed;
+  std::unordered_map<SearchState, double, SearchStateHash> g_score;
+  std::unordered_map<SearchState, SearchState, SearchStateHash> came_from;
+  std::unordered_set<SearchState, SearchStateHash> closed;
 
-  g_score[result.start_cell] = 0.0;
-  open_set.push({result.start_cell, gridDistance(result.start_cell, result.goal_cell) * map.resolution(), 0.0});
+  const SearchState start_state{result.start_cell, map.stairFlightId(result.start_cell)};
+  SearchState goal_state{result.goal_cell, map.stairFlightId(result.goal_cell)};
+  g_score[start_state] = 0.0;
+  open_set.push({start_state, gridDistance(result.start_cell, result.goal_cell) * map.resolution(), 0.0});
 
   bool found = false;
   while (!open_set.empty() && result.metrics.expanded_nodes < max_iterations_) {
@@ -90,17 +113,18 @@ PlanResult VoxelAstarPlanner::plan(
     const QueueNode current = open_set.top();
     open_set.pop();
 
-    const auto best_g = g_score.find(current.idx);
+    const auto best_g = g_score.find(current.state);
     if (best_g == g_score.end() || current.g > best_g->second + 1.0e-9) {
       continue;
     }
 
-    if (current.idx == result.goal_cell) {
+    if (current.state.cell == result.goal_cell) {
+      goal_state = current.state;
       found = true;
       break;
     }
 
-    if (!closed.insert(current.idx).second) {
+    if (!closed.insert(current.state).second) {
       continue;
     }
     ++result.metrics.expanded_nodes;
@@ -112,7 +136,8 @@ PlanResult VoxelAstarPlanner::plan(
           if (dx == 0 && dy == 0) {
             continue;
           }
-          const GridIndex neighbor{current.idx.x + dx, current.idx.y + dy, current.idx.z + dz};
+          const GridIndex neighbor{
+            current.state.cell.x + dx, current.state.cell.y + dy, current.state.cell.z + dz};
           if (!map.isTraversable(neighbor)) {
             continue;
           }
@@ -121,34 +146,35 @@ PlanResult VoxelAstarPlanner::plan(
           {
             continue;
           }
-          if (!map.isStairTransitionAllowed(current.idx, neighbor)) {
+          if (!map.isStairTransitionAllowed(current.state.cell, neighbor)) {
             continue;
           }
-          if (!map.isFootprintTransitionSupported(current.idx, neighbor)) {
+          if (!map.isFootprintTransitionSupported(current.state.cell, neighbor)) {
             continue;
           }
+          const SearchState neighbor_state{neighbor, map.stairFlightId(neighbor)};
           const double vertical_penalty =
             std::abs(dz) > 1 ? 0.05 * static_cast<double>(std::abs(dz) - 1) : 0.0;
           const bool touches_stair =
-            map.isStairTraversable(current.idx) || map.isStairTraversable(neighbor);
+            map.isStairTraversable(current.state.cell) || map.isStairTraversable(neighbor);
           const double stair_diagonal_penalty =
             touches_stair && dx != 0 && dy != 0 ? 0.4 : 0.0;
           const double stair_center_cost =
-            0.5 * (map.getStairCenterCost(current.idx) + map.getStairCenterCost(neighbor));
+            0.5 * (map.getStairCenterCost(current.state.cell) + map.getStairCenterCost(neighbor));
           const double step_cost = std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz)) *
             map.resolution() + vertical_penalty + stair_diagonal_penalty + stair_center_cost;
           const double tentative_g = current.g + step_cost + map.getRiskCost(neighbor);
-          const auto old_g = g_score.find(neighbor);
+          const auto old_g = g_score.find(neighbor_state);
           if (old_g != g_score.end() && tentative_g >= old_g->second) {
             continue;
           }
-          if (closed.find(neighbor) != closed.end()) {
+          if (closed.find(neighbor_state) != closed.end()) {
             ++result.metrics.reopened_nodes;
           }
-          came_from[neighbor] = current.idx;
-          g_score[neighbor] = tentative_g;
+          came_from[neighbor_state] = current.state;
+          g_score[neighbor_state] = tentative_g;
           const double h = gridDistance(neighbor, result.goal_cell) * map.resolution();
-          open_set.push({neighbor, tentative_g + h, tentative_g});
+          open_set.push({neighbor_state, tentative_g + h, tentative_g});
           ++result.metrics.generated_nodes;
         }
       }
@@ -169,7 +195,22 @@ PlanResult VoxelAstarPlanner::plan(
     return result;
   }
 
-  result.path = reconstructPath(map, came_from, result.start_cell, result.goal_cell);
+  std::vector<GridIndex> cells;
+  SearchState current_state = goal_state;
+  cells.push_back(current_state.cell);
+  while (!(current_state == start_state)) {
+    const auto it = came_from.find(current_state);
+    if (it == came_from.end()) {
+      break;
+    }
+    current_state = it->second;
+    cells.push_back(current_state.cell);
+  }
+  std::reverse(cells.begin(), cells.end());
+  result.path.reserve(cells.size());
+  for (const auto & cell : cells) {
+    result.path.push_back(map.gridToWorld(cell));
+  }
   fillPathMetrics(result.path, result.metrics);
   result.success = true;
   result.message = "ok";
