@@ -490,6 +490,16 @@ run_blocked_region_persistence_case()
     cat "${output_dir}/metadata.yaml"
     return 1
   fi
+  if [[ ! -f "${output_dir}/voxel_evidence.csv" ]]; then
+    echo "FAIL blocked_region_persistence: save_map did not write voxel_evidence.csv"
+    cat "${save_file}"
+    return 1
+  fi
+  if ! head -n 1 "${output_dir}/voxel_evidence.csv" | grep -q "^x,y,z,log_odds,hit_count"; then
+    echo "FAIL blocked_region_persistence: voxel_evidence.csv has an invalid header"
+    head -n 5 "${output_dir}/voxel_evidence.csv"
+    return 1
+  fi
   cp -a "${output_dir}/." "${mismatch_dir}/"
   python3 - "${mismatch_dir}/metadata.yaml" <<'PY'
 import pathlib

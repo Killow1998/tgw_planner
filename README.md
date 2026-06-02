@@ -72,9 +72,11 @@ imprecise click can land on the nearest surface without silently moving to a
 distant map layer.
 
 `/tgw_mapping/save_map` writes a realtime map package with per-layer PCD files,
-`blocked_regions.yaml`, `metadata.yaml`, and `stats.json`. `load_map` validates
-the saved `resolution_m` before loading so a package is not silently re-quantized
-with a different node resolution.
+`voxel_evidence.csv`, `blocked_regions.yaml`, `metadata.yaml`, and `stats.json`.
+`voxel_evidence.csv` preserves log-odds, hit/miss/ray-pass counts, view counts,
+timing, and static/dynamic classifications. `load_map` validates the saved
+`resolution_m` before loading so a package is not silently re-quantized with a
+different node resolution.
 
 ## PCD Debug Mode
 

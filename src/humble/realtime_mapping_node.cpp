@@ -717,6 +717,12 @@ private:
     bool exists{false};
   };
 
+  struct LoadedVoxelEvidence
+  {
+    std::vector<std::pair<GridIndex, tgw_planner::core::VoxelState>> voxels;
+    bool exists{false};
+  };
+
   LoadedPcdCells loadPcdCells(const std::filesystem::path & path, std::string & message) const
   {
     LoadedPcdCells loaded;
@@ -755,6 +761,126 @@ private:
       }
     }
     return false;
+  }
+
+  bool writeVoxelEvidenceCsv(const std::filesystem::path & path, std::string & message) const
+  {
+    try {
+      const std::filesystem::path parent = path.parent_path();
+      if (!parent.empty()) {
+        std::filesystem::create_directories(parent);
+      }
+      std::ofstream out(path);
+      if (!out) {
+        message = "failed to open voxel evidence csv: " + path.string();
+        return false;
+      }
+      out << std::fixed << std::setprecision(9);
+      out << "x,y,z,log_odds,hit_count,miss_count,ray_pass_count,first_seen_time,"
+        "last_seen_time,last_hit_time,last_miss_time,distinct_view_count,last_view_id,"
+        "occupied,free,dynamic_suspect,static_candidate\n";
+      for (const auto & entry : map_.voxels()) {
+        const GridIndex & cell = entry.first;
+        const auto & state = entry.second;
+        out << cell.x << "," << cell.y << "," << cell.z << ","
+          << state.log_odds << ","
+          << state.hit_count << ","
+          << state.miss_count << ","
+          << state.ray_pass_count << ","
+          << state.first_seen_time << ","
+          << state.last_seen_time << ","
+          << state.last_hit_time << ","
+          << state.last_miss_time << ","
+          << state.distinct_view_count << ","
+          << state.last_view_id << ","
+          << (state.occupied ? 1 : 0) << ","
+          << (state.free ? 1 : 0) << ","
+          << (state.dynamic_suspect ? 1 : 0) << ","
+          << (state.static_candidate ? 1 : 0) << "\n";
+      }
+      return true;
+    } catch (const std::exception & error) {
+      message = error.what();
+      return false;
+    }
+  }
+
+  LoadedVoxelEvidence loadVoxelEvidenceCsv(
+    const std::filesystem::path & path, std::string & message) const
+  {
+    LoadedVoxelEvidence loaded;
+    if (!std::filesystem::exists(path)) {
+      return loaded;
+    }
+    loaded.exists = true;
+    std::ifstream in(path);
+    if (!in) {
+      message = "failed to open voxel evidence csv: " + path.string();
+      loaded.exists = false;
+      return loaded;
+    }
+
+    std::string line;
+    if (!std::getline(in, line)) {
+      return loaded;
+    }
+    std::size_t line_number = 1U;
+    while (std::getline(in, line)) {
+      ++line_number;
+      if (trim(line).empty()) {
+        continue;
+      }
+      std::replace(line.begin(), line.end(), ',', ' ');
+      std::istringstream row(line);
+      int x = 0;
+      int y = 0;
+      int z = 0;
+      int occupied = 0;
+      int free = 0;
+      int dynamic_suspect = 0;
+      int static_candidate = 0;
+      unsigned int hit_count = 0U;
+      unsigned int miss_count = 0U;
+      unsigned int ray_pass_count = 0U;
+      unsigned int distinct_view_count = 0U;
+      tgw_planner::core::VoxelState state;
+      if (!(row >> x >> y >> z >>
+          state.log_odds >>
+          hit_count >>
+          miss_count >>
+          ray_pass_count >>
+          state.first_seen_time >>
+          state.last_seen_time >>
+          state.last_hit_time >>
+          state.last_miss_time >>
+          distinct_view_count >>
+          state.last_view_id >>
+          occupied >>
+          free >>
+          dynamic_suspect >>
+          static_candidate))
+      {
+        message = "invalid voxel evidence row at " + path.string() + ":" +
+          std::to_string(line_number);
+        loaded.exists = false;
+        loaded.voxels.clear();
+        return loaded;
+      }
+      state.hit_count = static_cast<std::uint16_t>(
+        std::min<unsigned int>(hit_count, std::numeric_limits<std::uint16_t>::max()));
+      state.miss_count = static_cast<std::uint16_t>(
+        std::min<unsigned int>(miss_count, std::numeric_limits<std::uint16_t>::max()));
+      state.ray_pass_count = static_cast<std::uint16_t>(
+        std::min<unsigned int>(ray_pass_count, std::numeric_limits<std::uint16_t>::max()));
+      state.distinct_view_count = static_cast<std::uint16_t>(
+        std::min<unsigned int>(distinct_view_count, std::numeric_limits<std::uint16_t>::max()));
+      state.occupied = occupied != 0;
+      state.free = free != 0;
+      state.dynamic_suspect = dynamic_suspect != 0;
+      state.static_candidate = static_candidate != 0;
+      loaded.voxels.emplace_back(GridIndex{x, y, z}, state);
+    }
+    return loaded;
   }
 
   float probabilityToLogOddsForLoad(float probability) const
@@ -1907,6 +2033,7 @@ private:
     const std::filesystem::path blocked_path = input_dir / "blocked_cloud.pcd";
     const std::filesystem::path blocked_regions_path = input_dir / "blocked_regions.yaml";
     const std::filesystem::path metadata_path = input_dir / "metadata.yaml";
+    const std::filesystem::path evidence_path = input_dir / "voxel_evidence.csv";
 
     std::string message;
     if (!validateMapMetadata(metadata_path, message)) {
@@ -1914,20 +2041,30 @@ private:
       response->message = message;
       return;
     }
-    const LoadedPcdCells occupied_cells = loadPcdCells(occupied_path, message);
+    const LoadedVoxelEvidence voxel_evidence = loadVoxelEvidenceCsv(evidence_path, message);
     if (!message.empty()) {
       response->success = false;
       response->message = message;
       return;
     }
-    if (!occupied_cells.exists) {
+    const LoadedPcdCells occupied_cells =
+      voxel_evidence.exists ? LoadedPcdCells{} : loadPcdCells(occupied_path, message);
+    if (!message.empty()) {
+      response->success = false;
+      response->message = message;
+      return;
+    }
+    if (!voxel_evidence.exists && !occupied_cells.exists) {
       response->success = false;
       response->message = "missing required map asset: " + occupied_path.string();
       return;
     }
-    const LoadedPcdCells free_cells = loadPcdCells(free_path, message);
-    const LoadedPcdCells static_cells = loadPcdCells(static_path, message);
-    const LoadedPcdCells dynamic_cells = loadPcdCells(dynamic_path, message);
+    const LoadedPcdCells free_cells =
+      voxel_evidence.exists ? LoadedPcdCells{} : loadPcdCells(free_path, message);
+    const LoadedPcdCells static_cells =
+      voxel_evidence.exists ? LoadedPcdCells{} : loadPcdCells(static_path, message);
+    const LoadedPcdCells dynamic_cells =
+      voxel_evidence.exists ? LoadedPcdCells{} : loadPcdCells(dynamic_path, message);
     const LoadedPcdCells blocked_cells = loadPcdCells(blocked_path, message);
     std::vector<BlockedRegion> loaded_regions = loadBlockedRegionsYaml(blocked_regions_path, message);
     if (!message.empty()) {
@@ -1939,10 +2076,20 @@ private:
     map_.clear();
     blocked_regions_ = std::move(loaded_regions);
     loaded_blocked_cells_.clear();
-    response->free_points = loadLayer(free_cells, false, true, false, false);
-    response->occupied_points = loadLayer(occupied_cells, true, false, false, false);
-    response->static_points = loadLayer(static_cells, true, false, true, false);
-    response->dynamic_points = loadLayer(dynamic_cells, true, false, false, true);
+    if (voxel_evidence.exists) {
+      for (const auto & entry : voxel_evidence.voxels) {
+        map_.setVoxelState(entry.first, entry.second);
+      }
+      response->free_points = static_cast<std::uint32_t>(map_.freeVoxels().size());
+      response->occupied_points = static_cast<std::uint32_t>(map_.occupiedVoxels().size());
+      response->static_points = static_cast<std::uint32_t>(map_.staticCandidateVoxels().size());
+      response->dynamic_points = static_cast<std::uint32_t>(map_.dynamicSuspectVoxels().size());
+    } else {
+      response->free_points = loadLayer(free_cells, false, true, false, false);
+      response->occupied_points = loadLayer(occupied_cells, true, false, false, false);
+      response->static_points = loadLayer(static_cells, true, false, true, false);
+      response->dynamic_points = loadLayer(dynamic_cells, true, false, false, true);
+    }
     for (const auto & entry : blocked_cells.cells) {
       loaded_blocked_cells_.insert(entry.first);
     }
@@ -1966,6 +2113,7 @@ private:
     const std::filesystem::path blocked_path = output_dir / "blocked_cloud.pcd";
     const std::filesystem::path blocked_regions_path = output_dir / "blocked_regions.yaml";
     const std::filesystem::path metadata_path = output_dir / "metadata.yaml";
+    const std::filesystem::path evidence_path = output_dir / "voxel_evidence.csv";
     const std::filesystem::path stats_path = output_dir / "stats.json";
 
     const std::vector<GridIndex> occupied_cells = map_.occupiedVoxels();
@@ -1981,7 +2129,8 @@ private:
       !writePcd(free_path, free_cells, message) ||
       !writePcd(static_path, static_cells, message) ||
       !writePcd(dynamic_path, dynamic_cells, message) ||
-      !writePcd(blocked_path, blocked_cells, message))
+      !writePcd(blocked_path, blocked_cells, message) ||
+      !writeVoxelEvidenceCsv(evidence_path, message))
     {
       response->success = false;
       response->message = message;

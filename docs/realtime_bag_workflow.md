@@ -294,12 +294,16 @@ ros2 service call /tgw_mapping/get_snapshot tgw_planner/srv/GetSnapshot "{}"
 
 `save_map` writes `occupied_cloud.pcd`, `free_cloud.pcd`,
 `static_candidate_cloud.pcd`, `dynamic_suspect_cloud.pcd`,
-`blocked_cloud.pcd`, `blocked_regions.yaml`, `metadata.yaml`, and `stats.json`.
-The exported PCD intensity is the current occupancy probability for each voxel
-center. `metadata.yaml` records the map format, input mode, frame, resolution,
-and key probabilistic/static-evidence parameters. `load_map` reconstructs the
-realtime probabilistic voxel layers from those PCD assets, rejects packages whose
-saved resolution does not match the running node resolution, and restores
+`blocked_cloud.pcd`, `voxel_evidence.csv`, `blocked_regions.yaml`,
+`metadata.yaml`, and `stats.json`. The exported PCD intensity is the current
+occupancy probability for each voxel center. `voxel_evidence.csv` is the primary
+realtime map asset: it preserves per-voxel log-odds, hit/miss/ray-pass counts,
+view counts, timestamps, and static/dynamic classifications. `metadata.yaml`
+records the map format, input mode, frame, resolution, and key
+probabilistic/static-evidence parameters. `load_map` restores full voxel
+evidence when `voxel_evidence.csv` exists, falls back to reconstructing
+probabilistic layers from the PCD assets for older packages, rejects packages
+whose saved resolution does not match the running node resolution, and restores
 editable blocked region objects from `blocked_regions.yaml` plus discrete loaded
 blocked cells from `blocked_cloud.pcd`.
 

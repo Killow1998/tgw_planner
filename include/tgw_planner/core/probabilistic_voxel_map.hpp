@@ -36,6 +36,8 @@ struct VoxelState
 class ProbabilisticVoxelMap
 {
 public:
+  using VoxelStorage = std::unordered_map<GridIndex, VoxelState, GridIndexHash>;
+
   explicit ProbabilisticVoxelMap(MappingOptions options = {});
 
   GridIndex worldToGrid(const Point3 & point) const;
@@ -62,6 +64,7 @@ public:
   void clear();
 
   const MappingOptions & options() const;
+  const VoxelStorage & voxels() const;
   double resolution() const;
   std::size_t size() const;
 
@@ -74,7 +77,7 @@ private:
   float miss_log_odds_{0.0F};
   float occupied_threshold_log_odds_{0.0F};
   float free_threshold_log_odds_{0.0F};
-  std::unordered_map<GridIndex, VoxelState, GridIndexHash> voxels_;
+  VoxelStorage voxels_;
 };
 
 }  // namespace tgw_planner::core

@@ -208,6 +208,11 @@ const MappingOptions & ProbabilisticVoxelMap::options() const
   return options_;
 }
 
+const ProbabilisticVoxelMap::VoxelStorage & ProbabilisticVoxelMap::voxels() const
+{
+  return voxels_;
+}
+
 double ProbabilisticVoxelMap::resolution() const
 {
   return options_.resolution_m;
