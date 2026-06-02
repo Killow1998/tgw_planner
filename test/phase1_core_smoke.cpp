@@ -258,6 +258,23 @@ int main()
   CHECK(moved_to_center_lane);
   CHECK(!stayed_wall_hugging);
 
+  SurfacePlannerOptions clearance_shortcut_options = center_bias_options;
+  clearance_shortcut_options.enable_shortcut = true;
+  clearance_shortcut_options.shortcut_safety_margin_m = 0.15;
+  SurfaceAstarPlanner clearance_shortcut_planner(clearance_shortcut_options);
+  const auto clearance_shortcut_plan =
+    clearance_shortcut_planner.plan(snapshot, {2, 1, 1}, {16, 1, 1});
+  CHECK(clearance_shortcut_plan.success);
+  CHECK(clearance_shortcut_plan.metrics.final_path_validated);
+  CHECK(clearance_shortcut_plan.cells.size() > 2U);
+  bool clearance_shortcut_kept_center_lane = false;
+  for (const auto & cell : clearance_shortcut_plan.cells) {
+    if (cell.x >= 5 && cell.x <= 13 && cell.y == 4) {
+      clearance_shortcut_kept_center_lane = true;
+    }
+  }
+  CHECK(clearance_shortcut_kept_center_lane);
+
   PathValidator validator(footprint);
   const auto validation = validator.validate(snapshot, plan.path);
   if (!validation.valid) {
