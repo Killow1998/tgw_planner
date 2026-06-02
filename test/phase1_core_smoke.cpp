@@ -178,6 +178,44 @@ int main()
   CHECK(!blocked_validation.valid);
   CHECK(blocked_validation.failure_reason == "final path sample is blocked");
 
+  NavigationSnapshot detour_snapshot;
+  detour_snapshot.resolution_m = options.resolution_m;
+  for (int x = 0; x <= 4; ++x) {
+    for (int y = 0; y <= 2; ++y) {
+      detour_snapshot.surface.traversable_cells.insert({x, y, 0});
+    }
+  }
+  detour_snapshot.surface.blocked_cells.insert({2, 1, 0});
+  SurfacePlannerOptions detour_options;
+  detour_options.require_footprint_support = false;
+  detour_options.enable_shortcut = true;
+  SurfaceAstarPlanner detour_planner(detour_options);
+  const auto detour_plan = detour_planner.plan(detour_snapshot, {0, 1, 0}, {4, 1, 0});
+  CHECK(detour_plan.success);
+  bool detour_used_blocked = false;
+  bool detour_left_center_line = false;
+  for (const auto & cell : detour_plan.cells) {
+    detour_used_blocked = detour_used_blocked || cell == GridIndex{2, 1, 0};
+    detour_left_center_line = detour_left_center_line || cell.y != 1;
+  }
+  CHECK(!detour_used_blocked);
+  CHECK(detour_left_center_line);
+
+  NavigationSnapshot unreachable_snapshot;
+  unreachable_snapshot.resolution_m = options.resolution_m;
+  for (int x = 0; x <= 4; ++x) {
+    for (int y = 0; y <= 2; ++y) {
+      unreachable_snapshot.surface.traversable_cells.insert({x, y, 0});
+    }
+  }
+  for (int y = 0; y <= 2; ++y) {
+    unreachable_snapshot.surface.blocked_cells.insert({2, y, 0});
+  }
+  SurfaceAstarPlanner unreachable_planner(detour_options);
+  const auto unreachable_plan = unreachable_planner.plan(unreachable_snapshot, {0, 1, 0}, {4, 1, 0});
+  CHECK(!unreachable_plan.success);
+  CHECK(unreachable_plan.metrics.failure_reason == "surface A* failed to find a path");
+
   std::cout << "phase1_phase2_phase3_core_smoke passed\n";
   return 0;
 }
