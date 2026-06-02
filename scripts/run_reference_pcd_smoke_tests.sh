@@ -18,6 +18,7 @@ fi
 pcd_dir="${PCT_PCD_DIR:-$HOME/robot_nav_refs/PCT_planner/rsc/pcd}"
 require_legacy_spiral_pass="${TGW_REQUIRE_LEGACY_SPIRAL_PASS:-0}"
 require_surface_spiral_pass="${TGW_REQUIRE_SURFACE_SPIRAL_PASS:-${TGW_REQUIRE_SPIRAL_PASS:-1}}"
+skip_legacy_pcd_smoke="${TGW_SKIP_LEGACY_PCD_SMOKE:-0}"
 
 launch_pid=""
 cleanup()
@@ -245,7 +246,11 @@ if [[ ! -f "${building_pcd}" ]]; then
 fi
 spiral_pcd="${pcd_dir}/spiral0.3_2.pcd"
 
-run_case "pct_building" "${building_pcd}" "0.10" "5.0" "5.0" "0.0" "-6.0" "-1.0" "0.0" "pass"
-run_case "pct_spiral" "${spiral_pcd}" "0.20" "-16.0" "-6.0" "0.0" "-26.0" "-5.0" "0.0" "spiral"
 run_surface_case "surface_pct_building" "${building_pcd}" "0.10" "5.0" "5.0" "0.0" "-6.0" "-1.0" "0.0" "pass"
 run_surface_case "surface_pct_spiral" "${spiral_pcd}" "0.20" "-16.0" "-6.0" "0.0" "-26.0" "-5.0" "0.0" "spiral"
+if [[ "${skip_legacy_pcd_smoke}" != "1" ]]; then
+  run_case "pct_building" "${building_pcd}" "0.10" "5.0" "5.0" "0.0" "-6.0" "-1.0" "0.0" "pass"
+  run_case "pct_spiral" "${spiral_pcd}" "0.20" "-16.0" "-6.0" "0.0" "-26.0" "-5.0" "0.0" "spiral"
+else
+  echo "SKIP legacy PCD smoke: TGW_SKIP_LEGACY_PCD_SMOKE=1"
+fi

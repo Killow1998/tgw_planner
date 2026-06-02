@@ -198,6 +198,25 @@ The launch also forwards `planner_max_snap_distance_m`, which bounds how far
 `/tgw_map/plan_path` may project requested start and goal poses onto a nearby
 traversable, footprint-supported surface.
 
+Reference PCD regression:
+
+```bash
+src/tgw_planner/scripts/run_reference_pcd_smoke_tests.sh
+```
+
+The script runs the refactored surface planner checks for the PCT building and
+spiral maps before the older launch/service PCD checks. In restricted
+environments that can execute local tools but cannot create ROS graph sockets,
+use:
+
+```bash
+TGW_SKIP_LEGACY_PCD_SMOKE=1 \
+src/tgw_planner/scripts/run_reference_pcd_smoke_tests.sh
+```
+
+This still verifies the surface planner PCD path and skips only the legacy
+launch/service path.
+
 The realtime planning response populates:
 
 - `raw_path_waypoints`
