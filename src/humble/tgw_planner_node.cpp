@@ -116,6 +116,45 @@ const char * rescueReasonName(StairFragmentRescueReason reason)
   }
   return "unknown";
 }
+
+std::string jsonEscape(const std::string & text)
+{
+  std::ostringstream out;
+  for (const char ch : text) {
+    switch (ch) {
+      case '"':
+        out << "\\\"";
+        break;
+      case '\\':
+        out << "\\\\";
+        break;
+      case '\b':
+        out << "\\b";
+        break;
+      case '\f':
+        out << "\\f";
+        break;
+      case '\n':
+        out << "\\n";
+        break;
+      case '\r':
+        out << "\\r";
+        break;
+      case '\t':
+        out << "\\t";
+        break;
+      default:
+        if (static_cast<unsigned char>(ch) < 0x20U) {
+          out << "\\u" << std::hex << std::setw(4) << std::setfill('0') <<
+            static_cast<int>(static_cast<unsigned char>(ch)) << std::dec << std::setfill(' ');
+        } else {
+          out << ch;
+        }
+        break;
+    }
+  }
+  return out.str();
+}
 }  // namespace
 
 class TgwPlannerNode : public rclcpp::Node
@@ -626,11 +665,23 @@ private:
     out << "{";
     out << "\"success\":" << (metrics.success ? "true" : "false") << ",";
     out << "\"map_id\":\"" << map_.mapId() << "\",";
-    out << "\"failure_reason\":\"" << metrics.failure_reason << "\",";
+    out << "\"failure_reason\":\"" << jsonEscape(metrics.failure_reason) << "\",";
+    out << "\"final_path_validated\":" << (metrics.final_path_validated ? "true" : "false") << ",";
+    out << "\"final_path_fallback_to_raw\":" <<
+      (metrics.final_path_fallback_to_raw ? "true" : "false") << ",";
+    out << "\"final_path_validation_failure\":\"" <<
+      jsonEscape(metrics.final_path_validation_failure) << "\",";
     out << "\"search_time_ms\":" << metrics.search_time_ms << ",";
     out << "\"expanded_nodes\":" << metrics.expanded_nodes << ",";
     out << "\"generated_nodes\":" << metrics.generated_nodes << ",";
     out << "\"max_open_set_size\":" << metrics.max_open_set_size << ",";
+    out << "\"raw_path_waypoints\":" << metrics.raw_path_waypoints << ",";
+    out << "\"raw_path_length_m\":" << metrics.raw_path_length_m << ",";
+    out << "\"raw_vertical_gain_m\":" << metrics.raw_path_vertical_gain_m << ",";
+    out << "\"raw_vertical_loss_m\":" << metrics.raw_path_vertical_loss_m << ",";
+    out << "\"postprocess_floor_shortcuts\":" << metrics.postprocess_floor_shortcuts << ",";
+    out << "\"postprocess_stair_centerline_replacements\":" <<
+      metrics.postprocess_stair_centerline_replacements << ",";
     out << "\"path_waypoints\":" << metrics.path_waypoints << ",";
     out << "\"path_length_m\":" << metrics.path_length_m << ",";
     out << "\"vertical_gain_m\":" << metrics.path_vertical_gain_m << ",";
@@ -1076,6 +1127,25 @@ private:
     RCLCPP_INFO(get_logger(), "[Planner] expanded_nodes: %u", result.metrics.expanded_nodes);
     RCLCPP_INFO(get_logger(), "[Planner] generated_nodes: %u", result.metrics.generated_nodes);
     RCLCPP_INFO(get_logger(), "[Planner] max_open_set_size: %u", result.metrics.max_open_set_size);
+    RCLCPP_INFO(
+      get_logger(), "[Planner] final_path_validated: %s",
+      result.metrics.final_path_validated ? "true" : "false");
+    RCLCPP_INFO(
+      get_logger(), "[Planner] final_path_fallback_to_raw: %s",
+      result.metrics.final_path_fallback_to_raw ? "true" : "false");
+    if (!result.metrics.final_path_validation_failure.empty()) {
+      RCLCPP_WARN(
+        get_logger(), "[Planner] final_path_validation_failure: %s",
+        result.metrics.final_path_validation_failure.c_str());
+    }
+    RCLCPP_INFO(get_logger(), "[Planner] raw_path_waypoints: %u", result.metrics.raw_path_waypoints);
+    RCLCPP_INFO(get_logger(), "[Planner] raw_path_length_m: %.3f", result.metrics.raw_path_length_m);
+    RCLCPP_INFO(
+      get_logger(), "[Planner] postprocess_floor_shortcuts: %u",
+      result.metrics.postprocess_floor_shortcuts);
+    RCLCPP_INFO(
+      get_logger(), "[Planner] postprocess_stair_centerline_replacements: %u",
+      result.metrics.postprocess_stair_centerline_replacements);
     RCLCPP_INFO(get_logger(), "[Planner] path_waypoints: %u", result.metrics.path_waypoints);
     RCLCPP_INFO(get_logger(), "[Planner] path_length_m: %.3f", result.metrics.path_length_m);
     RCLCPP_INFO(get_logger(), "[Planner] vertical_gain_m: %.3f", result.metrics.path_vertical_gain_m);
