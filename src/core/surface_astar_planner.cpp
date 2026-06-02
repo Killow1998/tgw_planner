@@ -262,9 +262,6 @@ bool SurfaceAstarPlanner::isTransitionAllowed(
   if (!isCellTraversable(snapshot, to)) {
     return false;
   }
-  if (!options_.require_footprint_support) {
-    return true;
-  }
 
   const Point3 from_point = cellCenter(from, snapshot.resolution_m);
   const Point3 to_point = cellCenter(to, snapshot.resolution_m);
@@ -274,9 +271,12 @@ bool SurfaceAstarPlanner::isTransitionAllowed(
   for (int step = 0; step <= steps; ++step) {
     const double t = static_cast<double>(step) / static_cast<double>(steps);
     const Point3 sample{
-      from_point.x + (to_point.x - from_point.x) * t,
-      from_point.y + (to_point.y - from_point.y) * t,
-      from_point.z + (to_point.z - from_point.z) * t};
+        from_point.x + (to_point.x - from_point.x) * t,
+        from_point.y + (to_point.y - from_point.y) * t,
+        from_point.z + (to_point.z - from_point.z) * t};
+    if (!isCellTraversable(snapshot, worldToGrid(sample, snapshot.resolution_m))) {
+      return false;
+    }
     if (!isFootprintSupported(snapshot, sample, yaw)) {
       return false;
     }

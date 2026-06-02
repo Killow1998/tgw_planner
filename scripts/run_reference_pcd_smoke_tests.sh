@@ -108,6 +108,44 @@ run_case()
   return 0
 }
 
+run_surface_case()
+{
+  local name="$1"
+  local pcd="$2"
+  local resolution="$3"
+  local start_x="$4"
+  local start_y="$5"
+  local start_z="$6"
+  local goal_x="$7"
+  local goal_y="$8"
+  local goal_z="$9"
+  local expected="${10}"
+
+  if [[ ! -f "${pcd}" ]]; then
+    echo "SKIP ${name}: missing ${pcd}"
+    return 0
+  fi
+
+  local output
+  set +e
+  output="$(ros2 run tgw_planner tgw_surface_pcd_smoke \
+    "${pcd}" "${resolution}" "${start_x}" "${start_y}" "${start_z}" \
+    "${goal_x}" "${goal_y}" "${goal_z}" 0 2>&1)"
+  local rc=$?
+  set -e
+  echo "${name}: ${output}"
+
+  if [[ "${expected}" == "pass" && ${rc} -ne 0 ]]; then
+    echo "FAIL ${name}: expected success"
+    return 1
+  fi
+  if [[ "${expected}" == "spiral" && ${rc} -ne 0 && "${require_spiral_pass}" == "1" ]]; then
+    echo "FAIL ${name}: spiral surface pass is required"
+    return 1
+  fi
+  return 0
+}
+
 building_pcd="${pcd_dir}/extracted/building2_9.pcd"
 if [[ ! -f "${building_pcd}" ]]; then
   building_pcd="${pcd_dir}/building2_9.pcd"
@@ -116,3 +154,5 @@ spiral_pcd="${pcd_dir}/spiral0.3_2.pcd"
 
 run_case "pct_building" "${building_pcd}" "0.10" "5.0" "5.0" "0.0" "-6.0" "-1.0" "0.0" "pass"
 run_case "pct_spiral" "${spiral_pcd}" "0.20" "-16.0" "-6.0" "0.0" "-26.0" "-5.0" "0.0" "spiral"
+run_surface_case "surface_pct_building" "${building_pcd}" "0.10" "5.0" "5.0" "0.0" "-6.0" "-1.0" "0.0" "pass"
+run_surface_case "surface_pct_spiral" "${spiral_pcd}" "0.20" "-16.0" "-6.0" "0.0" "-26.0" "-5.0" "0.0" "spiral"

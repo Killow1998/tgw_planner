@@ -127,6 +127,13 @@ ament_target_dependencies(tgw_realtime_mapping_node
   tf2_ros
 )
 
+add_executable(tgw_surface_pcd_smoke
+  src/tools/surface_pcd_smoke.cpp
+)
+target_link_libraries(tgw_surface_pcd_smoke
+  tgw_planner_core
+)
+
 add_library(tgw_planner_rviz_plugins SHARED
   src/rviz_plugins/tgw_pose_tool.cpp
 )
@@ -162,6 +169,7 @@ install(TARGETS
   tgw_pcd_import_node
   tgw_clicked_point_router_node
   tgw_realtime_mapping_node
+  tgw_surface_pcd_smoke
   tgw_planner_rviz_plugins
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
