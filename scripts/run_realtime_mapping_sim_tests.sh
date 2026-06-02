@@ -442,16 +442,20 @@ run_blocked_region_persistence_case()
   mismatch_dir="$(mktemp -d "${tmp_root}/blocked_region_mismatch_map.XXXXXX")"
   local bad_format_dir
   bad_format_dir="$(mktemp -d "${tmp_root}/blocked_region_bad_format_map.XXXXXX")"
+  local evidence_only_dir
+  evidence_only_dir="$(mktemp -d "${tmp_root}/blocked_region_evidence_only_map.XXXXXX")"
   local add_file="${tmp_root}/blocked_region_add.out"
   local save_file="${tmp_root}/blocked_region_save.out"
   local clear_file="${tmp_root}/blocked_region_clear.out"
   local load_file="${tmp_root}/blocked_region_load.out"
+  local evidence_only_load_file="${tmp_root}/blocked_region_evidence_only_load.out"
   local mismatch_load_file="${tmp_root}/blocked_region_mismatch_load.out"
   local bad_format_load_file="${tmp_root}/blocked_region_bad_format_load.out"
   local remove_file="${tmp_root}/blocked_region_remove.out"
   tmp_paths+=(
-    "${output_dir}" "${mismatch_dir}" "${bad_format_dir}" "${add_file}" "${save_file}"
-    "${clear_file}" "${load_file}" "${mismatch_load_file}" "${bad_format_load_file}"
+    "${output_dir}" "${mismatch_dir}" "${bad_format_dir}" "${evidence_only_dir}"
+    "${add_file}" "${save_file}" "${clear_file}" "${load_file}"
+    "${evidence_only_load_file}" "${mismatch_load_file}" "${bad_format_load_file}"
     "${remove_file}")
 
   setsid ros2 launch tgw_planner realtime_mapping.launch.py \
@@ -500,6 +504,12 @@ run_blocked_region_persistence_case()
     head -n 5 "${output_dir}/voxel_evidence.csv"
     return 1
   fi
+  cp -a "${output_dir}/." "${evidence_only_dir}/"
+  rm -f \
+    "${evidence_only_dir}/occupied_cloud.pcd" \
+    "${evidence_only_dir}/free_cloud.pcd" \
+    "${evidence_only_dir}/static_candidate_cloud.pcd" \
+    "${evidence_only_dir}/dynamic_suspect_cloud.pcd"
   cp -a "${output_dir}/." "${mismatch_dir}/"
   python3 - "${mismatch_dir}/metadata.yaml" <<'PY'
 import pathlib
@@ -522,6 +532,8 @@ PY
   ros2 service call /tgw_mapping/load_map tgw_planner/srv/LoadMap \
     "{input_dir: ${output_dir}}" >"${load_file}" 2>&1
   ros2 service call /tgw_mapping/load_map tgw_planner/srv/LoadMap \
+    "{input_dir: ${evidence_only_dir}}" >"${evidence_only_load_file}" 2>&1
+  ros2 service call /tgw_mapping/load_map tgw_planner/srv/LoadMap \
     "{input_dir: ${mismatch_dir}}" >"${mismatch_load_file}" 2>&1
   ros2 service call /tgw_mapping/load_map tgw_planner/srv/LoadMap \
     "{input_dir: ${bad_format_dir}}" >"${bad_format_load_file}" 2>&1
@@ -529,16 +541,22 @@ PY
     "{operation: remove, min: {x: 0.0, y: 0.0, z: 0.0}, max: {x: 1.0, y: 1.0, z: 1.0}, reason: regression}" \
     >"${remove_file}" 2>&1
 
-  local save_success load_success mismatch_failed bad_format_failed removed_region
+  local save_success load_success evidence_only_success mismatch_failed bad_format_failed removed_region
   save_success="$(grep -o "success=True\\|success=False" "${save_file}" | tail -n 1 || true)"
   load_success="$(grep -o "success=True\\|success=False" "${load_file}" | tail -n 1 || true)"
+  evidence_only_success="$(grep -o "success=True\\|success=False" "${evidence_only_load_file}" | tail -n 1 || true)"
   mismatch_failed="$(grep -o "map resolution mismatch" "${mismatch_load_file}" | tail -n 1 || true)"
   bad_format_failed="$(grep -o "unsupported realtime map format" "${bad_format_load_file}" | tail -n 1 || true)"
   removed_region="$(grep -o "removed 1 realtime blocked regions" "${remove_file}" | tail -n 1 || true)"
-  echo "blocked_region_persistence: ${save_success:-save=unknown} ${load_success:-load=unknown} metadata_mismatch_rejected=${mismatch_failed:+true} bad_format_rejected=${bad_format_failed:+true} removed_region=${removed_region:+true}"
+  echo "blocked_region_persistence: ${save_success:-save=unknown} ${load_success:-load=unknown} evidence_only_load=${evidence_only_success:-unknown} metadata_mismatch_rejected=${mismatch_failed:+true} bad_format_rejected=${bad_format_failed:+true} removed_region=${removed_region:+true}"
   if [[ "${save_success}" != "success=True" || "${load_success}" != "success=True" ]]; then
     echo "FAIL blocked_region_persistence: save/load failed"
     cat "${save_file}" "${load_file}"
+    return 1
+  fi
+  if [[ "${evidence_only_success}" != "success=True" ]]; then
+    echo "FAIL blocked_region_persistence: evidence-only map package did not load"
+    cat "${evidence_only_load_file}"
     return 1
   fi
   if [[ -z "${mismatch_failed}" ]]; then
