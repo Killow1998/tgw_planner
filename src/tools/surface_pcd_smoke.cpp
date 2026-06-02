@@ -4,6 +4,7 @@
 #include <iostream>
 #include <limits>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -135,6 +136,11 @@ struct ComponentSummary
   std::size_t gap_line_surface_cells{0U};
   std::size_t gap_line_traversable_cells{0U};
   std::size_t gap_line_forbidden_cells{0U};
+  std::string gap_line_diagnostics;
+  double nearest_clear_component_gap_m{0.0};
+  GridIndex clear_gap_start_cell;
+  GridIndex clear_gap_goal_cell;
+  std::size_t clear_gap_line_cells{0U};
 };
 
 std::vector<GridIndex> rasterLine(const GridIndex & from, const GridIndex & to)
@@ -152,6 +158,108 @@ std::vector<GridIndex> rasterLine(const GridIndex & from, const GridIndex & to)
   }
   cells.erase(std::unique(cells.begin(), cells.end()), cells.end());
   return cells;
+}
+
+std::string occupiedColumnRuns(
+  const ProbabilisticVoxelMap & map, const GridIndex & cell, int z_min, int z_max)
+{
+  std::ostringstream out;
+  bool in_run = false;
+  int run_start = 0;
+  bool first_run = true;
+  for (int z = z_min; z <= z_max; ++z) {
+    const bool occupied = map.isOccupied({cell.x, cell.y, z});
+    if (occupied && !in_run) {
+      run_start = z;
+      in_run = true;
+    } else if (!occupied && in_run) {
+      if (!first_run) {
+        out << "|";
+      }
+      out << run_start << ".." << (z - 1);
+      first_run = false;
+      in_run = false;
+    }
+  }
+  if (in_run) {
+    if (!first_run) {
+      out << "|";
+    }
+    out << run_start << ".." << z_max;
+    first_run = false;
+  }
+  if (first_run) {
+    out << "none";
+  }
+  return out.str();
+}
+
+int firstHeadCollisionZ(
+  const ProbabilisticVoxelMap & map, const GridIndex & stand, int height_cells)
+{
+  for (int dz = 0; dz <= height_cells; ++dz) {
+    const int z = stand.z + dz;
+    if (map.isOccupied({stand.x, stand.y, z})) {
+      return z;
+    }
+  }
+  return std::numeric_limits<int>::min();
+}
+
+std::string describeGapLine(
+  const NavigationSnapshot & snapshot,
+  const ProbabilisticVoxelMap & map,
+  const std::vector<GridIndex> & line)
+{
+  const int height_cells =
+    std::max(1, static_cast<int>(std::ceil(0.50 / snapshot.resolution_m)));
+  std::ostringstream out;
+  for (std::size_t i = 0; i < line.size(); ++i) {
+    const GridIndex & cell = line[i];
+    if (i > 0U) {
+      out << ";";
+    }
+    const auto surface_it = snapshot.surface.surface_cells.find(cell);
+    const int head_collision_z = firstHeadCollisionZ(map, cell, height_cells);
+    const bool clear = head_collision_z == std::numeric_limits<int>::min();
+    out << "[" << cell.x << "," << cell.y << "," << cell.z << ":"
+      << "occ=" << (map.isOccupied(cell) ? 1 : 0)
+      << ",support_below=" << (map.isOccupied({cell.x, cell.y, cell.z - 1}) ? 1 : 0)
+      << ",surface=" << (surface_it != snapshot.surface.surface_cells.end() ? 1 : 0)
+      << ",trav=" <<
+      (snapshot.surface.traversable_cells.find(cell) != snapshot.surface.traversable_cells.end() ?
+      1 : 0)
+      << ",forbid=" <<
+      (snapshot.surface.forbidden_cells.find(cell) != snapshot.surface.forbidden_cells.end() ?
+      1 : 0)
+      << ",head_clear=" << (clear ? 1 : 0);
+    if (!clear) {
+      out << ",head_occ_z=" << head_collision_z;
+    }
+    if (surface_it != snapshot.surface.surface_cells.end()) {
+      out << ",support_z=" << surface_it->second.support.z;
+    }
+    out << ",runs=" << occupiedColumnRuns(
+        map, cell, cell.z - height_cells - 2, cell.z + height_cells + 4)
+      << "]";
+  }
+  return out.str();
+}
+
+bool lineHasNoOccupiedOrForbidden(
+  const NavigationSnapshot & snapshot,
+  const ProbabilisticVoxelMap & map,
+  const std::vector<GridIndex> & line)
+{
+  for (const GridIndex & cell : line) {
+    if (map.isOccupied(cell)) {
+      return false;
+    }
+    if (snapshot.surface.forbidden_cells.find(cell) != snapshot.surface.forbidden_cells.end()) {
+      return false;
+    }
+  }
+  return true;
 }
 
 ComponentSummary summarizeComponents(
@@ -225,6 +333,7 @@ ComponentSummary summarizeComponents(
   {
     std::vector<GridIndex> start_cells;
     std::vector<GridIndex> goal_cells;
+    std::unordered_map<GridIndex, GridIndex, GridIndexHash> goal_cells_by_xy_z;
     start_cells.reserve(summary.start_component_size);
     goal_cells.reserve(summary.goal_component_size);
     for (const auto & entry : component_by_cell) {
@@ -232,6 +341,7 @@ ComponentSummary summarizeComponents(
         start_cells.push_back(entry.first);
       } else if (entry.second == summary.goal_component) {
         goal_cells.push_back(entry.first);
+        goal_cells_by_xy_z.emplace(entry.first, entry.first);
       }
     }
 
@@ -251,7 +361,9 @@ ComponentSummary summarizeComponents(
     }
     if (std::isfinite(best_distance_cells)) {
       summary.start_goal_component_gap_m = std::sqrt(best_distance_cells) * snapshot.resolution_m;
-      for (const GridIndex & cell : rasterLine(summary.gap_start_cell, summary.gap_goal_cell)) {
+      const std::vector<GridIndex> gap_line = rasterLine(summary.gap_start_cell, summary.gap_goal_cell);
+      summary.gap_line_diagnostics = describeGapLine(snapshot, map, gap_line);
+      for (const GridIndex & cell : gap_line) {
         ++summary.gap_line_cells;
         if (map.isOccupied(cell)) {
           ++summary.gap_line_occupied_cells;
@@ -268,6 +380,43 @@ ComponentSummary summarizeComponents(
           ++summary.gap_line_forbidden_cells;
         }
       }
+    }
+
+    constexpr double max_clear_gap_m = 2.0;
+    const int max_clear_gap_cells =
+      std::max(1, static_cast<int>(std::ceil(max_clear_gap_m / snapshot.resolution_m)));
+    double best_clear_distance_cells = std::numeric_limits<double>::infinity();
+    std::vector<GridIndex> best_clear_line;
+    for (const GridIndex & a : start_cells) {
+      for (int dx = -max_clear_gap_cells; dx <= max_clear_gap_cells; ++dx) {
+        for (int dy = -max_clear_gap_cells; dy <= max_clear_gap_cells; ++dy) {
+          for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
+            const GridIndex b{a.x + dx, a.y + dy, a.z + dz};
+            const auto goal_cell_it = goal_cells_by_xy_z.find(b);
+            if (goal_cell_it == goal_cells_by_xy_z.end()) {
+              continue;
+            }
+            const double distance_cells =
+              static_cast<double>(dx * dx + dy * dy + dz * dz);
+            if (distance_cells >= best_clear_distance_cells) {
+              continue;
+            }
+            const std::vector<GridIndex> line = rasterLine(a, goal_cell_it->second);
+            if (!lineHasNoOccupiedOrForbidden(snapshot, map, line)) {
+              continue;
+            }
+            best_clear_distance_cells = distance_cells;
+            summary.clear_gap_start_cell = a;
+            summary.clear_gap_goal_cell = goal_cell_it->second;
+            best_clear_line = line;
+          }
+        }
+      }
+    }
+    if (std::isfinite(best_clear_distance_cells)) {
+      summary.nearest_clear_component_gap_m =
+        std::sqrt(best_clear_distance_cells) * snapshot.resolution_m;
+      summary.clear_gap_line_cells = best_clear_line.size();
     }
   }
   return summary;
@@ -374,6 +523,13 @@ int main(int argc, char ** argv)
     << " gap_line_surface_cells=" << components.gap_line_surface_cells
     << " gap_line_traversable_cells=" << components.gap_line_traversable_cells
     << " gap_line_forbidden_cells=" << components.gap_line_forbidden_cells
+    << " gap_line_diagnostics=\"" << components.gap_line_diagnostics << "\""
+    << " nearest_clear_component_gap_m=" << components.nearest_clear_component_gap_m
+    << " clear_gap_start_cell=[" << components.clear_gap_start_cell.x << "," <<
+      components.clear_gap_start_cell.y << "," << components.clear_gap_start_cell.z << "]"
+    << " clear_gap_goal_cell=[" << components.clear_gap_goal_cell.x << "," <<
+      components.clear_gap_goal_cell.y << "," << components.clear_gap_goal_cell.z << "]"
+    << " clear_gap_line_cells=" << components.clear_gap_line_cells
     << " expanded_nodes=" << result.metrics.expanded_nodes
     << " raw_path_waypoints=" << result.metrics.raw_path_waypoints
     << " raw_path_length_m=" << result.metrics.raw_path_length_m

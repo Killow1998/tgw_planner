@@ -134,6 +134,13 @@ target_link_libraries(tgw_surface_pcd_smoke
   tgw_planner_core
 )
 
+add_executable(tgw_tomogram_pcd_smoke
+  src/tools/tomogram_pcd_smoke.cpp
+)
+target_include_directories(tgw_tomogram_pcd_smoke PRIVATE ${PCL_INCLUDE_DIRS})
+target_link_libraries(tgw_tomogram_pcd_smoke ${PCL_LIBRARIES})
+target_compile_definitions(tgw_tomogram_pcd_smoke PRIVATE ${PCL_DEFINITIONS})
+
 add_library(tgw_planner_rviz_plugins SHARED
   src/rviz_plugins/tgw_pose_tool.cpp
 )
@@ -170,6 +177,7 @@ install(TARGETS
   tgw_clicked_point_router_node
   tgw_realtime_mapping_node
   tgw_surface_pcd_smoke
+  tgw_tomogram_pcd_smoke
   tgw_planner_rviz_plugins
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib

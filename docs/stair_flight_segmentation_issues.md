@@ -219,6 +219,74 @@ per-flight width, length, slope, z range, endpoints, and component IDs
 start_cell_type / goal_cell_type with flight IDs
 ```
 
+## 2026-06-02 Spiral Surface Gap Evidence
+
+`tgw_surface_pcd_smoke` now reports per-cell diagnostics for the closest
+surface-component gap. For `spiral0.3_2.pcd` at 0.20 m resolution, the closest
+gap between the snapped start and goal components is:
+
+```text
+gap_start_cell=[-109,-92,1]
+gap_goal_cell=[-113,-92,1]
+gap_line_cells=5
+gap_line_occupied_cells=2
+gap_line_forbidden_cells=2
+nearest_clear_component_gap_m=0
+```
+
+The line alternates between traversable cells and occupied/forbidden columns:
+
+```text
+[-109,-92,1]: occ=0 support_below=1 surface=1 trav=1 forbid=0 head_clear=1 runs=0..0
+[-110,-92,1]: occ=1 support_below=1 surface=0 trav=0 forbid=1 head_clear=0 runs=-4..6|8..8
+[-111,-92,1]: occ=0 support_below=1 surface=1 trav=1 forbid=0 head_clear=1 runs=0..0
+[-112,-92,1]: occ=1 support_below=1 surface=0 trav=0 forbid=1 head_clear=0 runs=-4..6|8..8
+[-113,-92,1]: occ=0 support_below=1 surface=1 trav=1 forbid=0 head_clear=1 runs=0..0
+```
+
+This is an important distinction from earlier stair-fragment failures: the
+spiral map is not merely missing a smoothed centerline or a local A* shortcut.
+The current raw voxel surface graph has no occupied/free-clear portal within
+2.0 m between the two snapped components. Bridging this directly would mean
+planning through columns that the current occupancy model considers occupied
+through the robot body height.
+
+## 2026-06-02 Tomogram Probe
+
+`tgw_tomogram_pcd_smoke` was added as a narrow experiment to test the PCT-style
+representation:
+
+```text
+PCD -> layered ground/ceiling slices -> traversability cost -> gateway-aware A*
+```
+
+It intentionally does not replace the ROS wrapper or the realtime map path yet.
+The first probe on `spiral0.3_2.pcd` shows that a naive tomogram is still
+insufficient:
+
+```text
+success=false
+tomogram_grid=[419,216,48]
+traversable_cells=1767179
+start_node=[1,232,136]
+goal_node=[1,182,141]
+expanded_nodes=19132
+```
+
+The useful conclusion is negative but concrete: PCT's result is not reproduced
+by only adding slices and same-XY gateway edges. Their planner also uses
+layer-simplification, inflated cost fields, traversability gradients, and
+unsafe-grid layer correction. The next implementation step should therefore be
+either:
+
+1. port the full tomogram/elevation-map semantics into `tgw_planner`, or
+2. keep raw PCD spiral unsupported and rely on realtime ray-cleared mapping plus
+   explicit future curved-stair support.
+
+What should not be done: lowering local thresholds or adding a direct bridge
+across the reported gap. The gap currently contains occupied columns, so that
+would be a safety regression rather than a first-principles fix.
+
 The following RViz layers are also useful:
 
 - accepted stair cloud
