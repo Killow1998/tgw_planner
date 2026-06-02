@@ -61,6 +61,41 @@ wait_for_map()
   return 1
 }
 
+metric_value()
+{
+  local text="$1"
+  local key="$2"
+  grep -o "${key}=[^ ]*" <<<"${text}" | tail -n 1 | cut -d= -f2
+}
+
+require_surface_metrics()
+{
+  local name="$1"
+  local output="$2"
+  local final_path_validated path_waypoints expanded_nodes min_clearance mean_clearance
+  final_path_validated="$(metric_value "${output}" "final_path_validated")"
+  path_waypoints="$(metric_value "${output}" "path_waypoints")"
+  expanded_nodes="$(metric_value "${output}" "expanded_nodes")"
+  min_clearance="$(metric_value "${output}" "min_path_clearance_m")"
+  mean_clearance="$(metric_value "${output}" "mean_path_clearance_m")"
+  if [[ "${final_path_validated}" != "true" ]]; then
+    echo "FAIL ${name}: final_path_validated is not true"
+    return 1
+  fi
+  if (( ${path_waypoints:-0} == 0 )); then
+    echo "FAIL ${name}: path_waypoints is zero"
+    return 1
+  fi
+  if (( ${expanded_nodes:-0} == 0 )); then
+    echo "FAIL ${name}: expanded_nodes is zero"
+    return 1
+  fi
+  if [[ -z "${min_clearance}" || -z "${mean_clearance}" ]]; then
+    echo "FAIL ${name}: clearance metrics are missing"
+    return 1
+  fi
+}
+
 run_case()
 {
   local name="$1"
@@ -152,9 +187,15 @@ run_surface_case()
     echo "FAIL ${name}: expected success"
     return 1
   fi
+  if [[ "${expected}" == "pass" ]]; then
+    require_surface_metrics "${name}" "${output}" || return 1
+  fi
   if [[ "${expected}" == "spiral" && ${rc} -ne 0 && "${require_surface_spiral_pass}" == "1" ]]; then
     echo "FAIL ${name}: spiral surface pass is required"
     return 1
+  fi
+  if [[ "${expected}" == "spiral" && "${require_surface_spiral_pass}" == "1" ]]; then
+    require_surface_metrics "${name}" "${output}" || return 1
   fi
   return 0
 }
