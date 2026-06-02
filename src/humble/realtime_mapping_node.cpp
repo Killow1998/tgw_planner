@@ -181,6 +181,7 @@ public:
     blocked_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/blocked_cloud", latched_qos);
     forbidden_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/forbidden_cloud", latched_qos);
     planned_path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_map/planned_path", latched_qos);
+    planned_path_compat_pub_ = create_publisher<nav_msgs::msg::Path>("/planned_path", latched_qos);
     planned_path_marker_pub_ =
       create_publisher<visualization_msgs::msg::Marker>("/planned_path_marker", latched_qos);
     start_marker_pub_ =
@@ -226,8 +227,16 @@ public:
     plan_srv_ = create_service<tgw_planner::srv::PlanPath>(
       "/tgw_map/plan_path",
       std::bind(&TgwRealtimeMappingNode::handlePlanPath, this, std::placeholders::_1, std::placeholders::_2));
+    plan_compat_srv_ = create_service<tgw_planner::srv::PlanPath>(
+      "/plan_path",
+      std::bind(&TgwRealtimeMappingNode::handlePlanPath, this, std::placeholders::_1, std::placeholders::_2));
     set_blocked_region_srv_ = create_service<tgw_planner::srv::SetBlockedRegion>(
       "/tgw_map/set_blocked_region",
+      std::bind(
+        &TgwRealtimeMappingNode::handleSetBlockedRegion, this,
+        std::placeholders::_1, std::placeholders::_2));
+    set_blocked_region_compat_srv_ = create_service<tgw_planner::srv::SetBlockedRegion>(
+      "/nav_map/set_blocked_region",
       std::bind(
         &TgwRealtimeMappingNode::handleSetBlockedRegion, this,
         std::placeholders::_1, std::placeholders::_2));
@@ -1331,6 +1340,7 @@ private:
           response->stats.clearance_cost_sum = clearanceCostSum(snapshot, result.raw_cells);
           response->stats.low_clearance_samples = raw_validation.low_clearance_samples;
           planned_path_pub_->publish(response->path);
+          planned_path_compat_pub_->publish(response->path);
           publishPathMarker(result.raw_path);
           publishPlannerStats(response->stats);
           return;
@@ -1348,6 +1358,7 @@ private:
 
     response->path = makePathMessage(result.path);
     planned_path_pub_->publish(response->path);
+    planned_path_compat_pub_->publish(response->path);
     publishPathMarker(result.path);
     publishPlannerStats(response->stats);
   }
@@ -1775,6 +1786,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr blocked_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr forbidden_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr planned_path_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr planned_path_compat_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr planned_path_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_marker_pub_;
@@ -1791,7 +1803,9 @@ private:
   rclcpp::Service<tgw_planner::srv::ExportStaticCloud>::SharedPtr export_static_cloud_srv_;
   rclcpp::Service<tgw_planner::srv::GetSnapshot>::SharedPtr get_snapshot_srv_;
   rclcpp::Service<tgw_planner::srv::PlanPath>::SharedPtr plan_srv_;
+  rclcpp::Service<tgw_planner::srv::PlanPath>::SharedPtr plan_compat_srv_;
   rclcpp::Service<tgw_planner::srv::SetBlockedRegion>::SharedPtr set_blocked_region_srv_;
+  rclcpp::Service<tgw_planner::srv::SetBlockedRegion>::SharedPtr set_blocked_region_compat_srv_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
 };
 

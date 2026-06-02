@@ -55,6 +55,18 @@ wait_for_node()
   return 1
 }
 
+wait_for_service()
+{
+  local service="$1"
+  for _ in $(seq 1 80); do
+    if ros2 service list 2>/dev/null | grep -qx "${service}"; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
 value_from_snapshot()
 {
   local file="$1"
@@ -268,6 +280,8 @@ run_blocked_region_persistence_case()
     validation_require_footprint:=false >"${log_file}" 2>&1 &
   launch_pid="$!"
   wait_for_node
+  wait_for_service "/plan_path"
+  wait_for_service "/nav_map/set_blocked_region"
 
   ros2 service call /tgw_map/set_blocked_region tgw_planner/srv/SetBlockedRegion \
     "{operation: add, min: {x: 0.0, y: 0.0, z: 0.0}, max: {x: 1.0, y: 1.0, z: 1.0}, reason: regression}" \

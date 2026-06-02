@@ -84,6 +84,7 @@ Realtime debug topics:
 - `/tgw_map/blocked_cloud`
 - `/tgw_map/forbidden_cloud`
 - `/tgw_map/planned_path`
+- `/planned_path` compatibility alias
 - `/planned_path_marker`
 - `/start_marker`
 - `/goal_marker`
@@ -107,6 +108,7 @@ Planning service:
 
 - `/tgw_map/plan_path` (`tgw_planner/srv/PlanPath`)
 - `/tgw_map/set_blocked_region` (`tgw_planner/srv/SetBlockedRegion`)
+- Compatibility aliases: `/plan_path`, `/nav_map/set_blocked_region`
 - successful responses must pass final path validation before
   `/tgw_map/planned_path` is published
 
