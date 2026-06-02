@@ -16,6 +16,11 @@ play_seconds="${TGW_BAG_PLAY_SECONDS:-75}"
 log_dir="${TGW_BAG_PROBE_LOG_DIR:-/tmp/tgw_real_bag_plan_probe}"
 mkdir -p "${log_dir}"
 
+if [[ ! -e "${bag_path}" ]]; then
+  echo "FAIL realtime_bag_plan_probe: bag path does not exist: ${bag_path}"
+  exit 1
+fi
+
 pids=""
 cleanup()
 {
@@ -27,6 +32,47 @@ cleanup()
   done
 }
 trap cleanup EXIT
+
+tail_logs()
+{
+  for log in fast_lio n3mapping tgw bag probe snapshot; do
+    local file="${log_dir}/${log}.log"
+    if [[ "${log}" == "probe" ]]; then
+      file="${log_dir}/probe.out"
+    elif [[ "${log}" == "snapshot" ]]; then
+      file="${log_dir}/snapshot.out"
+    fi
+    if [[ -f "${file}" ]]; then
+      echo "==== ${file} ===="
+      tail -n 80 "${file}" || true
+    fi
+  done
+}
+
+wait_for_node()
+{
+  local node_name="$1"
+  for _ in $(seq 1 80); do
+    if ros2 node list 2>/dev/null | grep -qx "${node_name}"; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+wait_for_service()
+{
+  local service_name="$1"
+  local service_type="$2"
+  for _ in $(seq 1 80); do
+    if ros2 service list -t 2>/dev/null | grep -Fqx "${service_name} [${service_type}]"; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
 
 ros2 launch fast_lio mapping_mid360.launch.py >"${log_dir}/fast_lio.log" 2>&1 &
 pids="${pids} $!"
@@ -42,12 +88,27 @@ ros2 launch tgw_planner realtime_mapping.launch.py \
   planner_require_footprint:=false \
   validation_require_footprint:=false >"${log_dir}/tgw.log" 2>&1 &
 pids="${pids} $!"
-sleep 5
+if ! wait_for_node "/tgw_realtime_mapping_node"; then
+  echo "FAIL realtime_bag_plan_probe: /tgw_realtime_mapping_node did not start"
+  tail_logs
+  exit 1
+fi
+if ! wait_for_service "/tgw_mapping/get_snapshot" "tgw_planner/srv/GetSnapshot"; then
+  echo "FAIL realtime_bag_plan_probe: /tgw_mapping/get_snapshot service did not appear"
+  tail_logs
+  exit 1
+fi
+if ! wait_for_service "/tgw_map/plan_path" "tgw_planner/srv/PlanPath"; then
+  echo "FAIL realtime_bag_plan_probe: /tgw_map/plan_path service did not appear"
+  tail_logs
+  exit 1
+fi
 
 timeout "${play_seconds}s" ros2 bag play "${bag_path}" >"${log_dir}/bag.log" 2>&1 || true
 sleep 3
 
-python3 - <<'PY'
+set +e
+python3 - >"${log_dir}/probe.out" 2>&1 <<'PY'
 import math
 import sys
 from collections import deque
@@ -190,6 +251,8 @@ def main():
 
 sys.exit(main())
 PY
+probe_rc=$?
+set -e
 
 ros2 service call /tgw_mapping/get_snapshot tgw_planner/srv/GetSnapshot "{}" \
   >"${log_dir}/snapshot.out" 2>&1 || true
@@ -197,3 +260,9 @@ grep -o \
   "received_clouds=[0-9]*\\|integrated_clouds=[0-9]*\\|traversable_points=[0-9]*\\|surface_points=[0-9]*\\|dynamic_points=[0-9]*" \
   "${log_dir}/snapshot.out" | tr "\n" " " || true
 echo
+cat "${log_dir}/probe.out"
+if [[ ${probe_rc} -ne 0 ]]; then
+  echo "FAIL realtime_bag_plan_probe: planner probe failed with rc=${probe_rc}"
+  tail_logs
+  exit "${probe_rc}"
+fi
