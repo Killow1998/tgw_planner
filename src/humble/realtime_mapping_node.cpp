@@ -1391,9 +1391,8 @@ private:
     const bool require_footprint_support, GridIndex & snapped, double & snap_distance_m) const
   {
     const GridIndex seed = map_.worldToGrid(point);
-    double best_distance_cells = std::numeric_limits<double>::infinity();
-    double best_clearance_m = -std::numeric_limits<double>::infinity();
-    bool found = false;
+    double nearest_distance_m = std::numeric_limits<double>::infinity();
+    bool found_nearest = false;
     const int max_radius_cells =
       std::max(1, static_cast<int>(std::ceil(max_snap_distance_m_ / map_.resolution())));
     for (int radius = 0; radius <= max_radius_cells; ++radius) {
@@ -1419,25 +1418,64 @@ private:
             if (distance_m > max_snap_distance_m_ + 1.0e-9) {
               continue;
             }
-            const double clearance_m = snapshot.clearance.clearanceDistance(candidate);
-            if (distance_cells < best_distance_cells ||
-              (std::abs(distance_cells - best_distance_cells) <= 1.0e-9 &&
-              clearance_m > best_clearance_m))
-            {
-              best_distance_cells = distance_cells;
-              best_clearance_m = clearance_m;
-              snapped = candidate;
-              found = true;
+            if (distance_m < nearest_distance_m) {
+              nearest_distance_m = distance_m;
+              found_nearest = true;
             }
           }
         }
       }
-      if (found) {
-        break;
+    }
+    if (!found_nearest) {
+      snap_distance_m = 0.0;
+      return false;
+    }
+
+    const double clearance_snap_window_m = std::max(0.30, 4.0 * map_.resolution());
+    const double max_considered_distance_m =
+      std::min(max_snap_distance_m_, nearest_distance_m + clearance_snap_window_m);
+    double best_distance_m = std::numeric_limits<double>::infinity();
+    double best_clearance_m = -std::numeric_limits<double>::infinity();
+    bool found_best = false;
+    for (int radius = 0; radius <= max_radius_cells; ++radius) {
+      for (int dx = -radius; dx <= radius; ++dx) {
+        for (int dy = -radius; dy <= radius; ++dy) {
+          for (int dz = -radius; dz <= radius; ++dz) {
+            if (std::max({std::abs(dx), std::abs(dy), std::abs(dz)}) != radius) {
+              continue;
+            }
+            const GridIndex candidate{seed.x + dx, seed.y + dy, seed.z + dz};
+            if (!isRealtimePoseCellUsable(snapshot, candidate)) {
+              continue;
+            }
+            const Point3 candidate_point = map_.gridToWorld(candidate);
+            if (require_footprint_support &&
+              !isRealtimeFootprintSupported(snapshot, candidate_point, yaw_rad))
+            {
+              continue;
+            }
+            const double distance_cells =
+              std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz));
+            const double distance_m = distance_cells * map_.resolution();
+            if (distance_m > max_considered_distance_m + 1.0e-9) {
+              continue;
+            }
+            const double clearance_m = snapshot.clearance.clearanceDistance(candidate);
+            if (!found_best || clearance_m > best_clearance_m + 1.0e-9 ||
+              (std::abs(clearance_m - best_clearance_m) <= 1.0e-9 &&
+              distance_m < best_distance_m))
+            {
+              best_distance_m = distance_m;
+              best_clearance_m = clearance_m;
+              snapped = candidate;
+              found_best = true;
+            }
+          }
+        }
       }
     }
-    snap_distance_m = found ? best_distance_cells * map_.resolution() : 0.0;
-    return found;
+    snap_distance_m = found_best ? best_distance_m : 0.0;
+    return found_best;
   }
 
   bool isRealtimePoseCellUsable(

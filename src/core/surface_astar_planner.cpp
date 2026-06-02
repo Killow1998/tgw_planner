@@ -573,8 +573,11 @@ void SurfaceAstarPlanner::fillMetrics(
   result.metrics.min_path_clearance_m = std::numeric_limits<double>::infinity();
   for (std::size_t i = 0; i < result.cells.size(); ++i) {
     const double clearance = snapshot.clearance.clearanceDistance(result.cells[i]);
-    result.metrics.min_path_clearance_m =
-      std::min(result.metrics.min_path_clearance_m, clearance);
+    if (clearance < result.metrics.min_path_clearance_m) {
+      result.metrics.min_path_clearance_m = clearance;
+      result.metrics.min_path_clearance_cell = result.cells[i];
+      result.metrics.has_min_path_clearance_cell = true;
+    }
     clearance_sum += clearance;
     result.metrics.clearance_cost_sum += snapshot.clearance.clearancePenalty(result.cells[i]);
     result.metrics.unknown_cost_sum += unknownPenalty(snapshot, result.cells[i]);

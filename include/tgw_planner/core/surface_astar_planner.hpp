@@ -38,6 +38,8 @@ struct SurfacePlanMetrics
   std::uint32_t generated_nodes{0};
   double path_length_m{0.0};
   double min_path_clearance_m{0.0};
+  GridIndex min_path_clearance_cell;
+  bool has_min_path_clearance_cell{false};
   double mean_path_clearance_m{0.0};
   double clearance_cost_sum{0.0};
   double unknown_cost_sum{0.0};

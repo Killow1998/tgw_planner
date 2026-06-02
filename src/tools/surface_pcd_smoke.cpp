@@ -47,7 +47,39 @@ bool snapToTraversable(
     static_cast<int>(std::floor(point.y / snapshot.resolution_m)),
     static_cast<int>(std::floor(point.z / snapshot.resolution_m))};
   const int max_radius_cells = std::max(3, static_cast<int>(std::ceil(2.0 / snapshot.resolution_m)));
-  bool found = false;
+  bool found_nearest = false;
+  double nearest_distance = std::numeric_limits<double>::infinity();
+  for (int radius = 0; radius <= max_radius_cells; ++radius) {
+    for (int dx = -radius; dx <= radius; ++dx) {
+      for (int dy = -radius; dy <= radius; ++dy) {
+        for (int dz = -radius; dz <= radius; ++dz) {
+          const GridIndex candidate{seed.x + dx, seed.y + dy, seed.z + dz};
+          if (snapshot.surface.traversable_cells.find(candidate) ==
+            snapshot.surface.traversable_cells.end())
+          {
+            continue;
+          }
+          const Point3 world{
+            (static_cast<double>(candidate.x) + 0.5) * snapshot.resolution_m,
+            (static_cast<double>(candidate.y) + 0.5) * snapshot.resolution_m,
+            (static_cast<double>(candidate.z) + 0.5) * snapshot.resolution_m};
+          const double d = tgw_planner::core::distance3d(point, world);
+          if (d < nearest_distance) {
+            nearest_distance = d;
+            found_nearest = true;
+          }
+        }
+      }
+    }
+  }
+  if (!found_nearest) {
+    return false;
+  }
+
+  const double clearance_snap_window_m = std::max(0.30, 4.0 * snapshot.resolution_m);
+  const double max_considered_distance = nearest_distance + clearance_snap_window_m;
+  bool found_best = false;
+  double best_clearance = -std::numeric_limits<double>::infinity();
   double best_distance = std::numeric_limits<double>::infinity();
   GridIndex best;
   for (int radius = 0; radius <= max_radius_cells; ++radius) {
@@ -65,21 +97,28 @@ bool snapToTraversable(
             (static_cast<double>(candidate.y) + 0.5) * snapshot.resolution_m,
             (static_cast<double>(candidate.z) + 0.5) * snapshot.resolution_m};
           const double d = tgw_planner::core::distance3d(point, world);
-          if (d < best_distance) {
+          if (d > max_considered_distance + 1.0e-9) {
+            continue;
+          }
+          const double clearance = snapshot.clearance.clearanceDistance(candidate);
+          if (!found_best || clearance > best_clearance + 1.0e-9 ||
+            (std::abs(clearance - best_clearance) <= 1.0e-9 && d < best_distance))
+          {
+            best_clearance = clearance;
             best_distance = d;
             best = candidate;
-            found = true;
+            found_best = true;
           }
         }
       }
     }
-    if (found) {
-      snapped = best;
-      distance_m = best_distance;
-      return true;
-    }
   }
-  return false;
+  if (!found_best) {
+    return false;
+  }
+  snapped = best;
+  distance_m = best_distance;
+  return true;
 }
 
 GridIndex worldToGrid(const Point3 & point, double resolution_m)
@@ -480,6 +519,10 @@ int main(int argc, char ** argv)
   double goal_snap = 0.0;
   const bool start_ok = snapToTraversable(snapshot, start, snapped_start, start_snap);
   const bool goal_ok = snapToTraversable(snapshot, goal, snapped_goal, goal_snap);
+  const double start_snap_clearance =
+    start_ok ? snapshot.clearance.clearanceDistance(snapped_start) : 0.0;
+  const double goal_snap_clearance =
+    goal_ok ? snapshot.clearance.clearanceDistance(snapped_goal) : 0.0;
   if (!start_ok || !goal_ok) {
     std::cout << "success=false reason=snap_failed"
       << " start_ok=" << (start_ok ? "true" : "false")
@@ -508,6 +551,8 @@ int main(int argc, char ** argv)
     << " risk_cells=" << snapshot.risk.risks().size()
     << " start_snap_distance_m=" << start_snap
     << " goal_snap_distance_m=" << goal_snap
+    << " start_snap_clearance_m=" << start_snap_clearance
+    << " goal_snap_clearance_m=" << goal_snap_clearance
     << " surface_component_count=" << components.component_count
     << " largest_surface_component_size=" << components.largest_component_size
     << " start_surface_component=" << components.start_component
@@ -541,6 +586,9 @@ int main(int argc, char ** argv)
     << " path_waypoints=" << result.path.size()
     << " path_length_m=" << result.metrics.path_length_m
     << " min_path_clearance_m=" << result.metrics.min_path_clearance_m
+    << " min_path_clearance_cell=[" << result.metrics.min_path_clearance_cell.x << "," <<
+      result.metrics.min_path_clearance_cell.y << "," << result.metrics.min_path_clearance_cell.z <<
+      "]"
     << " mean_path_clearance_m=" << result.metrics.mean_path_clearance_m
     << " low_clearance_samples=" << result.metrics.low_clearance_samples
     << " clearance_cost_sum=" << result.metrics.clearance_cost_sum
