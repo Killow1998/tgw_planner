@@ -170,6 +170,9 @@ public:
     publish_period_ms_ = declare_parameter<int>("publish_period_ms", 1000);
     medial_axis_min_clearance_m_ =
       declare_parameter<double>("medial_axis_min_clearance_m", medial_axis_min_clearance_m_);
+    max_snap_distance_m_ = std::max(
+      map_.resolution(),
+      declare_parameter<double>("planner_max_snap_distance_m", max_snap_distance_m_));
 
     rclcpp::QoS cloud_qos{rclcpp::SensorDataQoS()};
     points_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
@@ -1125,7 +1128,8 @@ private:
     double best_distance_cells = std::numeric_limits<double>::infinity();
     double best_clearance_m = -std::numeric_limits<double>::infinity();
     bool found = false;
-    const int max_radius_cells = std::max(1, static_cast<int>(std::ceil(1.0 / map_.resolution())));
+    const int max_radius_cells =
+      std::max(1, static_cast<int>(std::ceil(max_snap_distance_m_ / map_.resolution())));
     for (int radius = 0; radius <= max_radius_cells; ++radius) {
       for (int dx = -radius; dx <= radius; ++dx) {
         for (int dy = -radius; dy <= radius; ++dy) {
@@ -1145,6 +1149,10 @@ private:
             }
             const double distance_cells =
               std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz));
+            const double distance_m = distance_cells * map_.resolution();
+            if (distance_m > max_snap_distance_m_ + 1.0e-9) {
+              continue;
+            }
             const double clearance_m = snapshot.clearance.clearanceDistance(candidate);
             if (distance_cells < best_distance_cells ||
               (std::abs(distance_cells - best_distance_cells) <= 1.0e-9 &&
@@ -1912,6 +1920,7 @@ private:
   int max_points_per_scan_{120000};
   int publish_period_ms_{1000};
   double medial_axis_min_clearance_m_{0.20};
+  double max_snap_distance_m_{0.75};
   int view_id_{0};
   std::vector<BlockedRegion> blocked_regions_;
   std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> loaded_blocked_cells_;
