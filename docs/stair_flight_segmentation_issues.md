@@ -177,34 +177,29 @@ surface_pct_building:
   success=true
   start_surface_component=0
   goal_surface_component=0
-  largest_surface_component_size=82845
+  largest_surface_component_size=250842
+  path_waypoints=267
+  path_length_m=104.977
   final_path_validated=true
 
 surface_pct_spiral:
-  success=false
-  reason="surface A* failed to find a path"
+  success=true
   start_surface_component=5
-  goal_surface_component=15
-  start_surface_component_size=20144
-  goal_surface_component_size=16650
-  surface_component_count=811
-  start_goal_component_gap_m=0.8
-  gap_start_cell=[-109,-92,1]
-  gap_goal_cell=[-113,-92,1]
-  gap_line_cells=5
-  gap_line_occupied_cells=2
-  gap_line_surface_cells=3
-  gap_line_traversable_cells=3
-  gap_line_forbidden_cells=2
+  goal_surface_component=5
+  start_surface_component_size=49807
+  goal_surface_component_size=49807
+  surface_component_count=91
+  path_waypoints=11
+  path_length_m=10.1623
+  final_path_validated=true
 ```
 
-This means the PCT spiral failure is currently a surface connectivity problem:
-the chosen start and goal snap to different traversable surface components. It
-should not be treated as only a stair centerline smoothing issue. The next useful
-work is not to blindly bridge the gap: the closest component gap currently
-contains occupied/forbidden cells. The next useful investigation is whether those
-occupied cells are true geometry, railing/wall artifacts, or PCD-mode artifacts
-that realtime ray clearing would remove.
+The PCT spiral failure was a surface connectivity problem when raw PCD hits were
+treated as solid occupied voxels. `tgw_surface_pcd_smoke` now enables
+`SurfaceExtractionOptions::treat_hits_as_surface_samples` so clean reference PCDs
+are interpreted as sampled geometry rather than volumetric collision evidence.
+This is only a smoke-test mode; realtime mapping still uses ray-cleared
+occupancy and body-clearance validation.
 
 ## Useful Debug Signals To Keep
 
@@ -219,11 +214,12 @@ per-flight width, length, slope, z range, endpoints, and component IDs
 start_cell_type / goal_cell_type with flight IDs
 ```
 
-## 2026-06-02 Spiral Surface Gap Evidence
+## 2026-06-02 Solid-Occupancy Spiral Surface Gap Evidence
 
-`tgw_surface_pcd_smoke` now reports per-cell diagnostics for the closest
-surface-component gap. For `spiral0.3_2.pcd` at 0.20 m resolution, the closest
-gap between the snapped start and goal components is:
+Before the PCD sample-mode fix, `tgw_surface_pcd_smoke` reported per-cell
+diagnostics for the closest surface-component gap. For `spiral0.3_2.pcd` at
+0.20 m resolution, the closest gap between the snapped start and goal components
+was:
 
 ```text
 gap_start_cell=[-109,-92,1]
@@ -244,12 +240,12 @@ The line alternates between traversable cells and occupied/forbidden columns:
 [-113,-92,1]: occ=0 support_below=1 surface=1 trav=1 forbid=0 head_clear=1 runs=0..0
 ```
 
-This is an important distinction from earlier stair-fragment failures: the
-spiral map is not merely missing a smoothed centerline or a local A* shortcut.
-The current raw voxel surface graph has no occupied/free-clear portal within
-2.0 m between the two snapped components. Bridging this directly would mean
-planning through columns that the current occupancy model considers occupied
-through the robot body height.
+Those blocking voxels each came from a single sampled PCD point in the local
+reference map, so treating them as solid occupied body-volume evidence was too
+strong for a hit-only PCD. The fix was not to bridge forbidden cells in realtime
+occupancy. Instead, the reference PCD smoke path now uses surface-sample
+semantics, while realtime maps must still prove free body volume through ray
+clearing.
 
 ## 2026-06-02 Tomogram Probe
 

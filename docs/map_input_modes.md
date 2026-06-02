@@ -53,3 +53,16 @@ reports `map_input_mode="pcd"` with `pcd_artifact_warning=true` in:
 
 `pcd_to_path_mvp.launch.py` starts `tgw_pcd_import_node` but keeps the ROS node
 name `tgw_planner_node` for compatibility with existing scripts.
+
+## PCD Surface Sample Smoke Mode
+
+`tgw_surface_pcd_smoke` is a reference-map smoke test, not the deployment
+mapping path. It treats raw PCD hits as surface samples instead of solid
+occupied volume. This is required for PCT reference PCDs where each sampled
+surface point would otherwise become a solid collision voxel and fragment
+spiral stair surfaces.
+
+This mode is useful for checking geometric surface connectivity on clean
+synthetic PCDs. It should not be used as a substitute for realtime raycast
+mapping on robot data, because a hit-only PCD still cannot prove free body
+clearance or reject dynamic artifacts.

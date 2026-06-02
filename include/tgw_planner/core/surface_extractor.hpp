@@ -46,6 +46,7 @@ struct SurfaceExtractionOptions
   int min_static_hits{1};
   bool require_static_support{false};
   bool require_observed_free_space{true};
+  bool treat_hits_as_surface_samples{false};
 };
 
 class SurfaceExtractor

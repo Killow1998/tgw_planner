@@ -11,9 +11,14 @@ if [[ -f install/setup.bash ]]; then
 fi
 set -u
 
+if [[ -z "${ROS_DOMAIN_ID:-}" ]]; then
+  export ROS_DOMAIN_ID=$((20 + RANDOM % 180))
+fi
+
 launch_pid=""
 tmp_paths=()
-cleanup()
+tmp_root="$(mktemp -d /tmp/tgw_realtime_sim.XXXXXX)"
+cleanup_case()
 {
   if [[ -n "${launch_pid}" ]]; then
     kill "${launch_pid}" >/dev/null 2>&1 || true
@@ -24,6 +29,11 @@ cleanup()
     rm -rf "${tmp_paths[@]}"
     tmp_paths=()
   fi
+}
+cleanup()
+{
+  cleanup_case
+  rm -rf "${tmp_root}"
 }
 trap cleanup EXIT
 
@@ -152,9 +162,9 @@ PY
 
 run_floor_ceiling_case()
 {
-  cleanup
-  local log_file="/tmp/tgw_realtime_floor_ceiling_launch.log"
-  local snapshot_file="/tmp/tgw_realtime_floor_ceiling_snapshot.out"
+  cleanup_case
+  local log_file="${tmp_root}/floor_ceiling_launch.log"
+  local snapshot_file="${tmp_root}/floor_ceiling_snapshot.out"
   ros2 launch tgw_planner realtime_mapping.launch.py \
     use_tf:=false \
     assume_cloud_in_map_frame:=false \
@@ -196,9 +206,9 @@ run_floor_ceiling_case()
 
 run_dynamic_disappears_case()
 {
-  cleanup
-  local log_file="/tmp/tgw_realtime_dynamic_disappears_launch.log"
-  local snapshot_file="/tmp/tgw_realtime_dynamic_disappears_snapshot.out"
+  cleanup_case
+  local log_file="${tmp_root}/dynamic_disappears_launch.log"
+  local snapshot_file="${tmp_root}/dynamic_disappears_snapshot.out"
   ros2 launch tgw_planner realtime_mapping.launch.py \
     use_tf:=false \
     assume_cloud_in_map_frame:=false \
@@ -241,15 +251,15 @@ run_dynamic_disappears_case()
 
 run_blocked_region_persistence_case()
 {
-  cleanup
-  local log_file="/tmp/tgw_realtime_blocked_region_launch.log"
+  cleanup_case
+  local log_file="${tmp_root}/blocked_region_launch.log"
   local output_dir
-  output_dir="$(mktemp -d /tmp/tgw_realtime_blocked_region.XXXXXX)"
-  local add_file="/tmp/tgw_realtime_blocked_region_add.out"
-  local save_file="/tmp/tgw_realtime_blocked_region_save.out"
-  local clear_file="/tmp/tgw_realtime_blocked_region_clear.out"
-  local load_file="/tmp/tgw_realtime_blocked_region_load.out"
-  local remove_file="/tmp/tgw_realtime_blocked_region_remove.out"
+  output_dir="$(mktemp -d "${tmp_root}/blocked_region_map.XXXXXX")"
+  local add_file="${tmp_root}/blocked_region_add.out"
+  local save_file="${tmp_root}/blocked_region_save.out"
+  local clear_file="${tmp_root}/blocked_region_clear.out"
+  local load_file="${tmp_root}/blocked_region_load.out"
+  local remove_file="${tmp_root}/blocked_region_remove.out"
   tmp_paths+=("${output_dir}" "${add_file}" "${save_file}" "${clear_file}" "${load_file}" "${remove_file}")
 
   ros2 launch tgw_planner realtime_mapping.launch.py \

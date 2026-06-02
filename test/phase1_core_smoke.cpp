@@ -187,6 +187,22 @@ int main()
   CHECK(observed_surface.forbidden_cells.find({1, 1, 21}) !=
     observed_surface.forbidden_cells.end());
 
+  ProbabilisticVoxelMap sampled_pcd_map(options);
+  sampled_pcd_map.updateHit({0, 0, 0}, 0.0, 1);
+  sampled_pcd_map.updateHit({0, 0, 1}, 0.0, 1);
+  SurfaceExtractionOptions solid_hit_options;
+  solid_hit_options.min_static_hits = 1;
+  solid_hit_options.require_static_support = false;
+  solid_hit_options.require_observed_free_space = false;
+  const auto solid_hit_surface = SurfaceExtractor(solid_hit_options).extract(sampled_pcd_map);
+  CHECK(solid_hit_surface.traversable_cells.find({0, 0, 1}) ==
+    solid_hit_surface.traversable_cells.end());
+  SurfaceExtractionOptions sampled_hit_options = solid_hit_options;
+  sampled_hit_options.treat_hits_as_surface_samples = true;
+  const auto sampled_hit_surface = SurfaceExtractor(sampled_hit_options).extract(sampled_pcd_map);
+  CHECK(sampled_hit_surface.traversable_cells.find({0, 0, 1}) !=
+    sampled_hit_surface.traversable_cells.end());
+
   ProbabilisticVoxelMap planner_map(options);
   for (int x = -6; x <= 18; ++x) {
     for (int y = 0; y <= 8; ++y) {

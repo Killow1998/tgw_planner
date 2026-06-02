@@ -11,8 +11,13 @@ if [[ -f install/setup.bash ]]; then
 fi
 set -u
 
+if [[ -z "${ROS_DOMAIN_ID:-}" ]]; then
+  export ROS_DOMAIN_ID=$((20 + RANDOM % 180))
+fi
+
 pcd_dir="${PCT_PCD_DIR:-$HOME/robot_nav_refs/PCT_planner/rsc/pcd}"
-require_spiral_pass="${TGW_REQUIRE_SPIRAL_PASS:-0}"
+require_legacy_spiral_pass="${TGW_REQUIRE_LEGACY_SPIRAL_PASS:-0}"
+require_surface_spiral_pass="${TGW_REQUIRE_SURFACE_SPIRAL_PASS:-${TGW_REQUIRE_SPIRAL_PASS:-0}}"
 
 launch_pid=""
 cleanup()
@@ -109,8 +114,8 @@ run_case()
     echo "FAIL ${name}: expected success"
     return 1
   fi
-  if [[ "${expected}" == "spiral" && "${success}" != "success=True" && "${require_spiral_pass}" == "1" ]]; then
-    echo "FAIL ${name}: spiral pass is required"
+  if [[ "${expected}" == "spiral" && "${success}" != "success=True" && "${require_legacy_spiral_pass}" == "1" ]]; then
+    echo "FAIL ${name}: legacy spiral pass is required"
     return 1
   fi
   return 0
@@ -147,7 +152,7 @@ run_surface_case()
     echo "FAIL ${name}: expected success"
     return 1
   fi
-  if [[ "${expected}" == "spiral" && ${rc} -ne 0 && "${require_spiral_pass}" == "1" ]]; then
+  if [[ "${expected}" == "spiral" && ${rc} -ne 0 && "${require_surface_spiral_pass}" == "1" ]]; then
     echo "FAIL ${name}: spiral surface pass is required"
     return 1
   fi

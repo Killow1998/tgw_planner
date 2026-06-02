@@ -462,6 +462,7 @@ int main(int argc, char ** argv)
   surface_options.min_static_hits = 1;
   surface_options.require_static_support = false;
   surface_options.require_observed_free_space = false;
+  surface_options.treat_hits_as_surface_samples = true;
   SurfaceExtractor extractor(surface_options);
 
   NavigationSnapshot snapshot;

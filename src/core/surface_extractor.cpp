@@ -26,7 +26,7 @@ SurfaceMap SurfaceExtractor::extract(const ProbabilisticVoxelMap & occupancy) co
       continue;
     }
     const GridIndex stand{support.x, support.y, support.z + 1};
-    if (occupancy.isOccupied(stand) ||
+    if ((!options_.treat_hits_as_surface_samples && occupancy.isOccupied(stand)) ||
       !hasHeadClearance(occupancy, stand, height_cells) ||
       !hasObservedFreeSpace(occupancy, stand))
     {
@@ -102,6 +102,9 @@ void SurfaceExtractor::rebuildBoundaryLayer(
 bool SurfaceExtractor::hasHeadClearance(
   const ProbabilisticVoxelMap & occupancy, const GridIndex & stand, int height_cells) const
 {
+  if (options_.treat_hits_as_surface_samples) {
+    return true;
+  }
   for (int dz = 0; dz <= height_cells; ++dz) {
     if (occupancy.isOccupied({stand.x, stand.y, stand.z + dz})) {
       return false;
