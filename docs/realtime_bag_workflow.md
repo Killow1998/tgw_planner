@@ -68,8 +68,10 @@ ctest --test-dir build/tgw_planner --output-on-failure
 
 This includes `tgw_phase1_core_smoke` plus
 `tgw_synthetic_surface_scene_tests`, covering straight stairs, switchback
-stairs, spiral stairs, steep step chains, disconnected gaps, and railing-like
-negative bridges through the refactored surface planner.
+stairs, spiral stairs, steep step chains, flat narrow corridors, disconnected
+gaps, and railing-like negative bridges through the refactored surface planner.
+Successful synthetic cases are checked for final path validation, no raw-path
+fallback, nonzero expansion/path metrics, and positive clearance metrics.
 
 Realtime bag plan probe:
 

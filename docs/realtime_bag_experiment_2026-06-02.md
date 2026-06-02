@@ -608,3 +608,32 @@ The full `run_reference_pcd_smoke_tests.sh` launch path was not rerun in the
 current sandbox because DDS socket creation is blocked (`Operation not
 permitted`). The direct surface smoke commands cover the refactored surface
 planner and clearance field without requiring ROS graph sockets.
+
+## Synthetic Narrow Corridor Coverage 2026-06-03
+
+`run_synthetic_surface_scene_tests.sh` now includes a flat narrow corridor
+scene in addition to the straight, switchback, spiral, steep step chain, gap,
+and railing-like negative scenes. The success-case checks were tightened to
+require:
+
+```text
+success=true
+final_path_validated=true
+final_path_fallback_to_raw=false
+expanded_nodes > 0
+path_length_m > 0
+min_path_clearance_m > configured threshold
+mean_path_clearance_m > 0
+```
+
+The narrow corridor starts and goals near opposite side walls, then verifies
+that clearance-aware snapping and planning stay on the safer corridor center:
+
+```text
+flat_narrow_corridor: success=true final_path_validated=true final_path_fallback_to_raw=false
+start_snap_clearance_m=0.5 goal_snap_clearance_m=0.5
+expanded_nodes=170 path_waypoints=2 path_length_m=6.4
+min_path_clearance_m=0.5 mean_path_clearance_m=0.5
+```
+
+The synthetic surface script passed in the current workspace after this change.

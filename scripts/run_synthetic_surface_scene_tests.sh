@@ -78,6 +78,8 @@ elif scene == "steep_step_chain":
     for i in range(6):
         add_surface_rect(1 + i, 1 + i, -3, 3, 1 + 2 * (i + 1))
     add_surface_rect(7, 12, -3, 3, 13)
+elif scene == "flat_narrow_corridor":
+    add_surface_rect(-12, 28, -2, 2, 1)
 elif scene == "negative_gap":
     add_surface_rect(-10, -3, -3, 3, 1)
     add_surface_rect(4, 10, -3, 3, 1)
@@ -115,12 +117,36 @@ metric_value()
   grep -o "${key}=[^ ]*" <<<"${text}" | tail -n 1 | cut -d= -f2
 }
 
+require_numeric_metric_gt()
+{
+  local name="$1"
+  local key="$2"
+  local value="$3"
+  local threshold="$4"
+  python3 - "${name}" "${key}" "${value}" "${threshold}" <<'PY'
+import math
+import sys
+
+name, key, value_text, threshold_text = sys.argv[1:5]
+try:
+    value = float(value_text)
+    threshold = float(threshold_text)
+except ValueError:
+    print(f"FAIL {name}: {key} is not numeric: {value_text!r}")
+    raise SystemExit(1)
+if not math.isfinite(value) or value <= threshold:
+    print(f"FAIL {name}: {key}={value:g} <= {threshold:g}")
+    raise SystemExit(1)
+PY
+}
+
 run_success_case()
 {
   local name="$1"
   local start="$2"
   local goal="$3"
   local require_footprint="${4:-0}"
+  local min_clearance_gt="${5:-0.0}"
   local pcd="${tmp_root}/${name}.pcd"
   write_pcd "${name}" "${pcd}"
   local output
@@ -141,10 +167,22 @@ run_success_case()
     echo "FAIL ${name}: final path was not validated"
     return 1
   fi
+  if [[ "$(metric_value "${output}" "final_path_fallback_to_raw")" != "false" ]]; then
+    echo "FAIL ${name}: final path unexpectedly fell back to raw"
+    return 1
+  fi
   if (( $(metric_value "${output}" "path_waypoints") == 0 )); then
     echo "FAIL ${name}: path_waypoints is zero"
     return 1
   fi
+  require_numeric_metric_gt "${name}" "expanded_nodes" "$(metric_value "${output}" "expanded_nodes")" "0"
+  require_numeric_metric_gt "${name}" "path_length_m" "$(metric_value "${output}" "path_length_m")" "0.0"
+  require_numeric_metric_gt \
+    "${name}" "min_path_clearance_m" "$(metric_value "${output}" "min_path_clearance_m")" \
+    "${min_clearance_gt}"
+  require_numeric_metric_gt \
+    "${name}" "mean_path_clearance_m" "$(metric_value "${output}" "mean_path_clearance_m")" \
+    "0.0"
 }
 
 run_failure_case()
@@ -175,6 +213,7 @@ run_success_case "straight" "-1.0 0.0 0.0" "5.0 0.0 1.8"
 run_success_case "switchback" "-1.0 0.0 0.0" "3.8 5.2 2.8"
 run_success_case "spiral" "-2.0 0.0 0.0" "0.8 2.0 2.0"
 run_success_case "steep_step_chain" "-1.0 0.0 0.0" "2.0 0.0 2.4"
+run_success_case "flat_narrow_corridor" "-1.5 -0.30 0.0" "5.0 0.30 0.0" 0 0.39
 run_failure_case "negative_gap" "-1.5 0.0 0.0" "1.5 0.0 0.0"
 run_failure_case "negative_railing_bridge" "-1.5 0.0 0.0" "1.5 0.0 0.0" 1
 
