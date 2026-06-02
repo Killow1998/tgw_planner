@@ -5,7 +5,12 @@ if [[ -f /opt/ros/humble/setup.bash ]]; then
   # shellcheck disable=SC1091
   source /opt/ros/humble/setup.bash
 fi
-if [[ -f install/setup.bash ]]; then
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+workspace_setup="${script_dir}/../../../install/setup.bash"
+if [[ -f "${workspace_setup}" ]]; then
+  # shellcheck disable=SC1090
+  source "${workspace_setup}"
+elif [[ -f install/setup.bash ]]; then
   # shellcheck disable=SC1091
   source install/setup.bash
 fi
@@ -194,7 +199,11 @@ run_floor_ceiling_case()
     planner_require_footprint:=false \
     validation_require_footprint:=false >"${log_file}" 2>&1 &
   launch_pid="$!"
-  wait_for_node
+  if ! wait_for_node; then
+    echo "FAIL floor_ceiling_free_space: /tgw_realtime_mapping_node did not appear"
+    tail -n 120 "${log_file}" || true
+    return 1
+  fi
   publish_floor_ceiling_scene
   sleep 1.0
   ros2 service call /tgw_mapping/get_snapshot tgw_planner/srv/GetSnapshot "{}" \
@@ -240,7 +249,11 @@ run_dynamic_disappears_case()
     planner_require_footprint:=false \
     validation_require_footprint:=false >"${log_file}" 2>&1 &
   launch_pid="$!"
-  wait_for_node
+  if ! wait_for_node; then
+    echo "FAIL dynamic_disappears: /tgw_realtime_mapping_node did not appear"
+    tail -n 120 "${log_file}" || true
+    return 1
+  fi
   publish_dynamic_disappears_scene
   sleep 1.0
   ros2 service call /tgw_mapping/get_snapshot tgw_planner/srv/GetSnapshot "{}" \
@@ -279,9 +292,21 @@ run_blocked_region_persistence_case()
     planner_require_footprint:=false \
     validation_require_footprint:=false >"${log_file}" 2>&1 &
   launch_pid="$!"
-  wait_for_node
-  wait_for_service "/plan_path"
-  wait_for_service "/nav_map/set_blocked_region"
+  if ! wait_for_node; then
+    echo "FAIL blocked_region_persistence: /tgw_realtime_mapping_node did not appear"
+    tail -n 120 "${log_file}" || true
+    return 1
+  fi
+  if ! wait_for_service "/plan_path"; then
+    echo "FAIL blocked_region_persistence: /plan_path did not appear"
+    tail -n 120 "${log_file}" || true
+    return 1
+  fi
+  if ! wait_for_service "/nav_map/set_blocked_region"; then
+    echo "FAIL blocked_region_persistence: /nav_map/set_blocked_region did not appear"
+    tail -n 120 "${log_file}" || true
+    return 1
+  fi
 
   ros2 service call /tgw_map/set_blocked_region tgw_planner/srv/SetBlockedRegion \
     "{operation: add, min: {x: 0.0, y: 0.0, z: 0.0}, max: {x: 1.0, y: 1.0, z: 1.0}, reason: regression}" \
