@@ -116,6 +116,15 @@ int main()
   CHECK(!samples.empty());
   CHECK(footprint.containsBodyPoint({0.0, 0.0, 0.0}));
   CHECK(!footprint.containsBodyPoint({2.0, 0.0, 0.0}));
+  SurfaceMap footprint_surface;
+  for (int x = -6; x <= 2; ++x) {
+    for (int y = -3; y <= 3; ++y) {
+      footprint_surface.traversable_cells.insert({x, y, 0});
+    }
+  }
+  CHECK(footprint.isSupported(footprint_surface, {0.0, 0.0, 0.0}, 0.0, 0.10));
+  footprint_surface.blocked_cells.insert({0, 0, 0});
+  CHECK(!footprint.isSupported(footprint_surface, {0.0, 0.0, 0.0}, 0.0, 0.10));
 
   ProbabilisticVoxelMap corridor_map(options);
   for (int x = 0; x <= 6; ++x) {

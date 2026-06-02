@@ -4,6 +4,7 @@
 
 #include "tgw_planner/core/grid_index.hpp"
 #include "tgw_planner/core/planning_types.hpp"
+#include "tgw_planner/core/surface_extractor.hpp"
 
 namespace tgw_planner::core
 {
@@ -26,9 +27,15 @@ public:
 
   bool containsBodyPoint(const Point3 & point_base) const;
 
+  bool isSupported(
+    const SurfaceMap & surface, const Point3 & center, double yaw_rad,
+    double resolution_m) const;
+
   const RobotFootprintOptions & options() const;
 
 private:
+  GridIndex worldToGrid(const Point3 & point, double resolution_m) const;
+
   RobotFootprintOptions options_;
 };
 

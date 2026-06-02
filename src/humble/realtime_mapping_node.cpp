@@ -1172,14 +1172,7 @@ private:
   bool isRealtimeFootprintSupported(
     const NavigationSnapshot & snapshot, const Point3 & point, const double yaw_rad) const
   {
-    for (const Point3 & sample :
-      footprint_.sampleFootprint(point, yaw_rad, snapshot.resolution_m))
-    {
-      if (!isRealtimePoseCellUsable(snapshot, map_.worldToGrid(sample))) {
-        return false;
-      }
-    }
-    return true;
+    return footprint_.isSupported(snapshot.surface, point, yaw_rad, snapshot.resolution_m);
   }
 
   nav_msgs::msg::Path makePathMessage(const std::vector<Point3> & path) const

@@ -261,14 +261,7 @@ bool SurfaceAstarPlanner::isFootprintSupported(
   if (!options_.require_footprint_support) {
     return true;
   }
-  for (const Point3 & sample :
-    footprint_.sampleFootprint(point, yaw_rad, snapshot.resolution_m))
-  {
-    if (!isCellTraversable(snapshot, worldToGrid(sample, snapshot.resolution_m))) {
-      return false;
-    }
-  }
-  return true;
+  return footprint_.isSupported(snapshot.surface, point, yaw_rad, snapshot.resolution_m);
 }
 
 bool SurfaceAstarPlanner::isTransitionAllowed(

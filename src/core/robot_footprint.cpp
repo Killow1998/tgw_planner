@@ -49,9 +49,35 @@ bool RobotFootprint::containsBodyPoint(const Point3 & point_base) const
          point_base.z <= 0.5 * options_.height_m;
 }
 
+bool RobotFootprint::isSupported(
+  const SurfaceMap & surface, const Point3 & center, double yaw_rad, double resolution_m) const
+{
+  for (const Point3 & sample : sampleFootprint(center, yaw_rad, resolution_m)) {
+    const GridIndex cell = worldToGrid(sample, resolution_m);
+    if (surface.traversable_cells.find(cell) == surface.traversable_cells.end()) {
+      return false;
+    }
+    if (surface.forbidden_cells.find(cell) != surface.forbidden_cells.end()) {
+      return false;
+    }
+    if (surface.blocked_cells.find(cell) != surface.blocked_cells.end()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 const RobotFootprintOptions & RobotFootprint::options() const
 {
   return options_;
+}
+
+GridIndex RobotFootprint::worldToGrid(const Point3 & point, double resolution_m) const
+{
+  return {
+    static_cast<int>(std::floor(point.x / resolution_m)),
+    static_cast<int>(std::floor(point.y / resolution_m)),
+    static_cast<int>(std::floor(point.z / resolution_m))};
 }
 
 }  // namespace tgw_planner::core

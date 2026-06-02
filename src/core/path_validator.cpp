@@ -144,21 +144,7 @@ bool PathValidator::validateSample(
 bool PathValidator::footprintSupported(
   const NavigationSnapshot & snapshot, const Point3 & point, double yaw_rad) const
 {
-  for (const Point3 & sample :
-    footprint_.sampleFootprint(point, yaw_rad, snapshot.resolution_m))
-  {
-    const GridIndex cell = worldToGrid(sample, snapshot.resolution_m);
-    if (snapshot.surface.traversable_cells.find(cell) == snapshot.surface.traversable_cells.end()) {
-      return false;
-    }
-    if (snapshot.surface.forbidden_cells.find(cell) != snapshot.surface.forbidden_cells.end()) {
-      return false;
-    }
-    if (snapshot.surface.blocked_cells.find(cell) != snapshot.surface.blocked_cells.end()) {
-      return false;
-    }
-  }
-  return true;
+  return footprint_.isSupported(snapshot.surface, point, yaw_rad, snapshot.resolution_m);
 }
 
 }  // namespace tgw_planner::core
