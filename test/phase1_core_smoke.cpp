@@ -21,6 +21,7 @@ using tgw_planner::core::RobotFootprint;
 using tgw_planner::core::ScanInput;
 using tgw_planner::core::ClearanceField;
 using tgw_planner::core::NavigationSnapshot;
+using tgw_planner::core::PathValidationOptions;
 using tgw_planner::core::PathValidator;
 using tgw_planner::core::SurfaceExtractionOptions;
 using tgw_planner::core::SurfaceAstarPlanner;
@@ -154,6 +155,26 @@ int main()
   CHECK(validation.valid);
   CHECK(validation.checked_samples > plan.path.size());
   CHECK(validation.mean_clearance_m > 0.0);
+
+  NavigationSnapshot blocked_snapshot;
+  blocked_snapshot.resolution_m = options.resolution_m;
+  blocked_snapshot.surface.traversable_cells.insert({0, 0, 0});
+  blocked_snapshot.surface.traversable_cells.insert({1, 0, 0});
+  blocked_snapshot.surface.traversable_cells.insert({2, 0, 0});
+  blocked_snapshot.surface.blocked_cells.insert({1, 0, 0});
+  SurfacePlannerOptions blocked_planner_options;
+  blocked_planner_options.require_footprint_support = false;
+  SurfaceAstarPlanner blocked_planner(blocked_planner_options);
+  const auto blocked_plan = blocked_planner.plan(blocked_snapshot, {0, 0, 0}, {2, 0, 0});
+  CHECK(!blocked_plan.success);
+
+  PathValidationOptions blocked_validation_options;
+  blocked_validation_options.require_footprint_support = false;
+  PathValidator blocked_validator(footprint, blocked_validation_options);
+  const auto blocked_validation = blocked_validator.validate(
+    blocked_snapshot, {{0.05, 0.05, 0.05}, {0.15, 0.05, 0.05}, {0.25, 0.05, 0.05}});
+  CHECK(!blocked_validation.valid);
+  CHECK(blocked_validation.failure_reason == "final path sample is blocked");
 
   std::cout << "phase1_phase2_phase3_core_smoke passed\n";
   return 0;

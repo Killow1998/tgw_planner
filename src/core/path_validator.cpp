@@ -88,6 +88,10 @@ bool PathValidator::validateSample(
     report.failure_reason = "final path sample is forbidden";
     return false;
   }
+  if (snapshot.surface.blocked_cells.find(cell) != snapshot.surface.blocked_cells.end()) {
+    report.failure_reason = "final path sample is blocked";
+    return false;
+  }
   if (options_.require_footprint_support && !footprintSupported(snapshot, point, yaw_rad)) {
     report.failure_reason = "final path footprint is not fully supported";
     return false;
@@ -116,6 +120,9 @@ bool PathValidator::footprintSupported(
       return false;
     }
     if (snapshot.surface.forbidden_cells.find(cell) != snapshot.surface.forbidden_cells.end()) {
+      return false;
+    }
+    if (snapshot.surface.blocked_cells.find(cell) != snapshot.surface.blocked_cells.end()) {
       return false;
     }
   }

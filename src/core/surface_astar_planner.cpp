@@ -216,6 +216,7 @@ bool SurfaceAstarPlanner::isCellTraversable(
   const NavigationSnapshot & snapshot, const GridIndex & cell) const
 {
   return snapshot.surface.traversable_cells.find(cell) != snapshot.surface.traversable_cells.end() &&
+         snapshot.surface.blocked_cells.find(cell) == snapshot.surface.blocked_cells.end() &&
          snapshot.surface.forbidden_cells.find(cell) == snapshot.surface.forbidden_cells.end();
 }
 
