@@ -184,6 +184,7 @@ struct LooseStairFragment
   bool prefilter_width_ok{false};
   bool strict_fit_ok{false};
   bool rescued{false};
+  bool curved_like{false};
   StairFlightRejectReason reject_reason{StairFlightRejectReason::None};
   StairFragmentRescueReason rescue_reason{StairFragmentRescueReason::None};
 };
@@ -224,12 +225,22 @@ struct FloorComponent
   bool is_landing{false};
 };
 
+enum class StairFlightType
+{
+  Straight,
+  Curved,
+  Spiral
+};
+
 struct StairFlight
 {
   int id{-1};
+  StairFlightType type{StairFlightType::Straight};
   std::vector<GridIndex> cells;
   Vec2 uphill_axis;
   Vec2 side_axis;
+  std::vector<Vec2> local_tangents;
+  std::vector<Vec2> local_normals;
   double z_min{0.0};
   double z_max{0.0};
   double length_m{0.0};
@@ -290,6 +301,7 @@ public:
   bool isFloorOrLandingCell(const GridIndex & cell) const;
   bool isInsideStairSafeCorridor(const GridIndex & cell, int stair_flight_id) const;
   double lateralDistanceToStairCenterline(const GridIndex & cell, int stair_flight_id) const;
+  double distanceToFlightCenterline(const GridIndex & cell, int stair_flight_id) const;
   bool isNearStairPortal(const GridIndex & cell, int stair_flight_id) const;
   bool isNearLowPortal(const GridIndex & cell, int stair_flight_id) const;
   bool isNearHighPortal(const GridIndex & cell, int stair_flight_id) const;
@@ -387,6 +399,10 @@ private:
     const std::vector<bool> & strict_ok, StairFragmentRescueReason & reason) const;
   StairSegmentInfo makeSegmentFromFragmentIds(const std::vector<int> & fragment_ids) const;
   bool fitStairFlightFromSegment(
+    const StairSegmentInfo & segment, StairFlight & flight,
+    StairFlightRejectReason * reject_reason = nullptr) const;
+  bool isCurvedStairCandidate(const StairSegmentInfo & segment) const;
+  bool fitCurvedStairFlightFromSegment(
     const StairSegmentInfo & segment, StairFlight & flight,
     StairFlightRejectReason * reject_reason = nullptr) const;
   int nearestFloorComponent(const Point3 & point, double max_distance_m) const;
