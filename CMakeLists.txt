@@ -43,6 +43,7 @@ add_library(tgw_planner_core SHARED
   src/core/probabilistic_voxel_map.cpp
   src/core/raycast_integrator.cpp
   src/core/robot_footprint.cpp
+  src/core/surface_astar_planner.cpp
   src/core/surface_extractor.cpp
   src/core/voxel_astar_planner.cpp
 )

@@ -1,0 +1,61 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "tgw_planner/core/map_snapshot.hpp"
+#include "tgw_planner/core/planning_types.hpp"
+
+namespace tgw_planner::core
+{
+
+struct SurfacePlannerOptions
+{
+  double w_clearance{0.8};
+  double w_slope{0.3};
+  double w_turn{0.1};
+  double w_unknown{2.0};
+  std::uint32_t max_iterations{250000};
+};
+
+struct SurfacePlanMetrics
+{
+  bool success{false};
+  std::string failure_reason;
+  std::uint32_t expanded_nodes{0};
+  std::uint32_t generated_nodes{0};
+  double path_length_m{0.0};
+  double min_path_clearance_m{0.0};
+  double mean_path_clearance_m{0.0};
+  double clearance_cost_sum{0.0};
+  std::uint32_t low_clearance_samples{0};
+};
+
+struct SurfacePlanResult
+{
+  bool success{false};
+  std::string message;
+  std::vector<GridIndex> cells;
+  std::vector<Point3> path;
+  SurfacePlanMetrics metrics;
+};
+
+class SurfaceAstarPlanner
+{
+public:
+  explicit SurfaceAstarPlanner(SurfacePlannerOptions options = {});
+
+  SurfacePlanResult plan(
+    const NavigationSnapshot & snapshot, const GridIndex & start, const GridIndex & goal) const;
+
+private:
+  double transitionCost(
+    const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to,
+    const GridIndex * previous) const;
+  void fillMetrics(const NavigationSnapshot & snapshot, SurfacePlanResult & result) const;
+
+  SurfacePlannerOptions options_;
+};
+
+}  // namespace tgw_planner::core
