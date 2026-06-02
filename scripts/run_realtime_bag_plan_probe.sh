@@ -23,6 +23,7 @@ fi
 bag_path="${1:-/home/user/ros_ws/bagfile/f7tof9_g2w_ros2}"
 play_seconds="${TGW_BAG_PLAY_SECONDS:-75}"
 log_dir="${TGW_BAG_PROBE_LOG_DIR:-/tmp/tgw_real_bag_plan_probe}"
+export ROS_LOG_DIR="${ROS_LOG_DIR:-${log_dir}/ros_launch_logs}"
 surface_require_observed_free_space="${TGW_SURFACE_REQUIRE_OBSERVED_FREE_SPACE:-true}"
 surface_allow_observed_free_bridge="${TGW_SURFACE_ALLOW_OBSERVED_FREE_BRIDGE:-true}"
 surface_require_static_support="${TGW_SURFACE_REQUIRE_STATIC_SUPPORT:-false}"
@@ -36,6 +37,7 @@ planner_require_footprint="${TGW_PLANNER_REQUIRE_FOOTPRINT:-false}"
 validation_require_footprint="${TGW_VALIDATION_REQUIRE_FOOTPRINT:-false}"
 probe_cloud_topic="${TGW_PROBE_CLOUD_TOPIC:-/tgw_map/traversable_cloud}"
 mkdir -p "${log_dir}"
+mkdir -p "${ROS_LOG_DIR}"
 rm -f \
   "${log_dir}/domain.log" \
   "${log_dir}/launch_options.log" \
@@ -59,6 +61,7 @@ echo "ROS_DOMAIN_ID=${ROS_DOMAIN_ID}" >"${log_dir}/domain.log"
   echo "TGW_PLANNER_REQUIRE_FOOTPRINT=${planner_require_footprint}"
   echo "TGW_VALIDATION_REQUIRE_FOOTPRINT=${validation_require_footprint}"
   echo "TGW_PROBE_CLOUD_TOPIC=${probe_cloud_topic}"
+  echo "ROS_LOG_DIR=${ROS_LOG_DIR}"
 } >"${log_dir}/launch_options.log"
 
 if [[ ! -e "${bag_path}" ]]; then
@@ -92,6 +95,14 @@ tail_logs()
       tail -n 80 "${file}" || true
     fi
   done
+}
+
+report_socket_permission_if_present()
+{
+  if grep -R -q -E "Error creating socket: Operation not permitted|getifaddrs: Operation not permitted|RTPS_PARTICIPANT.*User transport failed" "${log_dir}" 2>/dev/null; then
+    echo "Detected ROS/DDS socket permission failure in ${log_dir}."
+    echo "Run this probe in a host ROS environment with network socket permissions enabled."
+  fi
 }
 
 wait_for_node()
@@ -144,16 +155,19 @@ setsid ros2 launch tgw_planner realtime_mapping.launch.py \
 pids="${pids} $!"
 if ! wait_for_node "/tgw_realtime_mapping_node"; then
   echo "FAIL realtime_bag_plan_probe: /tgw_realtime_mapping_node did not start"
+  report_socket_permission_if_present
   tail_logs
   exit 1
 fi
 if ! wait_for_service "/tgw_mapping/get_snapshot" "tgw_planner/srv/GetSnapshot"; then
   echo "FAIL realtime_bag_plan_probe: /tgw_mapping/get_snapshot service did not appear"
+  report_socket_permission_if_present
   tail_logs
   exit 1
 fi
 if ! wait_for_service "/tgw_map/plan_path" "tgw_planner/srv/PlanPath"; then
   echo "FAIL realtime_bag_plan_probe: /tgw_map/plan_path service did not appear"
+  report_socket_permission_if_present
   tail_logs
   exit 1
 fi

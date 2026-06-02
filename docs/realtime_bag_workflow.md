@@ -77,6 +77,11 @@ prints tails from the FAST-LIO, n3mapping, tgw, bag, probe, and snapshot logs.
 Use `TGW_BAG_PLAY_SECONDS=5` for a startup/diagnostic smoke only; it is not a
 full map quality validation.
 
+The probe writes ROS launch logs under
+`${TGW_BAG_PROBE_LOG_DIR}/ros_launch_logs` unless `ROS_LOG_DIR` is already set.
+If the runtime cannot create ROS/DDS sockets, it reports the socket permission
+failure explicitly; that is an environment restriction, not a planner result.
+
 Endpoint snapping is capped by `planner_max_snap_distance_m`, exposed in the
 probe as `TGW_PLANNER_MAX_SNAP_DISTANCE_M` and defaulting to 0.75 m. Increase it
 only for explicit diagnostics; otherwise a requested start or goal that is too

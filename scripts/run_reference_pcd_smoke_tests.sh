@@ -15,6 +15,9 @@ if [[ -z "${ROS_DOMAIN_ID:-}" ]]; then
   export ROS_DOMAIN_ID=$((20 + RANDOM % 180))
 fi
 
+export ROS_LOG_DIR="${ROS_LOG_DIR:-/tmp/tgw_reference_pcd_ros_logs}"
+mkdir -p "${ROS_LOG_DIR}"
+
 pcd_dir="${PCT_PCD_DIR:-$HOME/robot_nav_refs/PCT_planner/rsc/pcd}"
 require_legacy_spiral_pass="${TGW_REQUIRE_LEGACY_SPIRAL_PASS:-0}"
 require_surface_spiral_pass="${TGW_REQUIRE_SURFACE_SPIRAL_PASS:-${TGW_REQUIRE_SPIRAL_PASS:-1}}"
@@ -60,6 +63,15 @@ wait_for_map()
     sleep 0.25
   done
   return 1
+}
+
+report_socket_permission_if_present()
+{
+  local log_file="$1"
+  if grep -q -E "Error creating socket: Operation not permitted|getifaddrs: Operation not permitted|RTPS_PARTICIPANT.*User transport failed" "${log_file}" 2>/dev/null; then
+    echo "Detected ROS/DDS socket permission failure in ${log_file}."
+    echo "Use TGW_SKIP_LEGACY_PCD_SMOKE=1 to run the refactored surface PCD checks without ROS graph sockets."
+  fi
 }
 
 metric_value()
@@ -162,11 +174,13 @@ run_case()
   launch_pid="$!"
   if ! wait_for_node; then
     echo "FAIL ${name}: /tgw_planner_node did not appear"
+    report_socket_permission_if_present "${log_file}"
     tail -n 80 "${log_file}" || true
     return 1
   fi
   if ! wait_for_map "${log_file}"; then
     echo "FAIL ${name}: map build did not finish"
+    report_socket_permission_if_present "${log_file}"
     tail -n 120 "${log_file}" || true
     return 1
   fi
