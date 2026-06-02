@@ -19,6 +19,7 @@ using tgw_planner::core::RaycastIntegrator;
 using tgw_planner::core::RiskField;
 using tgw_planner::core::RobotFootprint;
 using tgw_planner::core::ScanInput;
+using tgw_planner::core::SelfFilterBox;
 using tgw_planner::core::ClearanceField;
 using tgw_planner::core::NavigationSnapshot;
 using tgw_planner::core::PathValidationOptions;
@@ -68,6 +69,31 @@ int main()
   CHECK(map.isOccupied(endpoint));
   CHECK(map.lookup(free_cell) != nullptr);
   CHECK(map.probability(free_cell) < 0.5F);
+
+  ProbabilisticVoxelMap mount_filter_map(options);
+  SelfFilterBox disabled_body_box;
+  disabled_body_box.enabled = false;
+  SelfFilterBox mount_box;
+  mount_box.enabled = true;
+  mount_box.min_x = 0.90;
+  mount_box.max_x = 1.10;
+  mount_box.min_y = -0.10;
+  mount_box.max_y = 0.10;
+  mount_box.min_z = -0.10;
+  mount_box.max_z = 0.10;
+  RaycastIntegrator mount_filter_integrator(options, disabled_body_box, mount_box);
+  ScanInput mount_filter_scan;
+  mount_filter_scan.sensor_pose_map = pose;
+  mount_filter_scan.stamp_sec = 0.0;
+  mount_filter_scan.view_id = 1;
+  mount_filter_scan.points_sensor_frame.push_back({1.0, 0.0, 0.0});
+  mount_filter_scan.points_sensor_frame.push_back({1.5, 0.0, 0.0});
+  const auto mount_filter_stats =
+    mount_filter_integrator.insertScan(mount_filter_scan, mount_filter_map);
+  CHECK(mount_filter_stats.filtered_self == 1U);
+  CHECK(mount_filter_stats.inserted_points == 1U);
+  CHECK(!mount_filter_map.isOccupied(mount_filter_map.worldToGrid({1.0, 0.0, 0.0})));
+  CHECK(mount_filter_map.isOccupied(mount_filter_map.worldToGrid({1.5, 0.0, 0.0})));
 
   map.updateHit(endpoint, 1.0, 2);
   CHECK(map.lookup(endpoint)->static_candidate);

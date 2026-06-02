@@ -131,7 +131,7 @@ public:
   {
     const MappingOptions mapping_options = mappingOptions();
     map_ = ProbabilisticVoxelMap(mapping_options);
-    integrator_ = RaycastIntegrator(mapping_options, selfFilterBox());
+    integrator_ = RaycastIntegrator(mapping_options, selfFilterBox(), mountSelfFilterBox());
     surface_extractor_ = SurfaceExtractor(surfaceOptions());
     footprint_ = RobotFootprint(footprintOptions());
     risk_options_ = riskOptions();
@@ -265,12 +265,26 @@ private:
   SelfFilterBox selfFilterBox()
   {
     SelfFilterBox box;
+    box.enabled = declare_parameter<bool>("enable_body_self_filter", box.enabled);
     box.min_x = declare_parameter<double>("self_filter_min_x", box.min_x);
     box.max_x = declare_parameter<double>("self_filter_max_x", box.max_x);
     box.min_y = declare_parameter<double>("self_filter_min_y", box.min_y);
     box.max_y = declare_parameter<double>("self_filter_max_y", box.max_y);
     box.min_z = declare_parameter<double>("self_filter_min_z", box.min_z);
     box.max_z = declare_parameter<double>("self_filter_max_z", box.max_z);
+    return box;
+  }
+
+  SelfFilterBox mountSelfFilterBox()
+  {
+    SelfFilterBox box;
+    box.enabled = declare_parameter<bool>("enable_mount_self_filter", false);
+    box.min_x = declare_parameter<double>("mount_self_filter_min_x", 0.0);
+    box.max_x = declare_parameter<double>("mount_self_filter_max_x", 0.0);
+    box.min_y = declare_parameter<double>("mount_self_filter_min_y", 0.0);
+    box.max_y = declare_parameter<double>("mount_self_filter_max_y", 0.0);
+    box.min_z = declare_parameter<double>("mount_self_filter_min_z", 0.0);
+    box.max_z = declare_parameter<double>("mount_self_filter_max_z", 0.0);
     return box;
   }
 

@@ -12,6 +12,7 @@ namespace tgw_planner::core
 
 struct SelfFilterBox
 {
+  bool enabled{true};
   double min_x{-0.60};
   double max_x{0.60};
   double min_y{-0.40};
@@ -44,7 +45,10 @@ struct RaycastStats
 class RaycastIntegrator
 {
 public:
-  RaycastIntegrator(MappingOptions options = {}, SelfFilterBox self_filter_box = {});
+  RaycastIntegrator(
+    MappingOptions options = {},
+    SelfFilterBox body_filter_box = {},
+    SelfFilterBox mount_filter_box = {});
 
   RaycastStats insertScan(const ScanInput & scan, ProbabilisticVoxelMap & map) const;
 
@@ -55,7 +59,8 @@ private:
     const GridIndex & origin, const GridIndex & endpoint) const;
 
   MappingOptions options_;
-  SelfFilterBox self_filter_box_;
+  SelfFilterBox body_filter_box_;
+  SelfFilterBox mount_filter_box_;
 };
 
 }  // namespace tgw_planner::core

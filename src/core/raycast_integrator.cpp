@@ -6,8 +6,9 @@
 namespace tgw_planner::core
 {
 
-RaycastIntegrator::RaycastIntegrator(MappingOptions options, SelfFilterBox self_filter_box)
-: options_(options), self_filter_box_(self_filter_box)
+RaycastIntegrator::RaycastIntegrator(
+  MappingOptions options, SelfFilterBox body_filter_box, SelfFilterBox mount_filter_box)
+: options_(options), body_filter_box_(body_filter_box), mount_filter_box_(mount_filter_box)
 {
   options_.resolution_m = std::max(0.01, options_.resolution_m);
 }
@@ -61,12 +62,16 @@ bool RaycastIntegrator::isInvalid(const Point3 & point) const
 
 bool RaycastIntegrator::isSelfPoint(const Point3 & point_sensor_frame) const
 {
-  return point_sensor_frame.x >= self_filter_box_.min_x &&
-         point_sensor_frame.x <= self_filter_box_.max_x &&
-         point_sensor_frame.y >= self_filter_box_.min_y &&
-         point_sensor_frame.y <= self_filter_box_.max_y &&
-         point_sensor_frame.z >= self_filter_box_.min_z &&
-         point_sensor_frame.z <= self_filter_box_.max_z;
+  const auto inside = [&point_sensor_frame](const SelfFilterBox & box) {
+      return box.enabled &&
+             point_sensor_frame.x >= box.min_x &&
+             point_sensor_frame.x <= box.max_x &&
+             point_sensor_frame.y >= box.min_y &&
+             point_sensor_frame.y <= box.max_y &&
+             point_sensor_frame.z >= box.min_z &&
+             point_sensor_frame.z <= box.max_z;
+    };
+  return inside(body_filter_box_) || inside(mount_filter_box_);
 }
 
 std::vector<GridIndex> RaycastIntegrator::rayVoxels(

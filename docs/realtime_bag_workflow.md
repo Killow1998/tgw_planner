@@ -166,6 +166,33 @@ Dynamic filtering runs after each raycast-integrated scan. The latest decay
 result is exposed as `last_scan_dynamic_suspect_voxels_after_decay` and
 `last_scan_static_candidate_voxels_after_decay` in both stats outputs.
 
+Self filtering is applied before raycasting in the incoming sensor frame. The
+default body box is:
+
+```text
+self_filter_min_x=-0.60  self_filter_max_x=0.60
+self_filter_min_y=-0.40  self_filter_max_y=0.40
+self_filter_min_z=-0.35  self_filter_max_z=0.80
+```
+
+For rigs where the Livox mount, sensor bracket, or robot-specific structure
+appears in the point cloud outside the body box, enable the second configurable
+mount box:
+
+```bash
+ros2 launch tgw_planner realtime_mapping.launch.py \
+  enable_mount_self_filter:=true \
+  mount_self_filter_min_x:=<min_x> \
+  mount_self_filter_max_x:=<max_x> \
+  mount_self_filter_min_y:=<min_y> \
+  mount_self_filter_max_y:=<max_y> \
+  mount_self_filter_min_z:=<min_z> \
+  mount_self_filter_max_z:=<max_z>
+```
+
+Both boxes are checked in the sensor frame. Keep them conservative: an overly
+large self-filter box can remove real nearby obstacles before raycasting.
+
 Map export:
 
 ```bash

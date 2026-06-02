@@ -23,6 +23,20 @@ def generate_launch_description():
     min_static_lifetime_sec = LaunchConfiguration("min_static_lifetime_sec")
     dynamic_clear_ratio_threshold = LaunchConfiguration("dynamic_clear_ratio_threshold")
     enable_self_filter = LaunchConfiguration("enable_self_filter")
+    enable_body_self_filter = LaunchConfiguration("enable_body_self_filter")
+    self_filter_min_x = LaunchConfiguration("self_filter_min_x")
+    self_filter_max_x = LaunchConfiguration("self_filter_max_x")
+    self_filter_min_y = LaunchConfiguration("self_filter_min_y")
+    self_filter_max_y = LaunchConfiguration("self_filter_max_y")
+    self_filter_min_z = LaunchConfiguration("self_filter_min_z")
+    self_filter_max_z = LaunchConfiguration("self_filter_max_z")
+    enable_mount_self_filter = LaunchConfiguration("enable_mount_self_filter")
+    mount_self_filter_min_x = LaunchConfiguration("mount_self_filter_min_x")
+    mount_self_filter_max_x = LaunchConfiguration("mount_self_filter_max_x")
+    mount_self_filter_min_y = LaunchConfiguration("mount_self_filter_min_y")
+    mount_self_filter_max_y = LaunchConfiguration("mount_self_filter_max_y")
+    mount_self_filter_min_z = LaunchConfiguration("mount_self_filter_min_z")
+    mount_self_filter_max_z = LaunchConfiguration("mount_self_filter_max_z")
     enable_dynamic_filter = LaunchConfiguration("enable_dynamic_filter")
     max_points_per_scan = LaunchConfiguration("max_points_per_scan")
     publish_period_ms = LaunchConfiguration("publish_period_ms")
@@ -78,6 +92,20 @@ def generate_launch_description():
             DeclareLaunchArgument("min_static_lifetime_sec", default_value="1.0"),
             DeclareLaunchArgument("dynamic_clear_ratio_threshold", default_value="0.65"),
             DeclareLaunchArgument("enable_self_filter", default_value="true"),
+            DeclareLaunchArgument("enable_body_self_filter", default_value="true"),
+            DeclareLaunchArgument("self_filter_min_x", default_value="-0.60"),
+            DeclareLaunchArgument("self_filter_max_x", default_value="0.60"),
+            DeclareLaunchArgument("self_filter_min_y", default_value="-0.40"),
+            DeclareLaunchArgument("self_filter_max_y", default_value="0.40"),
+            DeclareLaunchArgument("self_filter_min_z", default_value="-0.35"),
+            DeclareLaunchArgument("self_filter_max_z", default_value="0.80"),
+            DeclareLaunchArgument("enable_mount_self_filter", default_value="false"),
+            DeclareLaunchArgument("mount_self_filter_min_x", default_value="0.0"),
+            DeclareLaunchArgument("mount_self_filter_max_x", default_value="0.0"),
+            DeclareLaunchArgument("mount_self_filter_min_y", default_value="0.0"),
+            DeclareLaunchArgument("mount_self_filter_max_y", default_value="0.0"),
+            DeclareLaunchArgument("mount_self_filter_min_z", default_value="0.0"),
+            DeclareLaunchArgument("mount_self_filter_max_z", default_value="0.0"),
             DeclareLaunchArgument("enable_dynamic_filter", default_value="true"),
             DeclareLaunchArgument("max_points_per_scan", default_value="120000"),
             DeclareLaunchArgument("publish_period_ms", default_value="1000"),
@@ -137,6 +165,20 @@ def generate_launch_description():
                         "min_static_lifetime_sec": min_static_lifetime_sec,
                         "dynamic_clear_ratio_threshold": dynamic_clear_ratio_threshold,
                         "enable_self_filter": enable_self_filter,
+                        "enable_body_self_filter": enable_body_self_filter,
+                        "self_filter_min_x": self_filter_min_x,
+                        "self_filter_max_x": self_filter_max_x,
+                        "self_filter_min_y": self_filter_min_y,
+                        "self_filter_max_y": self_filter_max_y,
+                        "self_filter_min_z": self_filter_min_z,
+                        "self_filter_max_z": self_filter_max_z,
+                        "enable_mount_self_filter": enable_mount_self_filter,
+                        "mount_self_filter_min_x": mount_self_filter_min_x,
+                        "mount_self_filter_max_x": mount_self_filter_max_x,
+                        "mount_self_filter_min_y": mount_self_filter_min_y,
+                        "mount_self_filter_max_y": mount_self_filter_max_y,
+                        "mount_self_filter_min_z": mount_self_filter_min_z,
+                        "mount_self_filter_max_z": mount_self_filter_max_z,
                         "enable_dynamic_filter": enable_dynamic_filter,
                         "max_points_per_scan": max_points_per_scan,
                         "publish_period_ms": publish_period_ms,
