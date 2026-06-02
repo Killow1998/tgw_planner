@@ -966,10 +966,15 @@ private:
   std::string buildMapMetadataYaml() const
   {
     const MappingOptions & mapping = map_.options();
+    const std::vector<GridIndex> occupied_cells = map_.occupiedVoxels();
+    const std::vector<GridIndex> free_cells = map_.freeVoxels();
+    const std::vector<GridIndex> static_cells = map_.staticCandidateVoxels();
+    const std::vector<GridIndex> dynamic_cells = map_.dynamicSuspectVoxels();
     std::ostringstream out;
     out << std::fixed << std::setprecision(6);
     out << "map_format: tgw_realtime_map_v1\n";
     out << "map_input_mode: realtime_raycast\n";
+    out << "voxel_evidence_schema: tgw_voxel_evidence_csv_v1\n";
     out << "map_frame: \"" << yamlEscape(map_frame_) << "\"\n";
     out << "created_at_unix_sec: " <<
       std::chrono::duration<double>(
@@ -986,6 +991,11 @@ private:
     out << "min_static_lifetime_sec: " << mapping.min_static_lifetime_sec << "\n";
     out << "dynamic_clear_ratio_threshold: " << mapping.dynamic_clear_ratio_threshold << "\n";
     out << "enable_dynamic_filter: " << (mapping.enable_dynamic_filter ? "true" : "false") << "\n";
+    out << "voxel_count: " << map_.size() << "\n";
+    out << "occupied_voxels: " << occupied_cells.size() << "\n";
+    out << "free_voxels: " << free_cells.size() << "\n";
+    out << "static_candidate_voxels: " << static_cells.size() << "\n";
+    out << "dynamic_suspect_voxels: " << dynamic_cells.size() << "\n";
     out << "blocked_region_count: " << blocked_regions_.size() << "\n";
     return out.str();
   }

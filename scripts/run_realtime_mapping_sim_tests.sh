@@ -459,7 +459,18 @@ run_blocked_region_persistence_case()
     "${remove_file}")
 
   setsid ros2 launch tgw_planner realtime_mapping.launch.py \
+    use_tf:=false \
+    assume_cloud_in_map_frame:=false \
+    points_topic:=/tgw_sim/points \
+    pose_topic:=/tgw_sim/pose \
     publish_period_ms:=300 \
+    min_static_hits:=1 \
+    min_distinct_views:=1 \
+    min_static_lifetime_sec:=0.0 \
+    enable_dynamic_filter:=false \
+    enable_self_filter:=false \
+    max_range_m:=10.0 \
+    min_range_m:=0.01 \
     planner_require_footprint:=false \
     validation_require_footprint:=false >"${log_file}" 2>&1 &
   launch_pid="$!"
@@ -482,6 +493,8 @@ run_blocked_region_persistence_case()
   ros2 service call /tgw_map/set_blocked_region tgw_planner/srv/SetBlockedRegion \
     "{operation: add, min: {x: 0.0, y: 0.0, z: 0.0}, max: {x: 1.0, y: 1.0, z: 1.0}, reason: regression}" \
     >"${add_file}" 2>&1
+  publish_single_static_point_scene
+  sleep 0.5
   ros2 service call /tgw_mapping/save_map tgw_planner/srv/SaveMap \
     "{output_dir: ${output_dir}}" >"${save_file}" 2>&1
   if ! grep -q "voxel_evidence_csv=" "${save_file}"; then
@@ -496,6 +509,18 @@ run_blocked_region_persistence_case()
   fi
   if ! grep -q "^resolution_m: 0.100000" "${output_dir}/metadata.yaml"; then
     echo "FAIL blocked_region_persistence: metadata.yaml did not record map resolution"
+    cat "${output_dir}/metadata.yaml"
+    return 1
+  fi
+  if ! grep -q "^voxel_evidence_schema: tgw_voxel_evidence_csv_v1" "${output_dir}/metadata.yaml"; then
+    echo "FAIL blocked_region_persistence: metadata.yaml did not record voxel evidence schema"
+    cat "${output_dir}/metadata.yaml"
+    return 1
+  fi
+  local metadata_voxel_count
+  metadata_voxel_count="$(grep -o "^voxel_count: [0-9]*" "${output_dir}/metadata.yaml" | tail -n 1 | awk '{print $2}')"
+  if (( ${metadata_voxel_count:-0} == 0 )); then
+    echo "FAIL blocked_region_persistence: metadata.yaml recorded zero voxel_count"
     cat "${output_dir}/metadata.yaml"
     return 1
   fi
@@ -546,16 +571,17 @@ PY
     "{operation: remove, min: {x: 0.0, y: 0.0, z: 0.0}, max: {x: 1.0, y: 1.0, z: 1.0}, reason: regression}" \
     >"${remove_file}" 2>&1
 
-  local save_success load_success evidence_only_success loaded_evidence evidence_only_loaded_evidence mismatch_failed bad_format_failed removed_region
+  local save_success load_success evidence_only_success loaded_evidence evidence_only_loaded_evidence evidence_only_voxel_count mismatch_failed bad_format_failed removed_region
   save_success="$(grep -o "success=True\\|success=False" "${save_file}" | tail -n 1 || true)"
   load_success="$(grep -o "success=True\\|success=False" "${load_file}" | tail -n 1 || true)"
   evidence_only_success="$(grep -o "success=True\\|success=False" "${evidence_only_load_file}" | tail -n 1 || true)"
   loaded_evidence="$(grep -o "loaded_voxel_evidence=True" "${load_file}" | tail -n 1 || true)"
   evidence_only_loaded_evidence="$(grep -o "loaded_voxel_evidence=True" "${evidence_only_load_file}" | tail -n 1 || true)"
+  evidence_only_voxel_count="$(grep -o "voxel_count=[0-9]*" "${evidence_only_load_file}" | tail -n 1 | cut -d= -f2 || true)"
   mismatch_failed="$(grep -o "map resolution mismatch" "${mismatch_load_file}" | tail -n 1 || true)"
   bad_format_failed="$(grep -o "unsupported realtime map format" "${bad_format_load_file}" | tail -n 1 || true)"
   removed_region="$(grep -o "removed 1 realtime blocked regions" "${remove_file}" | tail -n 1 || true)"
-  echo "blocked_region_persistence: ${save_success:-save=unknown} ${load_success:-load=unknown} loaded_evidence=${loaded_evidence:+true} evidence_only_load=${evidence_only_success:-unknown} evidence_only_loaded_evidence=${evidence_only_loaded_evidence:+true} metadata_mismatch_rejected=${mismatch_failed:+true} bad_format_rejected=${bad_format_failed:+true} removed_region=${removed_region:+true}"
+  echo "blocked_region_persistence: ${save_success:-save=unknown} ${load_success:-load=unknown} loaded_evidence=${loaded_evidence:+true} evidence_only_load=${evidence_only_success:-unknown} evidence_only_loaded_evidence=${evidence_only_loaded_evidence:+true} evidence_only_voxel_count=${evidence_only_voxel_count:-unknown} metadata_mismatch_rejected=${mismatch_failed:+true} bad_format_rejected=${bad_format_failed:+true} removed_region=${removed_region:+true}"
   if [[ "${save_success}" != "success=True" || "${load_success}" != "success=True" ]]; then
     echo "FAIL blocked_region_persistence: save/load failed"
     cat "${save_file}" "${load_file}"
@@ -569,6 +595,11 @@ PY
   if [[ -z "${loaded_evidence}" || -z "${evidence_only_loaded_evidence}" ]]; then
     echo "FAIL blocked_region_persistence: LoadMap did not report loaded_voxel_evidence=true"
     cat "${load_file}" "${evidence_only_load_file}"
+    return 1
+  fi
+  if (( ${evidence_only_voxel_count:-0} == 0 )); then
+    echo "FAIL blocked_region_persistence: evidence-only load reported zero voxel_count"
+    cat "${evidence_only_load_file}"
     return 1
   fi
   if [[ -z "${mismatch_failed}" ]]; then
