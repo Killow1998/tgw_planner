@@ -303,6 +303,35 @@ int main()
   CHECK(moved_to_center_lane);
   CHECK(!stayed_wall_hugging);
 
+  NavigationSnapshot unknown_cost_snapshot;
+  unknown_cost_snapshot.resolution_m = options.resolution_m;
+  for (int x = 0; x <= 6; ++x) {
+    for (int y = 1; y <= 3; ++y) {
+      const GridIndex cell{x, y, 1};
+      unknown_cost_snapshot.surface.traversable_cells.insert(cell);
+      unknown_cost_snapshot.surface.surface_cells[cell].cell = cell;
+      unknown_cost_snapshot.surface.surface_cells[cell].support = {x, y, 0};
+    }
+    unknown_cost_snapshot.observed_free_cells.insert({x, 3, 1});
+  }
+  SurfacePlannerOptions unknown_cost_options;
+  unknown_cost_options.require_footprint_support = false;
+  unknown_cost_options.enable_shortcut = false;
+  unknown_cost_options.w_clearance = 0.0;
+  unknown_cost_options.w_risk = 0.0;
+  unknown_cost_options.w_slope = 0.0;
+  unknown_cost_options.w_turn = 0.0;
+  unknown_cost_options.w_unknown = 5.0;
+  SurfaceAstarPlanner unknown_cost_planner(unknown_cost_options);
+  const auto unknown_cost_plan =
+    unknown_cost_planner.plan(unknown_cost_snapshot, {0, 1, 1}, {6, 1, 1});
+  CHECK(unknown_cost_plan.success);
+  bool used_observed_free_lane = false;
+  for (const GridIndex & cell : unknown_cost_plan.cells) {
+    used_observed_free_lane = used_observed_free_lane || cell.y == 3;
+  }
+  CHECK(used_observed_free_lane);
+
   SurfacePlannerOptions clearance_shortcut_options = center_bias_options;
   clearance_shortcut_options.enable_shortcut = true;
   clearance_shortcut_options.shortcut_safety_margin_m = 0.15;

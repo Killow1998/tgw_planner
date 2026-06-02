@@ -220,6 +220,7 @@ double SurfaceAstarPlanner::transitionCost(
   const double step = gridDistance(from, to) * snapshot.resolution_m;
   const double clearance_penalty = options_.w_clearance * snapshot.clearance.clearancePenalty(to);
   const double risk_penalty = options_.w_risk * snapshot.risk.riskCost(to);
+  const double unknown_penalty = options_.w_unknown * unknownPenalty(snapshot, to);
   double slope_penalty = 0.0;
   const auto from_surface = snapshot.surface.surface_cells.find(from);
   const auto to_surface = snapshot.surface.surface_cells.find(to);
@@ -244,7 +245,7 @@ double SurfaceAstarPlanner::transitionCost(
     }
   }
 
-  return step + clearance_penalty + risk_penalty + slope_penalty + turn_penalty;
+  return step + clearance_penalty + risk_penalty + unknown_penalty + slope_penalty + turn_penalty;
 }
 
 bool SurfaceAstarPlanner::isCellTraversable(
@@ -312,6 +313,15 @@ bool SurfaceAstarPlanner::isDirectSurfaceNeighbor(
   const int max_step_cells =
     std::max(1, static_cast<int>(std::ceil(options_.max_step_height_m / snapshot.resolution_m)));
   return dx <= 1 && dy <= 1 && dz <= max_step_cells;
+}
+
+double SurfaceAstarPlanner::unknownPenalty(
+  const NavigationSnapshot & snapshot, const GridIndex & cell) const
+{
+  if (snapshot.observed_free_cells.empty()) {
+    return 0.0;
+  }
+  return snapshot.observed_free_cells.find(cell) == snapshot.observed_free_cells.end() ? 1.0 : 0.0;
 }
 
 Point3 SurfaceAstarPlanner::cellCenter(const GridIndex & cell, double resolution_m) const

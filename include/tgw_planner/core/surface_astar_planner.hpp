@@ -81,6 +81,7 @@ private:
     const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
   bool isDirectSurfaceNeighbor(
     const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
+  double unknownPenalty(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
   Point3 cellCenter(const GridIndex & cell, double resolution_m) const;
   GridIndex worldToGrid(const Point3 & point, double resolution_m) const;
   std::vector<Point3> cellsToPath(

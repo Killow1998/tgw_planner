@@ -1104,6 +1104,8 @@ private:
   {
     NavigationSnapshot snapshot;
     snapshot.surface = extractSurfaceWithBlocked();
+    const std::vector<GridIndex> free_cells = map_.freeVoxels();
+    snapshot.observed_free_cells.insert(free_cells.begin(), free_cells.end());
     snapshot.clearance.compute(
       snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, map_.resolution());
     snapshot.risk = tgw_planner::core::RiskField(risk_options_);
