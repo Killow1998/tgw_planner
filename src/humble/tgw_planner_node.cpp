@@ -711,7 +711,7 @@ private:
     out << std::fixed << std::setprecision(3);
     out << "{";
     out << "\"success\":" << (metrics.success ? "true" : "false") << ",";
-    out << "\"map_id\":\"" << map_.mapId() << "\",";
+    out << "\"map_id\":\"" << jsonEscape(map_.mapId()) << "\",";
     out << "\"map_input_mode\":\"pcd\",";
     out << "\"pcd_artifact_warning\":true,";
     out << "\"failure_reason\":\"" << jsonEscape(metrics.failure_reason) << "\",";
