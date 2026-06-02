@@ -74,6 +74,14 @@ using tgw_planner::core::ClearanceField;
 using tgw_planner::core::SurfaceAstarPlanner;
 using tgw_planner::core::SurfacePlannerOptions;
 
+constexpr const char * kRealtimeMapFormat = "tgw_realtime_map_v1";
+constexpr const char * kRealtimeMapInputMode = "realtime_raycast";
+constexpr const char * kVoxelEvidenceSchema = "tgw_voxel_evidence_csv_v1";
+constexpr const char * kVoxelEvidenceCsvHeader =
+  "x,y,z,log_odds,hit_count,miss_count,ray_pass_count,first_seen_time,"
+  "last_seen_time,last_hit_time,last_miss_time,distinct_view_count,last_view_id,"
+  "occupied,free,dynamic_suspect,static_candidate";
+
 double stampSeconds(const builtin_interfaces::msg::Time & stamp)
 {
   return static_cast<double>(stamp.sec) + 1.0e-9 * static_cast<double>(stamp.nanosec);
@@ -776,9 +784,7 @@ private:
         return false;
       }
       out << std::fixed << std::setprecision(9);
-      out << "x,y,z,log_odds,hit_count,miss_count,ray_pass_count,first_seen_time,"
-        "last_seen_time,last_hit_time,last_miss_time,distinct_view_count,last_view_id,"
-        "occupied,free,dynamic_suspect,static_candidate\n";
+      out << kVoxelEvidenceCsvHeader << "\n";
       for (const auto & entry : map_.voxels()) {
         const GridIndex & cell = entry.first;
         const auto & state = entry.second;
@@ -822,6 +828,11 @@ private:
 
     std::string line;
     if (!std::getline(in, line)) {
+      return loaded;
+    }
+    if (trim(line) != kVoxelEvidenceCsvHeader) {
+      message = "unsupported voxel evidence csv header at " + path.string();
+      loaded.exists = false;
       return loaded;
     }
     std::size_t line_number = 1U;
@@ -972,9 +983,9 @@ private:
     const std::vector<GridIndex> dynamic_cells = map_.dynamicSuspectVoxels();
     std::ostringstream out;
     out << std::fixed << std::setprecision(6);
-    out << "map_format: tgw_realtime_map_v1\n";
-    out << "map_input_mode: realtime_raycast\n";
-    out << "voxel_evidence_schema: tgw_voxel_evidence_csv_v1\n";
+    out << "map_format: " << kRealtimeMapFormat << "\n";
+    out << "map_input_mode: " << kRealtimeMapInputMode << "\n";
+    out << "voxel_evidence_schema: " << kVoxelEvidenceSchema << "\n";
     out << "map_frame: \"" << yamlEscape(map_frame_) << "\"\n";
     out << "created_at_unix_sec: " <<
       std::chrono::duration<double>(
@@ -1029,10 +1040,15 @@ private:
   }
 
   bool validateMapMetadata(
-    const std::filesystem::path & path, std::string & message) const
+    const std::filesystem::path & path, bool require_voxel_evidence_schema,
+    std::string & message) const
   {
     message.clear();
     if (!std::filesystem::exists(path)) {
+      if (require_voxel_evidence_schema) {
+        message = "voxel evidence requires metadata schema: " + path.string();
+        return false;
+      }
       return true;
     }
     std::ifstream in(path);
@@ -1045,6 +1061,7 @@ private:
     double saved_resolution = 0.0;
     std::string map_format;
     std::string map_input_mode;
+    std::string voxel_evidence_schema;
     std::string line;
     while (std::getline(in, line)) {
       const std::string stripped = trim(line);
@@ -1053,16 +1070,22 @@ private:
       }
       parseYamlScalarString(stripped, "map_format", map_format);
       parseYamlScalarString(stripped, "map_input_mode", map_input_mode);
+      parseYamlScalarString(stripped, "voxel_evidence_schema", voxel_evidence_schema);
       if (parseYamlScalarDouble(stripped, "resolution_m", saved_resolution)) {
         have_resolution = true;
       }
     }
-    if (map_format != "tgw_realtime_map_v1") {
+    if (map_format != kRealtimeMapFormat) {
       message = "unsupported realtime map format in " + path.string() + ": " + map_format;
       return false;
     }
-    if (map_input_mode != "realtime_raycast") {
+    if (map_input_mode != kRealtimeMapInputMode) {
       message = "unsupported map input mode in " + path.string() + ": " + map_input_mode;
+      return false;
+    }
+    if (require_voxel_evidence_schema && voxel_evidence_schema != kVoxelEvidenceSchema) {
+      message = "unsupported voxel evidence schema in " + path.string() + ": " +
+        voxel_evidence_schema;
       return false;
     }
     if (!have_resolution) {
@@ -2046,7 +2069,7 @@ private:
     const std::filesystem::path evidence_path = input_dir / "voxel_evidence.csv";
 
     std::string message;
-    if (!validateMapMetadata(metadata_path, message)) {
+    if (!validateMapMetadata(metadata_path, std::filesystem::exists(evidence_path), message)) {
       response->success = false;
       response->message = message;
       return;

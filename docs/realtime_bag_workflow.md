@@ -302,9 +302,11 @@ view counts, timestamps, and static/dynamic classifications. `metadata.yaml`
 records the map format, input mode, frame, resolution, and key
 probabilistic/static-evidence parameters plus voxel/layer counts for offline
 package audits. `load_map` restores full voxel evidence when
-`voxel_evidence.csv` exists, falls back to reconstructing probabilistic layers
-from the PCD assets for older packages, rejects packages whose saved resolution
-does not match the running node resolution, and restores
+`voxel_evidence.csv` exists, but only if `metadata.yaml` declares the supported
+`voxel_evidence_schema` and the CSV header matches that schema. It falls back
+to reconstructing probabilistic layers from the PCD assets for older packages,
+rejects packages whose saved resolution does not match the running node
+resolution, and restores
 editable blocked region objects from `blocked_regions.yaml` plus discrete loaded
 blocked cells from `blocked_cloud.pcd`. When `voxel_evidence.csv` is present,
 the per-layer PCD files are debug/compatibility assets rather than the primary

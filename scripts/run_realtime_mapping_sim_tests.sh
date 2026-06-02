@@ -442,6 +442,10 @@ run_blocked_region_persistence_case()
   mismatch_dir="$(mktemp -d "${tmp_root}/blocked_region_mismatch_map.XXXXXX")"
   local bad_format_dir
   bad_format_dir="$(mktemp -d "${tmp_root}/blocked_region_bad_format_map.XXXXXX")"
+  local bad_schema_dir
+  bad_schema_dir="$(mktemp -d "${tmp_root}/blocked_region_bad_schema_map.XXXXXX")"
+  local bad_header_dir
+  bad_header_dir="$(mktemp -d "${tmp_root}/blocked_region_bad_header_map.XXXXXX")"
   local evidence_only_dir
   evidence_only_dir="$(mktemp -d "${tmp_root}/blocked_region_evidence_only_map.XXXXXX")"
   local add_file="${tmp_root}/blocked_region_add.out"
@@ -451,11 +455,15 @@ run_blocked_region_persistence_case()
   local evidence_only_load_file="${tmp_root}/blocked_region_evidence_only_load.out"
   local mismatch_load_file="${tmp_root}/blocked_region_mismatch_load.out"
   local bad_format_load_file="${tmp_root}/blocked_region_bad_format_load.out"
+  local bad_schema_load_file="${tmp_root}/blocked_region_bad_schema_load.out"
+  local bad_header_load_file="${tmp_root}/blocked_region_bad_header_load.out"
   local remove_file="${tmp_root}/blocked_region_remove.out"
   tmp_paths+=(
-    "${output_dir}" "${mismatch_dir}" "${bad_format_dir}" "${evidence_only_dir}"
+    "${output_dir}" "${mismatch_dir}" "${bad_format_dir}" "${bad_schema_dir}" "${bad_header_dir}"
+    "${evidence_only_dir}"
     "${add_file}" "${save_file}" "${clear_file}" "${load_file}"
     "${evidence_only_load_file}" "${mismatch_load_file}" "${bad_format_load_file}"
+    "${bad_schema_load_file}" "${bad_header_load_file}"
     "${remove_file}")
 
   setsid ros2 launch tgw_planner realtime_mapping.launch.py \
@@ -558,6 +566,32 @@ path = pathlib.Path(sys.argv[1])
 text = path.read_text()
 path.write_text(text.replace("map_format: tgw_realtime_map_v1", "map_format: wrong_format", 1))
 PY
+  cp -a "${output_dir}/." "${bad_schema_dir}/"
+  python3 - "${bad_schema_dir}/metadata.yaml" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+path.write_text(
+    text.replace(
+        "voxel_evidence_schema: tgw_voxel_evidence_csv_v1",
+        "voxel_evidence_schema: wrong_schema",
+        1,
+    )
+)
+PY
+  cp -a "${output_dir}/." "${bad_header_dir}/"
+  python3 - "${bad_header_dir}/voxel_evidence.csv" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+lines = path.read_text().splitlines()
+if lines:
+    lines[0] = "x,y,z,wrong_schema"
+path.write_text("\n".join(lines) + "\n")
+PY
   ros2 service call /tgw_mapping/clear std_srvs/srv/Trigger "{}" >"${clear_file}" 2>&1
   ros2 service call /tgw_mapping/load_map tgw_planner/srv/LoadMap \
     "{input_dir: ${output_dir}}" >"${load_file}" 2>&1
@@ -567,11 +601,15 @@ PY
     "{input_dir: ${mismatch_dir}}" >"${mismatch_load_file}" 2>&1
   ros2 service call /tgw_mapping/load_map tgw_planner/srv/LoadMap \
     "{input_dir: ${bad_format_dir}}" >"${bad_format_load_file}" 2>&1
+  ros2 service call /tgw_mapping/load_map tgw_planner/srv/LoadMap \
+    "{input_dir: ${bad_schema_dir}}" >"${bad_schema_load_file}" 2>&1
+  ros2 service call /tgw_mapping/load_map tgw_planner/srv/LoadMap \
+    "{input_dir: ${bad_header_dir}}" >"${bad_header_load_file}" 2>&1
   ros2 service call /tgw_map/set_blocked_region tgw_planner/srv/SetBlockedRegion \
     "{operation: remove, min: {x: 0.0, y: 0.0, z: 0.0}, max: {x: 1.0, y: 1.0, z: 1.0}, reason: regression}" \
     >"${remove_file}" 2>&1
 
-  local save_success load_success evidence_only_success loaded_evidence evidence_only_loaded_evidence evidence_only_voxel_count mismatch_failed bad_format_failed removed_region
+  local save_success load_success evidence_only_success loaded_evidence evidence_only_loaded_evidence evidence_only_voxel_count mismatch_failed bad_format_failed bad_schema_failed bad_header_failed removed_region
   save_success="$(grep -o "success=True\\|success=False" "${save_file}" | tail -n 1 || true)"
   load_success="$(grep -o "success=True\\|success=False" "${load_file}" | tail -n 1 || true)"
   evidence_only_success="$(grep -o "success=True\\|success=False" "${evidence_only_load_file}" | tail -n 1 || true)"
@@ -580,8 +618,10 @@ PY
   evidence_only_voxel_count="$(grep -o "voxel_count=[0-9]*" "${evidence_only_load_file}" | tail -n 1 | cut -d= -f2 || true)"
   mismatch_failed="$(grep -o "map resolution mismatch" "${mismatch_load_file}" | tail -n 1 || true)"
   bad_format_failed="$(grep -o "unsupported realtime map format" "${bad_format_load_file}" | tail -n 1 || true)"
+  bad_schema_failed="$(grep -o "unsupported voxel evidence schema" "${bad_schema_load_file}" | tail -n 1 || true)"
+  bad_header_failed="$(grep -o "unsupported voxel evidence csv header" "${bad_header_load_file}" | tail -n 1 || true)"
   removed_region="$(grep -o "removed 1 realtime blocked regions" "${remove_file}" | tail -n 1 || true)"
-  echo "blocked_region_persistence: ${save_success:-save=unknown} ${load_success:-load=unknown} loaded_evidence=${loaded_evidence:+true} evidence_only_load=${evidence_only_success:-unknown} evidence_only_loaded_evidence=${evidence_only_loaded_evidence:+true} evidence_only_voxel_count=${evidence_only_voxel_count:-unknown} metadata_mismatch_rejected=${mismatch_failed:+true} bad_format_rejected=${bad_format_failed:+true} removed_region=${removed_region:+true}"
+  echo "blocked_region_persistence: ${save_success:-save=unknown} ${load_success:-load=unknown} loaded_evidence=${loaded_evidence:+true} evidence_only_load=${evidence_only_success:-unknown} evidence_only_loaded_evidence=${evidence_only_loaded_evidence:+true} evidence_only_voxel_count=${evidence_only_voxel_count:-unknown} metadata_mismatch_rejected=${mismatch_failed:+true} bad_format_rejected=${bad_format_failed:+true} bad_schema_rejected=${bad_schema_failed:+true} bad_header_rejected=${bad_header_failed:+true} removed_region=${removed_region:+true}"
   if [[ "${save_success}" != "success=True" || "${load_success}" != "success=True" ]]; then
     echo "FAIL blocked_region_persistence: save/load failed"
     cat "${save_file}" "${load_file}"
@@ -610,6 +650,16 @@ PY
   if [[ -z "${bad_format_failed}" ]]; then
     echo "FAIL blocked_region_persistence: unsupported metadata format was not rejected"
     cat "${bad_format_load_file}"
+    return 1
+  fi
+  if [[ -z "${bad_schema_failed}" ]]; then
+    echo "FAIL blocked_region_persistence: unsupported voxel evidence schema was not rejected"
+    cat "${bad_schema_load_file}"
+    return 1
+  fi
+  if [[ -z "${bad_header_failed}" ]]; then
+    echo "FAIL blocked_region_persistence: unsupported voxel evidence csv header was not rejected"
+    cat "${bad_header_load_file}"
     return 1
   fi
   if [[ -z "${removed_region}" ]]; then
