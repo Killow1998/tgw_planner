@@ -450,6 +450,28 @@ int main()
   CHECK(!height_jump_validation.valid);
   CHECK(height_jump_validation.failure_reason == "final path height jump exceeds maximum step");
 
+  NavigationSnapshot diagonal_corner_snapshot;
+  diagonal_corner_snapshot.resolution_m = options.resolution_m;
+  diagonal_corner_snapshot.surface.traversable_cells.insert({0, 0, 0});
+  diagonal_corner_snapshot.surface.traversable_cells.insert({1, 1, 0});
+  PathValidationOptions diagonal_corner_validation_options;
+  diagonal_corner_validation_options.require_footprint_support = false;
+  PathValidator diagonal_corner_validator(footprint, diagonal_corner_validation_options);
+  const auto diagonal_corner_validation = diagonal_corner_validator.validate(
+    diagonal_corner_snapshot, {{0.05, 0.05, 0.05}, {0.15, 0.15, 0.05}});
+  CHECK(!diagonal_corner_validation.valid);
+  CHECK(
+    diagonal_corner_validation.failure_reason ==
+    "final path diagonal corner transition is not supported");
+
+  SurfacePlannerOptions diagonal_corner_planner_options;
+  diagonal_corner_planner_options.require_footprint_support = false;
+  diagonal_corner_planner_options.enable_shortcut = false;
+  SurfaceAstarPlanner diagonal_corner_planner(diagonal_corner_planner_options);
+  const auto diagonal_corner_plan =
+    diagonal_corner_planner.plan(diagonal_corner_snapshot, {0, 0, 0}, {1, 1, 0});
+  CHECK(!diagonal_corner_plan.success);
+
   NavigationSnapshot detour_snapshot;
   detour_snapshot.resolution_m = options.resolution_m;
   for (int x = 0; x <= 4; ++x) {

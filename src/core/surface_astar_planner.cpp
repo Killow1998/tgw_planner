@@ -274,6 +274,9 @@ bool SurfaceAstarPlanner::isTransitionAllowed(
   if (!isCellTraversable(snapshot, to)) {
     return false;
   }
+  if (!isDiagonalCornerSupported(snapshot, from, to)) {
+    return false;
+  }
 
   const Point3 from_point = cellCenter(from, snapshot.resolution_m);
   const Point3 to_point = cellCenter(to, snapshot.resolution_m);
@@ -313,6 +316,29 @@ bool SurfaceAstarPlanner::isDirectSurfaceNeighbor(
   const int max_step_cells =
     std::max(1, static_cast<int>(std::ceil(options_.max_step_height_m / snapshot.resolution_m)));
   return dx <= 1 && dy <= 1 && dz <= max_step_cells;
+}
+
+bool SurfaceAstarPlanner::isDiagonalCornerSupported(
+  const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const
+{
+  if (std::abs(to.x - from.x) != 1 || std::abs(to.y - from.y) != 1) {
+    return true;
+  }
+  const int min_z = std::min(from.z, to.z);
+  const int max_z = std::max(from.z, to.z);
+  return hasTraversableCellAtXY(snapshot, to.x, from.y, min_z, max_z) &&
+         hasTraversableCellAtXY(snapshot, from.x, to.y, min_z, max_z);
+}
+
+bool SurfaceAstarPlanner::hasTraversableCellAtXY(
+  const NavigationSnapshot & snapshot, int x, int y, int min_z, int max_z) const
+{
+  for (int z = min_z; z <= max_z; ++z) {
+    if (isCellTraversable(snapshot, {x, y, z})) {
+      return true;
+    }
+  }
+  return false;
 }
 
 double SurfaceAstarPlanner::unknownPenalty(

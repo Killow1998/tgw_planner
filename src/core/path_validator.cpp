@@ -138,7 +138,42 @@ bool PathValidator::validateCellTransition(
     report.failure_reason = "final path skips intermediate surface cells";
     return false;
   }
+  if (!isDiagonalCornerSupported(snapshot, from, to)) {
+    report.failure_reason = "final path diagonal corner transition is not supported";
+    return false;
+  }
   return true;
+}
+
+bool PathValidator::isCellTraversable(
+  const NavigationSnapshot & snapshot, const GridIndex & cell) const
+{
+  return snapshot.surface.traversable_cells.find(cell) != snapshot.surface.traversable_cells.end() &&
+         snapshot.surface.forbidden_cells.find(cell) == snapshot.surface.forbidden_cells.end() &&
+         snapshot.surface.blocked_cells.find(cell) == snapshot.surface.blocked_cells.end();
+}
+
+bool PathValidator::isDiagonalCornerSupported(
+  const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const
+{
+  if (std::abs(to.x - from.x) != 1 || std::abs(to.y - from.y) != 1) {
+    return true;
+  }
+  const int min_z = std::min(from.z, to.z);
+  const int max_z = std::max(from.z, to.z);
+  return hasTraversableCellAtXY(snapshot, to.x, from.y, min_z, max_z) &&
+         hasTraversableCellAtXY(snapshot, from.x, to.y, min_z, max_z);
+}
+
+bool PathValidator::hasTraversableCellAtXY(
+  const NavigationSnapshot & snapshot, int x, int y, int min_z, int max_z) const
+{
+  for (int z = min_z; z <= max_z; ++z) {
+    if (isCellTraversable(snapshot, {x, y, z})) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool PathValidator::validateSample(

@@ -41,6 +41,11 @@ private:
   GridIndex worldToGrid(const Point3 & point, double resolution_m) const;
   bool isDirectSurfaceNeighbor(
     const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
+  bool isCellTraversable(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
+  bool isDiagonalCornerSupported(
+    const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
+  bool hasTraversableCellAtXY(
+    const NavigationSnapshot & snapshot, int x, int y, int min_z, int max_z) const;
   bool validateCellTransition(
     const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to,
     PathValidationReport & report) const;
