@@ -74,6 +74,10 @@ elif scene == "spiral":
 elif scene == "negative_gap":
     add_surface_rect(-10, -3, -3, 3, 1)
     add_surface_rect(4, 10, -3, 3, 1)
+elif scene == "negative_railing_bridge":
+    add_surface_rect(-10, -4, -4, 4, 1)
+    add_surface_rect(4, 10, -4, 4, 1)
+    add_surface_rect(-3, 3, 0, 0, 1)
 else:
     raise SystemExit(f"unknown scene: {scene}")
 
@@ -109,11 +113,12 @@ run_success_case()
   local name="$1"
   local start="$2"
   local goal="$3"
+  local require_footprint="${4:-0}"
   local pcd="${tmp_root}/${name}.pcd"
   write_pcd "${name}" "${pcd}"
   local output
   set +e
-  output="$(ros2 run tgw_planner tgw_surface_pcd_smoke "${pcd}" 0.20 ${start} ${goal} 0 2>&1)"
+  output="$(ros2 run tgw_planner tgw_surface_pcd_smoke "${pcd}" 0.20 ${start} ${goal} "${require_footprint}" 2>&1)"
   local rc=$?
   set -e
   echo "${name}: ${output}"
@@ -136,11 +141,12 @@ run_failure_case()
   local name="$1"
   local start="$2"
   local goal="$3"
+  local require_footprint="${4:-0}"
   local pcd="${tmp_root}/${name}.pcd"
   write_pcd "${name}" "${pcd}"
   set +e
   local output
-  output="$(ros2 run tgw_planner tgw_surface_pcd_smoke "${pcd}" 0.20 ${start} ${goal} 0 2>&1)"
+  output="$(ros2 run tgw_planner tgw_surface_pcd_smoke "${pcd}" 0.20 ${start} ${goal} "${require_footprint}" 2>&1)"
   local rc=$?
   set -e
   echo "${name}: ${output}"
@@ -154,5 +160,6 @@ run_success_case "straight" "-1.0 0.0 0.0" "5.0 0.0 1.8"
 run_success_case "switchback" "-1.0 0.0 0.0" "3.8 5.2 2.8"
 run_success_case "spiral" "-2.0 0.0 0.0" "0.8 2.0 2.0"
 run_failure_case "negative_gap" "-1.5 0.0 0.0" "1.5 0.0 0.0"
+run_failure_case "negative_railing_bridge" "-1.5 0.0 0.0" "1.5 0.0 0.0" 1
 
 echo "synthetic_surface_scene_tests passed"
