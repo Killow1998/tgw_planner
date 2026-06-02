@@ -87,6 +87,12 @@ for `/tgw_realtime_mapping_node`, `/tgw_mapping/get_snapshot`, and
 `/tgw_map/plan_path`, plays the bag, selects two points from the largest
 traversable surface component, and calls `/tgw_map/plan_path`. On failure it
 prints tails from the FAST-LIO, n3mapping, tgw, bag, probe, and snapshot logs.
+After the planner probe runs, it writes
+`${TGW_BAG_PROBE_LOG_DIR}/summary.json` with launch options, snapshot counts,
+candidate-pair counts, and the final plan metrics for archival validation.
+To regenerate that artifact from an existing log directory without launching
+ROS, use `TGW_BAG_PROBE_WRITE_SUMMARY_ONLY=1` and point
+`TGW_BAG_PROBE_LOG_DIR` at the directory.
 Use `TGW_BAG_PLAY_SECONDS=5` for a startup/diagnostic smoke only; it is not a
 full map quality validation.
 

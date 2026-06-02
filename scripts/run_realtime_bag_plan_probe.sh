@@ -38,35 +38,33 @@ validation_require_footprint="${TGW_VALIDATION_REQUIRE_FOOTPRINT:-false}"
 probe_cloud_topic="${TGW_PROBE_CLOUD_TOPIC:-/tgw_map/traversable_cloud}"
 mkdir -p "${log_dir}"
 mkdir -p "${ROS_LOG_DIR}"
-rm -f \
-  "${log_dir}/domain.log" \
-  "${log_dir}/launch_options.log" \
-  "${log_dir}/fast_lio.log" \
-  "${log_dir}/n3mapping.log" \
-  "${log_dir}/tgw.log" \
-  "${log_dir}/bag.log" \
-  "${log_dir}/probe.out" \
-  "${log_dir}/snapshot.out"
-echo "ROS_DOMAIN_ID=${ROS_DOMAIN_ID}" >"${log_dir}/domain.log"
-{
-  echo "TGW_SURFACE_REQUIRE_OBSERVED_FREE_SPACE=${surface_require_observed_free_space}"
-  echo "TGW_SURFACE_ALLOW_OBSERVED_FREE_BRIDGE=${surface_allow_observed_free_bridge}"
-  echo "TGW_SURFACE_REQUIRE_STATIC_SUPPORT=${surface_require_static_support}"
-  echo "TGW_ENABLE_DYNAMIC_FILTER=${enable_dynamic_filter}"
-  echo "TGW_MIN_STATIC_HITS=${min_static_hits}"
-  echo "TGW_MIN_DISTINCT_VIEWS=${min_distinct_views}"
-  echo "TGW_MIN_STATIC_LIFETIME_SEC=${min_static_lifetime_sec}"
-  echo "TGW_PLANNER_ENABLE_SHORTCUT=${planner_enable_shortcut}"
-  echo "TGW_PLANNER_MAX_SNAP_DISTANCE_M=${planner_max_snap_distance_m}"
-  echo "TGW_PLANNER_REQUIRE_FOOTPRINT=${planner_require_footprint}"
-  echo "TGW_VALIDATION_REQUIRE_FOOTPRINT=${validation_require_footprint}"
-  echo "TGW_PROBE_CLOUD_TOPIC=${probe_cloud_topic}"
-  echo "ROS_LOG_DIR=${ROS_LOG_DIR}"
-} >"${log_dir}/launch_options.log"
-
-if [[ ! -e "${bag_path}" ]]; then
-  echo "FAIL realtime_bag_plan_probe: bag path does not exist: ${bag_path}"
-  exit 1
+if [[ "${TGW_BAG_PROBE_WRITE_SUMMARY_ONLY:-0}" != "1" ]]; then
+  rm -f \
+    "${log_dir}/domain.log" \
+    "${log_dir}/launch_options.log" \
+    "${log_dir}/fast_lio.log" \
+    "${log_dir}/n3mapping.log" \
+    "${log_dir}/tgw.log" \
+    "${log_dir}/bag.log" \
+    "${log_dir}/probe.out" \
+    "${log_dir}/snapshot.out" \
+    "${log_dir}/summary.json"
+  echo "ROS_DOMAIN_ID=${ROS_DOMAIN_ID}" >"${log_dir}/domain.log"
+  {
+    echo "TGW_SURFACE_REQUIRE_OBSERVED_FREE_SPACE=${surface_require_observed_free_space}"
+    echo "TGW_SURFACE_ALLOW_OBSERVED_FREE_BRIDGE=${surface_allow_observed_free_bridge}"
+    echo "TGW_SURFACE_REQUIRE_STATIC_SUPPORT=${surface_require_static_support}"
+    echo "TGW_ENABLE_DYNAMIC_FILTER=${enable_dynamic_filter}"
+    echo "TGW_MIN_STATIC_HITS=${min_static_hits}"
+    echo "TGW_MIN_DISTINCT_VIEWS=${min_distinct_views}"
+    echo "TGW_MIN_STATIC_LIFETIME_SEC=${min_static_lifetime_sec}"
+    echo "TGW_PLANNER_ENABLE_SHORTCUT=${planner_enable_shortcut}"
+    echo "TGW_PLANNER_MAX_SNAP_DISTANCE_M=${planner_max_snap_distance_m}"
+    echo "TGW_PLANNER_REQUIRE_FOOTPRINT=${planner_require_footprint}"
+    echo "TGW_VALIDATION_REQUIRE_FOOTPRINT=${validation_require_footprint}"
+    echo "TGW_PROBE_CLOUD_TOPIC=${probe_cloud_topic}"
+    echo "ROS_LOG_DIR=${ROS_LOG_DIR}"
+  } >"${log_dir}/launch_options.log"
 fi
 
 pids=""
@@ -104,6 +102,135 @@ report_socket_permission_if_present()
     echo "Run this probe in a host ROS environment with network socket permissions enabled."
   fi
 }
+
+write_summary_json()
+{
+  local probe_rc="$1"
+  python3 - "${log_dir}" "${bag_path}" "${play_seconds}" "${probe_rc}" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+log_dir = pathlib.Path(sys.argv[1])
+bag_path = sys.argv[2]
+play_seconds = float(sys.argv[3])
+probe_rc = int(sys.argv[4])
+
+
+def read(name):
+    path = log_dir / name
+    return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+
+
+def last_int(text, key):
+    matches = re.findall(rf"\b{re.escape(key)}=([0-9]+)\b", text)
+    return int(matches[-1]) if matches else None
+
+
+def last_float(text, key):
+    matches = re.findall(rf"\b{re.escape(key)}=([-+]?[0-9]*\.?[0-9]+)\b", text)
+    return float(matches[-1]) if matches else None
+
+
+def last_bool(text, key):
+    matches = re.findall(rf"\b{re.escape(key)}=(True|False|true|false)\b", text)
+    if not matches:
+        return None
+    return matches[-1].lower() == "true"
+
+
+def last_text(text, key):
+    matches = re.findall(rf"\b{re.escape(key)}=\"([^\"]*)\"", text)
+    return matches[-1] if matches else None
+
+
+snapshot = read("snapshot.out")
+probe = read("probe.out")
+launch_options = {}
+for line in read("launch_options.log").splitlines():
+    if "=" in line:
+        key, value = line.split("=", 1)
+        launch_options[key] = value
+
+attempt_blocks = re.findall(
+    r"attempt=([0-9]+) success=(True|False) message=\"([^\"]*)\" ([^\n]*)",
+    probe,
+)
+final_attempt = attempt_blocks[-1] if attempt_blocks else None
+plan = {}
+if final_attempt:
+    attempt_index, success_text, message, metrics = final_attempt
+    plan = {
+        "attempt": int(attempt_index),
+        "success": success_text == "True",
+        "message": message,
+        "final_path_validated": last_bool(metrics, "final_path_validated"),
+        "final_path_fallback_to_raw": last_bool(metrics, "final_path_fallback_to_raw"),
+        "final_path_validation_failure": last_text(metrics, "final_path_validation_failure"),
+        "expanded_nodes": last_int(metrics, "expanded_nodes"),
+        "generated_nodes": last_int(metrics, "generated_nodes"),
+        "raw_path_waypoints": last_int(metrics, "raw_path_waypoints"),
+        "raw_path_length_m": last_float(metrics, "raw_path_length_m"),
+        "shortcut_count": last_int(metrics, "shortcut_count"),
+        "path_waypoints": last_int(metrics, "path_waypoints"),
+        "path_length_m": last_float(metrics, "path_length_m"),
+        "start_snap_distance_m": last_float(metrics, "start_snap_distance_m"),
+        "goal_snap_distance_m": last_float(metrics, "goal_snap_distance_m"),
+        "min_path_clearance_m": last_float(metrics, "min_path_clearance_m"),
+        "mean_path_clearance_m": last_float(metrics, "mean_path_clearance_m"),
+        "low_clearance_samples": last_int(metrics, "low_clearance_samples"),
+        "clearance_cost_sum": last_float(metrics, "clearance_cost_sum"),
+        "unknown_cost_sum": last_float(metrics, "unknown_cost_sum"),
+        "risk_cost_sum": last_float(metrics, "risk_cost_sum"),
+        "max_path_risk": last_float(metrics, "max_path_risk"),
+    }
+
+failure_reason = None
+failure_matches = re.findall(r"success=False reason=([A-Za-z0-9_]+)", probe)
+if failure_matches:
+    failure_reason = failure_matches[-1]
+
+summary = {
+    "success": probe_rc == 0,
+    "failure_reason": None if probe_rc == 0 else failure_reason,
+    "probe_rc": probe_rc,
+    "bag_path": bag_path,
+    "play_seconds": play_seconds,
+    "log_dir": str(log_dir),
+    "launch_options": launch_options,
+    "snapshot": {
+        "received_clouds": last_int(snapshot, "received_clouds"),
+        "integrated_clouds": last_int(snapshot, "integrated_clouds"),
+        "surface_points": last_int(snapshot, "surface_points"),
+        "traversable_points": last_int(snapshot, "traversable_points"),
+        "dynamic_points": last_int(snapshot, "dynamic_points"),
+    },
+    "probe": {
+        "cloud_points": last_int(probe, "probe_cloud_points"),
+        "surface_component_count": last_int(probe, "surface_component_count"),
+        "largest_component_size": last_int(probe, "largest_component_size"),
+        "candidate_pairs": last_int(probe, "candidate_pairs"),
+        "top_components_with_required_z_span": last_int(
+            probe, "top_components_with_required_z_span"),
+    },
+    "plan": plan,
+}
+(log_dir / "summary.json").write_text(
+    json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+if [[ "${TGW_BAG_PROBE_WRITE_SUMMARY_ONLY:-0}" == "1" ]]; then
+  write_summary_json "${TGW_BAG_PROBE_PROBE_RC:-0}"
+  echo "summary_json=${log_dir}/summary.json"
+  exit 0
+fi
+
+if [[ ! -e "${bag_path}" ]]; then
+  echo "FAIL realtime_bag_plan_probe: bag path does not exist: ${bag_path}"
+  exit 1
+fi
 
 wait_for_node()
 {
@@ -398,9 +525,12 @@ sys.exit(main())
 PY
 probe_rc=$?
 set -e
+write_summary_json "${probe_rc}" || true
 cat "${log_dir}/probe.out"
 if [[ ${probe_rc} -ne 0 ]]; then
   echo "FAIL realtime_bag_plan_probe: planner probe failed with rc=${probe_rc}"
+  echo "summary_json=${log_dir}/summary.json"
   tail_logs
   exit "${probe_rc}"
 fi
+echo "summary_json=${log_dir}/summary.json"
