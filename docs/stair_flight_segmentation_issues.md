@@ -164,6 +164,39 @@ For dirty real-world maps:
 - Reject ceiling and human-shadow artifacts using clearance, support, endpoint, and graph consistency.
 - Avoid requiring per-map manual retuning of min height, min length, or width thresholds.
 
+## Surface Refactor Probe
+
+The realtime/surface refactor added `tgw_surface_pcd_smoke` to test clean PCDs
+through `ProbabilisticVoxelMap -> SurfaceExtractor -> Clearance/Risk ->
+SurfaceAstarPlanner`, bypassing the old StairFlight path.
+
+Current reference results:
+
+```text
+surface_pct_building:
+  success=true
+  start_surface_component=0
+  goal_surface_component=0
+  largest_surface_component_size=82845
+  final_path_validated=true
+
+surface_pct_spiral:
+  success=false
+  reason="surface A* failed to find a path"
+  start_surface_component=5
+  goal_surface_component=15
+  start_surface_component_size=20144
+  goal_surface_component_size=16650
+  surface_component_count=811
+```
+
+This means the PCT spiral failure is currently a surface connectivity problem:
+the chosen start and goal snap to different traversable surface components. It
+should not be treated as only a stair centerline smoothing issue. The next useful
+work is to identify whether the PCD has real gaps, whether surface extraction is
+over-splitting curved/spiral steps, or whether a conservative bridge/recovery
+rule can prove safe connectivity without map-specific threshold tuning.
+
 ## Useful Debug Signals To Keep
 
 The following logs are useful and should remain available during development:
@@ -186,4 +219,3 @@ The following RViz layers are also useful:
 - stair centerline markers
 - stair portal markers
 - stair safe corridor markers
-
