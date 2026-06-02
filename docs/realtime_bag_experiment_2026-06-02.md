@@ -407,3 +407,86 @@ Interpretation:
 - The path is valid but has nearby boundary/obstacle proximity. This confirms
   that future deployment gates should evaluate corridor quality explicitly
   rather than treating `success=True` alone as sufficient.
+
+## Footprint Probe Diagnostics 2026-06-03
+
+The real-bag probe now supports:
+
+```text
+TGW_PLANNER_REQUIRE_FOOTPRINT
+TGW_VALIDATION_REQUIRE_FOOTPRINT
+TGW_PROBE_CLOUD_TOPIC
+TGW_PROBE_COMPONENT_POOL
+TGW_PROBE_MAX_PLAN_ATTEMPTS
+```
+
+This lets the probe distinguish two cases:
+
+1. general realtime surface connectivity, using `/tgw_map/traversable_cloud`;
+2. footprint-feasible planning, using safer candidate points from
+   `/tgw_map/medial_axis_cloud`.
+
+Default no-footprint probe still passes after the multi-candidate change:
+
+```text
+probe_cloud_topic=/tgw_map/traversable_cloud
+component_pool=largest
+candidate_pairs=91855
+attempt=1
+start=(4.25, -2.6500000954, 2.3499999046)
+goal=(4.25, -4.1500000954, 2.3499999046)
+dxy=1.500
+success=True
+final_path_validated=True
+path_waypoints=6
+path_length_m=1.728
+min_path_clearance_m=0.100
+mean_path_clearance_m=0.393
+low_clearance_samples=3
+```
+
+Footprint-on using arbitrary traversable points fails immediately when the
+chosen endpoint is too close to unsupported surface:
+
+```text
+TGW_PLANNER_REQUIRE_FOOTPRINT=true
+TGW_VALIDATION_REQUIRE_FOOTPRINT=true
+TGW_PROBE_CLOUD_TOPIC=/tgw_map/traversable_cloud
+success=False
+message="start footprint is not fully supported"
+```
+
+Using medial-axis candidates and trying multiple valid-distance pairs produces
+a footprint-validated path:
+
+```text
+TGW_PLANNER_REQUIRE_FOOTPRINT=true
+TGW_VALIDATION_REQUIRE_FOOTPRINT=true
+TGW_PROBE_CLOUD_TOPIC=/tgw_map/medial_axis_cloud
+TGW_PROBE_COMPONENT_POOL=all
+TGW_PROBE_MAX_PLAN_ATTEMPTS=12
+probe_cloud_points=219
+candidate_pairs=1685
+attempt=4
+start=(-7.9499998093, -1.25, 2.3499999046)
+goal=(-6.4499998093, -1.25, 2.3499999046)
+dxy=1.500
+success=True
+final_path_validated=True
+path_waypoints=5
+path_length_m=1.578
+min_path_clearance_m=0.241
+mean_path_clearance_m=0.354
+low_clearance_samples=4
+```
+
+Interpretation:
+
+- The realtime surface planner can produce a footprint-validated path on the
+  real bag when start/goal are selected from medial-axis-like safe candidates.
+- Arbitrary traversable surface cells are not equivalent to robot-pose
+  candidates; footprint-aware start/goal snapping or medial-axis candidate
+  selection is needed before deployment.
+- Even footprint-validated paths can have low-clearance samples, so corridor
+  quality should remain an explicit metric and not just a boolean validity
+  check.
