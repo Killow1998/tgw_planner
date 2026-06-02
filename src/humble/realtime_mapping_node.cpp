@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/point.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include <pcl/io/pcd_io.h>
@@ -27,6 +28,7 @@
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
+#include "visualization_msgs/msg/marker.hpp"
 
 #include "tgw_planner/core/clearance_field.hpp"
 #include "tgw_planner/core/map_snapshot.hpp"
@@ -179,6 +181,12 @@ public:
     blocked_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/blocked_cloud", latched_qos);
     forbidden_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/forbidden_cloud", latched_qos);
     planned_path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_map/planned_path", latched_qos);
+    planned_path_marker_pub_ =
+      create_publisher<visualization_msgs::msg::Marker>("/planned_path_marker", latched_qos);
+    start_marker_pub_ =
+      create_publisher<visualization_msgs::msg::Marker>("/start_marker", latched_qos);
+    goal_marker_pub_ =
+      create_publisher<visualization_msgs::msg::Marker>("/goal_marker", latched_qos);
     mapping_stats_pub_ = create_publisher<tgw_planner::msg::MappingStats>(
       "/tgw_mapping/stats", latched_qos);
     stats_json_pub_ = create_publisher<std_msgs::msg::String>("/tgw_map/stats_json", latched_qos);
@@ -915,6 +923,61 @@ private:
     return msg;
   }
 
+  void publishPathMarker(const std::vector<Point3> & path)
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = map_frame_;
+    marker.header.stamp = now();
+    marker.ns = "tgw_realtime_path";
+    marker.id = 0;
+    marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.pose.orientation.w = 1.0;
+    marker.scale.x = 0.16;
+    marker.color.r = 1.0F;
+    marker.color.g = 0.55F;
+    marker.color.b = 0.0F;
+    marker.color.a = 1.0F;
+    marker.points.reserve(path.size());
+    for (const Point3 & point : path) {
+      geometry_msgs::msg::Point ros_point;
+      ros_point.x = point.x;
+      ros_point.y = point.y;
+      ros_point.z = point.z;
+      marker.points.push_back(ros_point);
+    }
+    if (marker.points.size() < 2U) {
+      marker.action = visualization_msgs::msg::Marker::DELETE;
+    }
+    planned_path_marker_pub_->publish(marker);
+  }
+
+  void publishPoseMarker(
+    const Point3 & point,
+    const rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr & publisher,
+    const std::string & ns, float r, float g, float b)
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = map_frame_;
+    marker.header.stamp = now();
+    marker.ns = ns;
+    marker.id = 0;
+    marker.type = visualization_msgs::msg::Marker::SPHERE;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.pose.position.x = point.x;
+    marker.pose.position.y = point.y;
+    marker.pose.position.z = point.z;
+    marker.pose.orientation.w = 1.0;
+    marker.scale.x = 0.32;
+    marker.scale.y = 0.32;
+    marker.scale.z = 0.32;
+    marker.color.r = r;
+    marker.color.g = g;
+    marker.color.b = b;
+    marker.color.a = 1.0F;
+    publisher->publish(marker);
+  }
+
   double verticalGain(const std::vector<Point3> & path) const
   {
     double gain = 0.0;
@@ -969,6 +1032,7 @@ private:
       response->message = "failed to snap start to realtime traversable surface";
       response->stats.success = false;
       response->stats.failure_reason = response->message;
+      publishPathMarker({});
       return;
     }
     if (!snapToTraversable(snapshot, goal_point, goal, response->stats.goal_snap_distance_m)) {
@@ -976,8 +1040,11 @@ private:
       response->message = "failed to snap goal to realtime traversable surface";
       response->stats.success = false;
       response->stats.failure_reason = response->message;
+      publishPathMarker({});
       return;
     }
+    publishPoseMarker(map_.gridToWorld(start), start_marker_pub_, "tgw_realtime_start", 0.0F, 0.95F, 1.0F);
+    publishPoseMarker(map_.gridToWorld(goal), goal_marker_pub_, "tgw_realtime_goal", 1.0F, 0.32F, 0.0F);
 
     const auto search_started = std::chrono::steady_clock::now();
     const SurfaceAstarPlanner planner(planner_options_);
@@ -1008,6 +1075,7 @@ private:
 
     if (!result.success) {
       response->path = makePathMessage(result.path);
+      publishPathMarker({});
       return;
     }
 
@@ -1042,6 +1110,7 @@ private:
           response->stats.clearance_cost_sum = clearanceCostSum(snapshot, result.raw_cells);
           response->stats.low_clearance_samples = raw_validation.low_clearance_samples;
           planned_path_pub_->publish(response->path);
+          publishPathMarker(result.raw_path);
           return;
         }
       }
@@ -1050,11 +1119,13 @@ private:
       response->stats.success = false;
       response->stats.failure_reason = response->message;
       response->path = makePathMessage(result.path);
+      publishPathMarker({});
       return;
     }
 
     response->path = makePathMessage(result.path);
     planned_path_pub_->publish(response->path);
+    publishPathMarker(result.path);
   }
 
   std::string buildStatsJson(
@@ -1478,6 +1549,9 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr blocked_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr forbidden_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr planned_path_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr planned_path_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_marker_pub_;
   rclcpp::Publisher<tgw_planner::msg::MappingStats>::SharedPtr mapping_stats_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr stats_json_pub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;

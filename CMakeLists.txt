@@ -125,6 +125,7 @@ ament_target_dependencies(tgw_realtime_mapping_node
   std_srvs
   tf2
   tf2_ros
+  visualization_msgs
 )
 
 add_executable(tgw_surface_pcd_smoke

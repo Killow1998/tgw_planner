@@ -67,6 +67,9 @@ Realtime debug topics:
 - `/tgw_map/blocked_cloud`
 - `/tgw_map/forbidden_cloud`
 - `/tgw_map/planned_path`
+- `/planned_path_marker`
+- `/start_marker`
+- `/goal_marker`
 - `/tgw_mapping/stats`
 - `/tgw_map/stats_json`
 
