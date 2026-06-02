@@ -11,6 +11,7 @@ def generate_launch_description():
     sensor_frame = LaunchConfiguration("sensor_frame")
     use_tf = LaunchConfiguration("use_tf")
     assume_cloud_in_map_frame = LaunchConfiguration("assume_cloud_in_map_frame")
+    start_enabled = LaunchConfiguration("start_enabled")
     resolution_m = LaunchConfiguration("resolution_m")
     max_range_m = LaunchConfiguration("max_range_m")
     min_range_m = LaunchConfiguration("min_range_m")
@@ -82,6 +83,7 @@ def generate_launch_description():
             DeclareLaunchArgument("sensor_frame", default_value=""),
             DeclareLaunchArgument("use_tf", default_value="true"),
             DeclareLaunchArgument("assume_cloud_in_map_frame", default_value="false"),
+            DeclareLaunchArgument("start_enabled", default_value="true"),
             DeclareLaunchArgument("resolution_m", default_value="0.10"),
             DeclareLaunchArgument("max_range_m", default_value="30.0"),
             DeclareLaunchArgument("min_range_m", default_value="0.30"),
@@ -157,6 +159,7 @@ def generate_launch_description():
                         "sensor_frame": sensor_frame,
                         "use_tf": use_tf,
                         "assume_cloud_in_map_frame": assume_cloud_in_map_frame,
+                        "start_enabled": start_enabled,
                         "resolution_m": resolution_m,
                         "max_range_m": max_range_m,
                         "min_range_m": min_range_m,

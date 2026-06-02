@@ -26,7 +26,7 @@ tmp_root="$(mktemp -d /tmp/tgw_realtime_sim.XXXXXX)"
 cleanup_case()
 {
   if [[ -n "${launch_pid}" ]]; then
-    kill "${launch_pid}" >/dev/null 2>&1 || true
+    kill -- "-${launch_pid}" >/dev/null 2>&1 || kill "${launch_pid}" >/dev/null 2>&1 || true
     wait "${launch_pid}" >/dev/null 2>&1 || true
     launch_pid=""
   fi
@@ -177,12 +177,62 @@ rclpy.shutdown()
 PY
 }
 
+publish_single_static_point_scene()
+{
+  python3 - <<'PY'
+import time
+
+import rclpy
+from geometry_msgs.msg import PoseStamped
+from rclpy.node import Node
+from sensor_msgs_py import point_cloud2
+from std_msgs.msg import Header
+
+
+class Publisher(Node):
+    def __init__(self):
+        super().__init__("tgw_control_sim_pub")
+        self.pose_pub = self.create_publisher(PoseStamped, "/tgw_sim/pose", 10)
+        self.cloud_pub = self.create_publisher(point_cloud2.PointCloud2, "/tgw_sim/points", 10)
+
+
+rclpy.init()
+node = Publisher()
+points = [(1.0, 0.0, 0.0)]
+for _ in range(5):
+    pose = PoseStamped()
+    pose.header.frame_id = "map"
+    pose.header.stamp = node.get_clock().now().to_msg()
+    pose.pose.orientation.w = 1.0
+    node.pose_pub.publish(pose)
+
+    header = Header()
+    header.frame_id = "sensor"
+    header.stamp = node.get_clock().now().to_msg()
+    cloud = point_cloud2.create_cloud_xyz32(header, points)
+    node.cloud_pub.publish(cloud)
+    rclpy.spin_once(node, timeout_sec=0.05)
+    time.sleep(0.12)
+
+node.destroy_node()
+rclpy.shutdown()
+PY
+}
+
+snapshot_occupied_points()
+{
+  local output_file="$1"
+  ros2 service call /tgw_mapping/get_snapshot tgw_planner/srv/GetSnapshot "{}" \
+    >"${output_file}" 2>&1
+  value_from_snapshot "${output_file}" "occupied_points"
+}
+
 run_floor_ceiling_case()
 {
   cleanup_case
   local log_file="${tmp_root}/floor_ceiling_launch.log"
   local snapshot_file="${tmp_root}/floor_ceiling_snapshot.out"
-  ros2 launch tgw_planner realtime_mapping.launch.py \
+  setsid ros2 launch tgw_planner realtime_mapping.launch.py \
     use_tf:=false \
     assume_cloud_in_map_frame:=false \
     points_topic:=/tgw_sim/points \
@@ -230,7 +280,7 @@ run_dynamic_disappears_case()
   cleanup_case
   local log_file="${tmp_root}/dynamic_disappears_launch.log"
   local snapshot_file="${tmp_root}/dynamic_disappears_snapshot.out"
-  ros2 launch tgw_planner realtime_mapping.launch.py \
+  setsid ros2 launch tgw_planner realtime_mapping.launch.py \
     use_tf:=false \
     assume_cloud_in_map_frame:=false \
     points_topic:=/tgw_sim/points \
@@ -274,6 +324,86 @@ run_dynamic_disappears_case()
   fi
 }
 
+run_mapping_control_case()
+{
+  cleanup_case
+  local log_file="${tmp_root}/mapping_control_launch.log"
+  local start_file="${tmp_root}/mapping_control_start.out"
+  local stop_file="${tmp_root}/mapping_control_stop.out"
+  local clear_file="${tmp_root}/mapping_control_clear.out"
+  local snapshot_initial_stopped="${tmp_root}/mapping_control_initial_stopped_snapshot.out"
+  local snapshot_started="${tmp_root}/mapping_control_started_snapshot.out"
+  local snapshot_final_stopped="${tmp_root}/mapping_control_final_stopped_snapshot.out"
+  tmp_paths+=(
+    "${stop_file}" "${start_file}" "${clear_file}"
+    "${snapshot_initial_stopped}" "${snapshot_started}" "${snapshot_final_stopped}")
+
+  setsid ros2 launch tgw_planner realtime_mapping.launch.py \
+    start_enabled:=false \
+    use_tf:=false \
+    assume_cloud_in_map_frame:=false \
+    points_topic:=/tgw_sim/points \
+    pose_topic:=/tgw_sim/pose \
+    publish_period_ms:=300 \
+    min_static_hits:=1 \
+    min_distinct_views:=1 \
+    min_static_lifetime_sec:=0.0 \
+    enable_dynamic_filter:=false \
+    enable_self_filter:=false \
+    max_range_m:=10.0 \
+    min_range_m:=0.01 \
+    planner_require_footprint:=false \
+    validation_require_footprint:=false >"${log_file}" 2>&1 &
+  launch_pid="$!"
+  if ! wait_for_node; then
+    echo "FAIL mapping_control: /tgw_realtime_mapping_node did not appear"
+    tail -n 120 "${log_file}" || true
+    return 1
+  fi
+  for service in /tgw_mapping/stop /tgw_mapping/start /tgw_mapping/clear /tgw_mapping/get_snapshot; do
+    if ! wait_for_service "${service}"; then
+      echo "FAIL mapping_control: ${service} did not appear"
+      tail -n 120 "${log_file}" || true
+      return 1
+    fi
+  done
+
+  publish_single_static_point_scene
+  sleep 0.5
+  local initial_stopped_occupied
+  initial_stopped_occupied="$(snapshot_occupied_points "${snapshot_initial_stopped}")"
+
+  ros2 service call /tgw_mapping/start std_srvs/srv/Trigger "{}" >"${start_file}" 2>&1
+  publish_single_static_point_scene
+  sleep 0.5
+  local started_occupied
+  started_occupied="$(snapshot_occupied_points "${snapshot_started}")"
+
+  ros2 service call /tgw_mapping/stop std_srvs/srv/Trigger "{}" >"${stop_file}" 2>&1
+  ros2 service call /tgw_mapping/clear std_srvs/srv/Trigger "{}" >"${clear_file}" 2>&1
+  publish_single_static_point_scene
+  sleep 0.5
+  local final_stopped_occupied
+  final_stopped_occupied="$(snapshot_occupied_points "${snapshot_final_stopped}")"
+
+  echo "mapping_control: initial_stopped_occupied=${initial_stopped_occupied:-unknown} started_occupied=${started_occupied:-unknown} final_stopped_occupied=${final_stopped_occupied:-unknown}"
+  if (( ${initial_stopped_occupied:-999999} != 0 )); then
+    echo "FAIL mapping_control: start_enabled=false did not prevent integration"
+    cat "${snapshot_initial_stopped}"
+    return 1
+  fi
+  if (( ${started_occupied:-0} == 0 )); then
+    echo "FAIL mapping_control: start did not resume integration"
+    cat "${start_file}" "${snapshot_started}"
+    return 1
+  fi
+  if (( ${final_stopped_occupied:-999999} != 0 )); then
+    echo "FAIL mapping_control: stop+clear did not prevent fresh integration"
+    cat "${stop_file}" "${clear_file}" "${snapshot_final_stopped}"
+    return 1
+  fi
+}
+
 run_blocked_region_persistence_case()
 {
   cleanup_case
@@ -287,7 +417,7 @@ run_blocked_region_persistence_case()
   local remove_file="${tmp_root}/blocked_region_remove.out"
   tmp_paths+=("${output_dir}" "${add_file}" "${save_file}" "${clear_file}" "${load_file}" "${remove_file}")
 
-  ros2 launch tgw_planner realtime_mapping.launch.py \
+  setsid ros2 launch tgw_planner realtime_mapping.launch.py \
     publish_period_ms:=300 \
     planner_require_footprint:=false \
     validation_require_footprint:=false >"${log_file}" 2>&1 &
@@ -339,4 +469,5 @@ run_blocked_region_persistence_case()
 
 run_floor_ceiling_case
 run_dynamic_disappears_case
+run_mapping_control_case
 run_blocked_region_persistence_case
