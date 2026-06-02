@@ -85,5 +85,38 @@ Interpretation:
 - `tgw_realtime_mapping_node` integrated realtime raycast input without drops.
 - Free-space, static/dynamic classification, surface extraction, traversability,
   boundary, clearance, and risk layers were all populated.
-- The run was not a full-path navigation validation; start/goal planning on the
-  real bag map still needs a separate test with selected points.
+- This first run was not a full-path navigation validation.
+
+## Plan Probe
+
+`scripts/run_realtime_bag_plan_probe.sh` repeats the real-bag stack, collects
+`/tgw_map/traversable_cloud`, selects two points from the largest traversable
+surface component, and calls `/tgw_map/plan_path`.
+
+Observed result with a 75 s playback:
+
+```text
+traversable_points=1333
+surface_component_count=560
+largest_component_size=368
+start=(0.0500000007, 1.1499999762, -0.1500000060)
+goal=(-0.75, 0.4499999881, -0.1500000060)
+dxy=1.063
+success=True
+message="path found"
+final_path_validated=True
+final_path_fallback_to_raw=False
+expanded_nodes=126
+path_waypoints=13
+path_length_m=1.490
+mean_path_clearance_m=0.097
+received_clouds=673
+integrated_clouds=673
+dynamic_points=21135
+surface_points=1333
+traversable_points=1333
+```
+
+This validates the realtime map-to-plan service chain on the real bag, but only
+for a short same-component path. Longer cross-floor or cross-component planning
+still needs separate point selection and map-quality validation.
