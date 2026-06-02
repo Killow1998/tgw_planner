@@ -31,6 +31,7 @@ struct SurfaceMap
 {
   std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> surface_cells;
   std::unordered_set<GridIndex, GridIndexHash> traversable_cells;
+  std::unordered_set<GridIndex, GridIndexHash> blocked_cells;
   std::unordered_set<GridIndex, GridIndexHash> forbidden_cells;
   std::unordered_set<GridIndex, GridIndexHash> boundary_cells;
   std::unordered_set<GridIndex, GridIndexHash> dropoff_boundary_cells;

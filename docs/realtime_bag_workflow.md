@@ -45,6 +45,7 @@ Realtime debug topics:
 - `/tgw_map/clearance_cloud`
 - `/tgw_map/medial_axis_cloud`
 - `/tgw_map/risk_cloud`
+- `/tgw_map/blocked_cloud`
 - `/tgw_map/forbidden_cloud`
 - `/tgw_map/planned_path`
 - `/tgw_map/stats_json`
@@ -60,6 +61,7 @@ Control services:
 Planning service:
 
 - `/tgw_map/plan_path` (`tgw_planner/srv/PlanPath`)
+- `/tgw_map/set_blocked_region` (`tgw_planner/srv/SetBlockedRegion`)
 - successful responses must pass final path validation before
   `/tgw_map/planned_path` is published
 
@@ -69,6 +71,19 @@ Example:
 ros2 service call /tgw_map/plan_path tgw_planner/srv/PlanPath \
   "{start: {header: {frame_id: map}, pose: {position: {x: 1.0, y: 0.0, z: 0.15}, orientation: {w: 1.0}}},
     goal: {header: {frame_id: map}, pose: {position: {x: 5.0, y: 0.0, z: 0.15}, orientation: {w: 1.0}}}}"
+```
+
+Runtime blocked regions use map-frame AABBs. They are applied after surface
+extraction, removed from `/tgw_map/traversable_cloud`, inserted into
+`/tgw_map/blocked_cloud` and `/tgw_map/forbidden_cloud`, and included in
+clearance/risk/path validation:
+
+```bash
+ros2 service call /tgw_map/set_blocked_region tgw_planner/srv/SetBlockedRegion \
+  "{operation: add,
+    min: {x: 1.0, y: -0.5, z: -0.2},
+    max: {x: 3.0, y: 0.5, z: 0.5},
+    reason: test_block}"
 ```
 
 `realtime_mapping.launch.py` forwards the core probabilistic mapping,
@@ -118,9 +133,9 @@ ros2 service call /tgw_mapping/save_map tgw_planner/srv/SaveMap \
 ```
 
 `save_map` writes `occupied_cloud.pcd`, `free_cloud.pcd`,
-`static_candidate_cloud.pcd`, `dynamic_suspect_cloud.pcd`, and `stats.json`.
-The exported PCD intensity is the current occupancy probability for each voxel
-center.
+`static_candidate_cloud.pcd`, `dynamic_suspect_cloud.pcd`,
+`blocked_cloud.pcd`, `blocked_regions.yaml`, and `stats.json`. The exported PCD
+intensity is the current occupancy probability for each voxel center.
 
 ## Verified Smoke
 

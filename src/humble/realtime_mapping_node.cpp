@@ -40,6 +40,7 @@
 #include "tgw_planner/srv/export_static_cloud.hpp"
 #include "tgw_planner/srv/plan_path.hpp"
 #include "tgw_planner/srv/save_map.hpp"
+#include "tgw_planner/srv/set_blocked_region.hpp"
 
 namespace
 {
@@ -170,6 +171,7 @@ public:
     medial_axis_pub_ =
       create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/medial_axis_cloud", latched_qos);
     risk_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/risk_cloud", latched_qos);
+    blocked_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/blocked_cloud", latched_qos);
     forbidden_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/forbidden_cloud", latched_qos);
     planned_path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_map/planned_path", latched_qos);
     stats_json_pub_ = create_publisher<std_msgs::msg::String>("/tgw_map/stats_json", latched_qos);
@@ -194,6 +196,11 @@ public:
     plan_srv_ = create_service<tgw_planner::srv::PlanPath>(
       "/tgw_map/plan_path",
       std::bind(&TgwRealtimeMappingNode::handlePlanPath, this, std::placeholders::_1, std::placeholders::_2));
+    set_blocked_region_srv_ = create_service<tgw_planner::srv::SetBlockedRegion>(
+      "/tgw_map/set_blocked_region",
+      std::bind(
+        &TgwRealtimeMappingNode::handleSetBlockedRegion, this,
+        std::placeholders::_1, std::placeholders::_2));
 
     publish_timer_ = create_wall_timer(
       std::chrono::milliseconds(std::max(100, publish_period_ms_)),
@@ -206,6 +213,13 @@ public:
   }
 
 private:
+  struct BlockedRegion
+  {
+    Point3 min;
+    Point3 max;
+    std::string reason;
+  };
+
   MappingOptions mappingOptions()
   {
     MappingOptions options;
@@ -465,6 +479,80 @@ private:
     return {set.begin(), set.end()};
   }
 
+  bool pointInsideRegion(const Point3 & point, const BlockedRegion & region) const
+  {
+    return point.x >= region.min.x && point.x <= region.max.x &&
+           point.y >= region.min.y && point.y <= region.max.y &&
+           point.z >= region.min.z && point.z <= region.max.z;
+  }
+
+  bool regionsIntersect(const BlockedRegion & a, const BlockedRegion & b) const
+  {
+    return a.min.x <= b.max.x && a.max.x >= b.min.x &&
+           a.min.y <= b.max.y && a.max.y >= b.min.y &&
+           a.min.z <= b.max.z && a.max.z >= b.min.z;
+  }
+
+  BlockedRegion normalizeBlockedRegion(
+    const geometry_msgs::msg::Point & min_point,
+    const geometry_msgs::msg::Point & max_point,
+    const std::string & reason) const
+  {
+    BlockedRegion region;
+    region.min = {
+      std::min(min_point.x, max_point.x),
+      std::min(min_point.y, max_point.y),
+      std::min(min_point.z, max_point.z)};
+    region.max = {
+      std::max(min_point.x, max_point.x),
+      std::max(min_point.y, max_point.y),
+      std::max(min_point.z, max_point.z)};
+    region.reason = reason;
+    return region;
+  }
+
+  std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> collectBlockedCells(
+    const SurfaceMap & surface) const
+  {
+    std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> blocked;
+    if (blocked_regions_.empty()) {
+      return blocked;
+    }
+    for (const auto & entry : surface.surface_cells) {
+      const GridIndex & cell = entry.first;
+      if (surface.traversable_cells.find(cell) == surface.traversable_cells.end()) {
+        continue;
+      }
+      const Point3 point = map_.gridToWorld(cell);
+      for (const BlockedRegion & region : blocked_regions_) {
+        if (pointInsideRegion(point, region)) {
+          blocked.insert(cell);
+          break;
+        }
+      }
+    }
+    return blocked;
+  }
+
+  void applyBlockedRegions(SurfaceMap & surface) const
+  {
+    surface.blocked_cells = collectBlockedCells(surface);
+    for (const GridIndex & cell : surface.blocked_cells) {
+      surface.traversable_cells.erase(cell);
+      surface.forbidden_cells.insert(cell);
+    }
+    if (!surface.blocked_cells.empty()) {
+      surface_extractor_.rebuildBoundaryLayer(surface, map_);
+    }
+  }
+
+  SurfaceMap extractSurfaceWithBlocked() const
+  {
+    SurfaceMap surface = surface_extractor_.extract(map_);
+    applyBlockedRegions(surface);
+    return surface;
+  }
+
   pcl::PointCloud<pcl::PointXYZI>::Ptr makePclCloud(const std::vector<GridIndex> & cells) const
   {
     auto cloud = pcl::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
@@ -546,6 +634,32 @@ private:
     }
   }
 
+  std::string buildBlockedRegionsYaml() const
+  {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3);
+    out << "blocked_regions:\n";
+    for (const BlockedRegion & region : blocked_regions_) {
+      out << "  - min: [" << region.min.x << ", " << region.min.y << ", " << region.min.z << "]\n";
+      out << "    max: [" << region.max.x << ", " << region.max.y << ", " << region.max.z << "]\n";
+      out << "    reason: \"" << yamlEscape(region.reason) << "\"\n";
+    }
+    return out.str();
+  }
+
+  std::string yamlEscape(const std::string & value) const
+  {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const char ch : value) {
+      if (ch == '\\' || ch == '"') {
+        escaped.push_back('\\');
+      }
+      escaped.push_back(ch);
+    }
+    return escaped;
+  }
+
   void publishSnapshot()
   {
     if (map_.size() == 0U) {
@@ -553,7 +667,7 @@ private:
       return;
     }
 
-    const SurfaceMap surface = surface_extractor_.extract(map_);
+    const SurfaceMap surface = extractSurfaceWithBlocked();
     ClearanceField clearance;
     clearance.compute(surface.traversable_cells, surface.boundary_cells, map_.resolution());
     tgw_planner::core::RiskField risk(risk_options_);
@@ -580,6 +694,7 @@ private:
       clearance.medialAxisCells(medial_axis_min_clearance_m_);
     medial_axis_pub_->publish(makeCloud(medial_axis, 11.0F, true, &clearance));
     risk_pub_->publish(makeRiskCloud(risk));
+    blocked_pub_->publish(makeCloud(setToVector(surface.blocked_cells), 12.0F));
     forbidden_pub_->publish(makeCloud(setToVector(surface.forbidden_cells), 10.0F));
     publishStatsJson(&surface, &clearance, &risk, medial_axis.size());
   }
@@ -587,7 +702,7 @@ private:
   NavigationSnapshot buildNavigationSnapshot() const
   {
     NavigationSnapshot snapshot;
-    snapshot.surface = surface_extractor_.extract(map_);
+    snapshot.surface = extractSurfaceWithBlocked();
     snapshot.clearance.compute(
       snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, map_.resolution());
     snapshot.risk = tgw_planner::core::RiskField(risk_options_);
@@ -688,8 +803,8 @@ private:
     response->stats.occupied_cells = static_cast<std::uint32_t>(map_.occupiedVoxels().size());
     response->stats.traversable_cells =
       static_cast<std::uint32_t>(snapshot.surface.traversable_cells.size());
-    response->stats.blocked_cells = static_cast<std::uint32_t>(snapshot.surface.forbidden_cells.size());
-    response->stats.risk_cells = static_cast<std::uint32_t>(snapshot.surface.boundary_cells.size());
+    response->stats.blocked_cells = static_cast<std::uint32_t>(snapshot.surface.blocked_cells.size());
+    response->stats.risk_cells = static_cast<std::uint32_t>(snapshot.risk.risks().size());
 
     GridIndex start;
     GridIndex goal;
@@ -788,6 +903,8 @@ private:
       out << ",\"surface_cells\":" << surface->surface_cells.size();
       out << ",\"traversable_cells\":" << surface->traversable_cells.size();
       out << ",\"boundary_cells\":" << surface->boundary_cells.size();
+      out << ",\"blocked_region_count\":" << blocked_regions_.size();
+      out << ",\"blocked_cells\":" << surface->blocked_cells.size();
       out << ",\"forbidden_cells\":" << surface->forbidden_cells.size();
     }
     if (clearance != nullptr) {
@@ -838,6 +955,63 @@ private:
     publishStatsJson();
   }
 
+  void handleSetBlockedRegion(
+    const std::shared_ptr<tgw_planner::srv::SetBlockedRegion::Request> request,
+    std::shared_ptr<tgw_planner::srv::SetBlockedRegion::Response> response)
+  {
+    const std::string operation = request->operation;
+    const SurfaceMap before_surface = extractSurfaceWithBlocked();
+    const std::size_t before_count = before_surface.blocked_cells.size();
+
+    if (operation == "clear") {
+      blocked_regions_.clear();
+      response->success = true;
+      response->message = "cleared realtime blocked regions";
+      response->affected_cells = static_cast<std::uint32_t>(before_count);
+      return;
+    }
+
+    const BlockedRegion region = normalizeBlockedRegion(request->min, request->max, request->reason);
+    if (region.min.x == region.max.x || region.min.y == region.max.y || region.min.z == region.max.z) {
+      response->success = false;
+      response->message = "blocked region AABB must have non-zero x/y/z size";
+      response->affected_cells = 0U;
+      return;
+    }
+
+    if (operation == "add") {
+      blocked_regions_.push_back(region);
+      const SurfaceMap after_surface = extractSurfaceWithBlocked();
+      response->success = true;
+      response->message = "added realtime blocked region";
+      response->affected_cells = static_cast<std::uint32_t>(
+        after_surface.blocked_cells.size() > before_count ?
+        after_surface.blocked_cells.size() - before_count : after_surface.blocked_cells.size());
+      return;
+    }
+
+    if (operation == "remove") {
+      const auto old_size = blocked_regions_.size();
+      blocked_regions_.erase(
+        std::remove_if(
+          blocked_regions_.begin(), blocked_regions_.end(),
+          [&](const BlockedRegion & existing) {return regionsIntersect(existing, region);}),
+        blocked_regions_.end());
+      const SurfaceMap after_surface = extractSurfaceWithBlocked();
+      response->success = true;
+      response->message =
+        "removed " + std::to_string(old_size - blocked_regions_.size()) + " realtime blocked regions";
+      response->affected_cells = static_cast<std::uint32_t>(
+        before_count > after_surface.blocked_cells.size() ?
+        before_count - after_surface.blocked_cells.size() : before_count);
+      return;
+    }
+
+    response->success = false;
+    response->message = "operation must be add, remove, or clear";
+    response->affected_cells = 0U;
+  }
+
   void handleExportStaticCloud(
     const std::shared_ptr<tgw_planner::srv::ExportStaticCloud::Request> request,
     std::shared_ptr<tgw_planner::srv::ExportStaticCloud::Response> response)
@@ -870,6 +1044,8 @@ private:
     const std::filesystem::path free_path = output_dir / "free_cloud.pcd";
     const std::filesystem::path static_path = output_dir / "static_candidate_cloud.pcd";
     const std::filesystem::path dynamic_path = output_dir / "dynamic_suspect_cloud.pcd";
+    const std::filesystem::path blocked_path = output_dir / "blocked_cloud.pcd";
+    const std::filesystem::path blocked_regions_path = output_dir / "blocked_regions.yaml";
     const std::filesystem::path stats_path = output_dir / "stats.json";
 
     const std::vector<GridIndex> occupied_cells = map_.occupiedVoxels();
@@ -878,23 +1054,27 @@ private:
     const std::vector<GridIndex> dynamic_cells = map_.dynamicSuspectVoxels();
 
     std::string message;
+    const NavigationSnapshot snapshot = buildNavigationSnapshot();
+    const std::vector<GridIndex> blocked_cells = setToVector(snapshot.surface.blocked_cells);
+
     if (!writePcd(occupied_path, occupied_cells, message) ||
       !writePcd(free_path, free_cells, message) ||
       !writePcd(static_path, static_cells, message) ||
-      !writePcd(dynamic_path, dynamic_cells, message))
+      !writePcd(dynamic_path, dynamic_cells, message) ||
+      !writePcd(blocked_path, blocked_cells, message))
     {
       response->success = false;
       response->message = message;
       return;
     }
 
-    const NavigationSnapshot snapshot = buildNavigationSnapshot();
     const std::vector<GridIndex> medial_axis =
       snapshot.clearance.medialAxisCells(medial_axis_min_clearance_m_);
     if (!writeTextFile(
         stats_path,
         buildStatsJson(&snapshot.surface, &snapshot.clearance, &snapshot.risk, medial_axis.size()),
-        message))
+        message) ||
+      !writeTextFile(blocked_regions_path, buildBlockedRegionsYaml(), message))
     {
       response->success = false;
       response->message = message;
@@ -935,6 +1115,7 @@ private:
   int publish_period_ms_{1000};
   double medial_axis_min_clearance_m_{0.20};
   int view_id_{0};
+  std::vector<BlockedRegion> blocked_regions_;
 
   bool latest_pose_valid_{false};
   double latest_pose_stamp_sec_{0.0};
@@ -958,6 +1139,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr clearance_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr medial_axis_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr risk_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr blocked_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr forbidden_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr planned_path_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr stats_json_pub_;
@@ -967,6 +1149,7 @@ private:
   rclcpp::Service<tgw_planner::srv::SaveMap>::SharedPtr save_map_srv_;
   rclcpp::Service<tgw_planner::srv::ExportStaticCloud>::SharedPtr export_static_cloud_srv_;
   rclcpp::Service<tgw_planner::srv::PlanPath>::SharedPtr plan_srv_;
+  rclcpp::Service<tgw_planner::srv::SetBlockedRegion>::SharedPtr set_blocked_region_srv_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
 };
 
