@@ -17,7 +17,7 @@ fi
 
 pcd_dir="${PCT_PCD_DIR:-$HOME/robot_nav_refs/PCT_planner/rsc/pcd}"
 require_legacy_spiral_pass="${TGW_REQUIRE_LEGACY_SPIRAL_PASS:-0}"
-require_surface_spiral_pass="${TGW_REQUIRE_SURFACE_SPIRAL_PASS:-${TGW_REQUIRE_SPIRAL_PASS:-0}}"
+require_surface_spiral_pass="${TGW_REQUIRE_SURFACE_SPIRAL_PASS:-${TGW_REQUIRE_SPIRAL_PASS:-1}}"
 
 launch_pid=""
 cleanup()
