@@ -1,6 +1,8 @@
 # tgw_planner
 
-`tgw_planner` (`tgw_planner`) is a ROS 2 Humble MVP for Unitree Go2-W multi-floor navigation from a static PCD map.
+`tgw_planner` (`tgw_planner`) is a ROS 2 Humble MVP for Unitree Go2-W
+multi-floor navigation from either realtime raycast mapping or a static PCD
+debug map.
 
 The package keeps the planner core ROS-free under `include/tgw_planner/core` and `src/core`. The Humble wrapper nodes live in `src/humble`.
 Static PCD import is handled by `tgw_pcd_import_node`; the legacy
@@ -15,7 +17,58 @@ source /opt/ros/humble/setup.bash
 colcon build --packages-select tgw_planner --symlink-install
 ```
 
-## Run
+## Realtime Raycast Mode
+
+Realtime raycast mapping is the recommended path for live or dirty maps because
+it uses sensor pose, ray clearing, and temporal evidence instead of treating
+every final PCD point as permanent structure.
+
+```bash
+source $ROS_WS/install/setup.bash
+ros2 launch tgw_planner realtime_mapping.launch.py \
+  points_topic:=/tgw_mapping/points \
+  use_tf:=true \
+  map_frame:=map \
+  sensor_frame:=livox_frame
+```
+
+Main debug topics:
+
+- `/tgw_map/occupied_cloud`
+- `/tgw_map/free_cloud`
+- `/tgw_map/dynamic_suspect_cloud`
+- `/tgw_map/static_candidate_cloud`
+- `/tgw_map/surface_cloud`
+- `/tgw_map/traversable_cloud`
+- `/tgw_map/boundary_cloud`
+- `/tgw_map/dropoff_boundary_cloud`
+- `/tgw_map/wall_boundary_cloud`
+- `/tgw_map/clearance_cloud`
+- `/tgw_map/medial_axis_cloud`
+- `/tgw_map/blocked_cloud`
+- `/tgw_map/forbidden_cloud`
+- `/planned_path`
+- `/planned_path_marker`
+
+Main services:
+
+- `/tgw_mapping/start`
+- `/tgw_mapping/stop`
+- `/tgw_mapping/pause`
+- `/tgw_mapping/clear`
+- `/tgw_mapping/save_map`
+- `/tgw_mapping/load_map`
+- `/tgw_mapping/export_static_pcd`
+- `/tgw_mapping/get_snapshot`
+- `/tgw_map/plan_path`
+- `/tgw_map/set_blocked_region`
+
+When `planner_require_footprint:=true` or
+`validation_require_footprint:=true`, `/tgw_map/plan_path` snaps requested
+start and goal poses to nearby cells that are both traversable and
+footprint-supported before running A*.
+
+## PCD Debug Mode
 
 ```bash
 source $ROS_WS/install/setup.bash
