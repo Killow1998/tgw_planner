@@ -72,12 +72,13 @@ require_surface_metrics()
 {
   local name="$1"
   local output="$2"
-  local final_path_validated path_waypoints expanded_nodes min_clearance mean_clearance
+  local final_path_validated path_waypoints expanded_nodes min_clearance mean_clearance low_clearance
   final_path_validated="$(metric_value "${output}" "final_path_validated")"
   path_waypoints="$(metric_value "${output}" "path_waypoints")"
   expanded_nodes="$(metric_value "${output}" "expanded_nodes")"
   min_clearance="$(metric_value "${output}" "min_path_clearance_m")"
   mean_clearance="$(metric_value "${output}" "mean_path_clearance_m")"
+  low_clearance="$(metric_value "${output}" "low_clearance_samples")"
   if [[ "${final_path_validated}" != "true" ]]; then
     echo "FAIL ${name}: final_path_validated is not true"
     return 1
@@ -92,6 +93,10 @@ require_surface_metrics()
   fi
   if [[ -z "${min_clearance}" || -z "${mean_clearance}" ]]; then
     echo "FAIL ${name}: clearance metrics are missing"
+    return 1
+  fi
+  if [[ -z "${low_clearance}" ]]; then
+    echo "FAIL ${name}: low_clearance_samples is missing"
     return 1
   fi
 }
