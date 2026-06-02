@@ -98,6 +98,23 @@ int main()
   CHECK(!mount_filter_map.isOccupied(mount_filter_map.worldToGrid({1.0, 0.0, 0.0})));
   CHECK(mount_filter_map.isOccupied(mount_filter_map.worldToGrid({1.5, 0.0, 0.0})));
 
+  ProbabilisticVoxelMap diagonal_ray_map(options);
+  RaycastIntegrator diagonal_ray_integrator(options);
+  ScanInput diagonal_ray_scan;
+  diagonal_ray_scan.sensor_pose_map = pose;
+  diagonal_ray_scan.stamp_sec = 0.0;
+  diagonal_ray_scan.view_id = 1;
+  diagonal_ray_scan.points_sensor_frame.push_back(diagonal_ray_map.gridToWorld({6, 4, 0}));
+  const auto diagonal_ray_stats =
+    diagonal_ray_integrator.insertScan(diagonal_ray_scan, diagonal_ray_map);
+  CHECK(diagonal_ray_stats.inserted_points == 1U);
+  const auto * diagonal_miss = diagonal_ray_map.lookup({2, 2, 0});
+  CHECK(diagonal_miss != nullptr);
+  CHECK(diagonal_miss->miss_count > 0U);
+  CHECK(diagonal_miss->ray_pass_count > 0U);
+  CHECK(!diagonal_ray_map.isOccupied({2, 2, 0}));
+  CHECK(diagonal_ray_map.isOccupied({6, 4, 0}));
+
   map.updateHit(endpoint, 1.0, 2);
   CHECK(map.lookup(endpoint)->static_candidate);
   CHECK(!map.lookup(endpoint)->dynamic_suspect);

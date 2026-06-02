@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace tgw_planner::core
 {
@@ -77,27 +78,63 @@ bool RaycastIntegrator::isSelfPoint(const Point3 & point_sensor_frame) const
 std::vector<GridIndex> RaycastIntegrator::rayVoxels(
   const GridIndex & origin, const GridIndex & endpoint) const
 {
+  std::vector<GridIndex> voxels;
   const int dx = endpoint.x - origin.x;
   const int dy = endpoint.y - origin.y;
   const int dz = endpoint.z - origin.z;
-  const int steps = std::max({std::abs(dx), std::abs(dy), std::abs(dz), 1});
+  voxels.reserve(static_cast<std::size_t>(std::abs(dx) + std::abs(dy) + std::abs(dz)) + 1U);
 
-  std::vector<GridIndex> voxels;
-  voxels.reserve(static_cast<std::size_t>(steps) + 1U);
-  GridIndex last{origin.x - 1, origin.y - 1, origin.z - 1};
-  for (int i = 0; i <= steps; ++i) {
-    const double t = static_cast<double>(i) / static_cast<double>(steps);
-    const GridIndex idx{
-      static_cast<int>(std::floor(static_cast<double>(origin.x) + t * static_cast<double>(dx) + 0.5)),
-      static_cast<int>(std::floor(static_cast<double>(origin.y) + t * static_cast<double>(dy) + 0.5)),
-      static_cast<int>(std::floor(static_cast<double>(origin.z) + t * static_cast<double>(dz) + 0.5))};
-    if (idx != last) {
-      voxels.push_back(idx);
-      last = idx;
+  GridIndex current = origin;
+  const double start_x = static_cast<double>(origin.x) + 0.5;
+  const double start_y = static_cast<double>(origin.y) + 0.5;
+  const double start_z = static_cast<double>(origin.z) + 0.5;
+  const double end_x = static_cast<double>(endpoint.x) + 0.5;
+  const double end_y = static_cast<double>(endpoint.y) + 0.5;
+  const double end_z = static_cast<double>(endpoint.z) + 0.5;
+  const double ray_dx = end_x - start_x;
+  const double ray_dy = end_y - start_y;
+  const double ray_dz = end_z - start_z;
+
+  const auto sign = [](double value) {
+      return value > 0.0 ? 1 : (value < 0.0 ? -1 : 0);
+    };
+  const int step_x = sign(ray_dx);
+  const int step_y = sign(ray_dy);
+  const int step_z = sign(ray_dz);
+  const double inf = std::numeric_limits<double>::infinity();
+  const double t_delta_x = step_x == 0 ? inf : 1.0 / std::abs(ray_dx);
+  const double t_delta_y = step_y == 0 ? inf : 1.0 / std::abs(ray_dy);
+  const double t_delta_z = step_z == 0 ? inf : 1.0 / std::abs(ray_dz);
+  double t_max_x = step_x == 0 ? inf :
+    ((step_x > 0 ? static_cast<double>(origin.x + 1) : static_cast<double>(origin.x)) - start_x) /
+    ray_dx;
+  double t_max_y = step_y == 0 ? inf :
+    ((step_y > 0 ? static_cast<double>(origin.y + 1) : static_cast<double>(origin.y)) - start_y) /
+    ray_dy;
+  double t_max_z = step_z == 0 ? inf :
+    ((step_z > 0 ? static_cast<double>(origin.z + 1) : static_cast<double>(origin.z)) - start_z) /
+    ray_dz;
+
+  constexpr double tie_epsilon = 1.0e-12;
+  while (true) {
+    voxels.push_back(current);
+    if (current == endpoint) {
+      break;
     }
-  }
-  if (voxels.empty() || voxels.back() != endpoint) {
-    voxels.push_back(endpoint);
+
+    const double next_t = std::min({t_max_x, t_max_y, t_max_z});
+    if (t_max_x <= next_t + tie_epsilon) {
+      current.x += step_x;
+      t_max_x += t_delta_x;
+    }
+    if (t_max_y <= next_t + tie_epsilon) {
+      current.y += step_y;
+      t_max_y += t_delta_y;
+    }
+    if (t_max_z <= next_t + tie_epsilon) {
+      current.z += step_z;
+      t_max_z += t_delta_z;
+    }
   }
   return voxels;
 }
