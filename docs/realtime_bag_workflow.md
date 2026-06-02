@@ -38,6 +38,12 @@ ceiling tops and other unobserved occupied tops out of the realtime navigation
 surface. Use `surface_require_observed_free_space:=false` only for clean static
 PCD-style smoke tests that do not contain free-space evidence.
 
+Synthetic realtime regression:
+
+```bash
+src/tgw_planner/scripts/run_realtime_mapping_sim_tests.sh
+```
+
 Realtime debug topics:
 
 - `/tgw_map/occupied_cloud`
