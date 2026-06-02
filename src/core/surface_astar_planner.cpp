@@ -223,12 +223,15 @@ double SurfaceAstarPlanner::transitionCost(
 
   double turn_penalty = 0.0;
   if (previous != nullptr) {
-    const int ax = from.x - previous->x;
-    const int ay = from.y - previous->y;
-    const int bx = to.x - from.x;
-    const int by = to.y - from.y;
-    if (ax * bx + ay * by <= 0) {
-      turn_penalty = options_.w_turn;
+    const double ax = static_cast<double>(from.x - previous->x);
+    const double ay = static_cast<double>(from.y - previous->y);
+    const double bx = static_cast<double>(to.x - from.x);
+    const double by = static_cast<double>(to.y - from.y);
+    const double a_norm = std::hypot(ax, ay);
+    const double b_norm = std::hypot(bx, by);
+    if (a_norm > 1.0e-9 && b_norm > 1.0e-9) {
+      const double heading_dot = std::clamp((ax * bx + ay * by) / (a_norm * b_norm), -1.0, 1.0);
+      turn_penalty = options_.w_turn * (1.0 - heading_dot);
     }
   }
 

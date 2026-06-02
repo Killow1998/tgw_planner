@@ -83,8 +83,16 @@ run_case()
     map_resolution_m:="${resolution}" \
     pcd_file:="${pcd}" >"${log_file}" 2>&1 &
   launch_pid="$!"
-  wait_for_node
-  wait_for_map "${log_file}"
+  if ! wait_for_node; then
+    echo "FAIL ${name}: /tgw_planner_node did not appear"
+    tail -n 80 "${log_file}" || true
+    return 1
+  fi
+  if ! wait_for_map "${log_file}"; then
+    echo "FAIL ${name}: map build did not finish"
+    tail -n 120 "${log_file}" || true
+    return 1
+  fi
 
   local request
   request="{start: {header: {frame_id: map}, pose: {position: {x: ${start_x}, y: ${start_y}, z: ${start_z}}, orientation: {w: 1.0}}}, goal: {header: {frame_id: map}, pose: {position: {x: ${goal_x}, y: ${goal_y}, z: ${goal_z}}, orientation: {w: 1.0}}}}"
