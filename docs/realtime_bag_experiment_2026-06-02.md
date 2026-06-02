@@ -93,12 +93,16 @@ Interpretation:
 `/tgw_map/traversable_cloud`, selects two points from the largest traversable
 surface component, and calls `/tgw_map/plan_path`.
 
-Observed result with a 75 s playback:
+Observed result with a 75 s playback on 2026-06-03:
 
 ```text
-traversable_points=1333
-surface_component_count=560
-largest_component_size=368
+received_clouds=674
+integrated_clouds=674
+dynamic_points=20057
+surface_points=1327
+traversable_points=1327
+surface_component_count=561
+largest_component_size=340
 start=(0.0500000007, 1.1499999762, -0.1500000060)
 goal=(-0.75, 0.4499999881, -0.1500000060)
 dxy=1.063
@@ -106,15 +110,12 @@ success=True
 message="path found"
 final_path_validated=True
 final_path_fallback_to_raw=False
-expanded_nodes=126
+expanded_nodes=133
 path_waypoints=13
-path_length_m=1.490
-mean_path_clearance_m=0.097
-received_clouds=673
-integrated_clouds=673
-dynamic_points=21135
-surface_points=1333
-traversable_points=1333
+path_length_m=1.407
+min_path_clearance_m=0.000
+mean_path_clearance_m=0.085
+clearance_cost_sum=134.667
 ```
 
 This validates the realtime map-to-plan service chain on the real bag, but only
