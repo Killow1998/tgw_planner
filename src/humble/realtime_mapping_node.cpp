@@ -38,6 +38,7 @@
 #include "tgw_planner/core/robot_footprint.hpp"
 #include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/surface_extractor.hpp"
+#include "tgw_planner/msg/mapping_stats.hpp"
 #include "tgw_planner/msg/planner_stats.hpp"
 #include "tgw_planner/srv/export_static_cloud.hpp"
 #include "tgw_planner/srv/load_map.hpp"
@@ -177,6 +178,8 @@ public:
     blocked_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/blocked_cloud", latched_qos);
     forbidden_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/forbidden_cloud", latched_qos);
     planned_path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_map/planned_path", latched_qos);
+    mapping_stats_pub_ = create_publisher<tgw_planner::msg::MappingStats>(
+      "/tgw_mapping/stats", latched_qos);
     stats_json_pub_ = create_publisher<std_msgs::msg::String>("/tgw_map/stats_json", latched_qos);
 
     start_srv_ = create_service<std_srvs::srv::Trigger>(
@@ -1031,10 +1034,54 @@ private:
     return out.str();
   }
 
+  tgw_planner::msg::MappingStats buildMappingStats(
+    const SurfaceMap * surface = nullptr, const ClearanceField * clearance = nullptr,
+    const tgw_planner::core::RiskField * risk = nullptr, std::size_t medial_axis_cells = 0U) const
+  {
+    tgw_planner::msg::MappingStats msg;
+    msg.stamp = now();
+    msg.map_id = "realtime_raycast";
+    msg.map_input_mode = "realtime_raycast";
+    msg.mapping_enabled = mapping_enabled_;
+    msg.received_clouds = received_clouds_;
+    msg.integrated_clouds = integrated_clouds_;
+    msg.dropped_clouds = dropped_clouds_;
+    msg.voxel_count = map_.size();
+    msg.occupied_voxels = map_.occupiedVoxels().size();
+    msg.free_voxels = map_.freeVoxels().size();
+    msg.static_candidate_voxels = map_.staticCandidateVoxels().size();
+    msg.dynamic_suspect_voxels = map_.dynamicSuspectVoxels().size();
+    msg.last_scan_input_points = last_raycast_stats_.input_points;
+    msg.last_scan_inserted_points = last_raycast_stats_.inserted_points;
+    msg.last_scan_filtered_invalid = last_raycast_stats_.filtered_invalid;
+    msg.last_scan_filtered_range = last_raycast_stats_.filtered_range;
+    msg.last_scan_filtered_self = last_raycast_stats_.filtered_self;
+    msg.last_scan_hit_updates = last_raycast_stats_.hit_updates;
+    msg.last_scan_miss_updates = last_raycast_stats_.miss_updates;
+    if (surface != nullptr) {
+      msg.surface_cells = surface->surface_cells.size();
+      msg.traversable_cells = surface->traversable_cells.size();
+      msg.boundary_cells = surface->boundary_cells.size();
+      msg.blocked_region_count = blocked_regions_.size();
+      msg.blocked_cells = surface->blocked_cells.size();
+      msg.forbidden_cells = surface->forbidden_cells.size();
+    }
+    if (clearance != nullptr) {
+      msg.clearance_cells = clearance->distances().size();
+      msg.medial_axis_cells = medial_axis_cells;
+    }
+    if (risk != nullptr) {
+      msg.risk_cells = risk->risks().size();
+    }
+    msg.map_resolution_m = map_.resolution();
+    return msg;
+  }
+
   void publishStatsJson(
     const SurfaceMap * surface = nullptr, const ClearanceField * clearance = nullptr,
     const tgw_planner::core::RiskField * risk = nullptr, std::size_t medial_axis_cells = 0U)
   {
+    mapping_stats_pub_->publish(buildMappingStats(surface, clearance, risk, medial_axis_cells));
     std_msgs::msg::String msg;
     msg.data = buildStatsJson(surface, clearance, risk, medial_axis_cells);
     stats_json_pub_->publish(msg);
@@ -1318,6 +1365,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr blocked_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr forbidden_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr planned_path_pub_;
+  rclcpp::Publisher<tgw_planner::msg::MappingStats>::SharedPtr mapping_stats_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr stats_json_pub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv_;

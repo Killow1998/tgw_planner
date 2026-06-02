@@ -1,0 +1,34 @@
+builtin_interfaces/Time stamp
+string map_id
+string map_input_mode
+bool mapping_enabled
+
+uint64 received_clouds
+uint64 integrated_clouds
+uint64 dropped_clouds
+
+uint64 voxel_count
+uint64 occupied_voxels
+uint64 free_voxels
+uint64 static_candidate_voxels
+uint64 dynamic_suspect_voxels
+
+uint64 last_scan_input_points
+uint64 last_scan_inserted_points
+uint64 last_scan_filtered_invalid
+uint64 last_scan_filtered_range
+uint64 last_scan_filtered_self
+uint64 last_scan_hit_updates
+uint64 last_scan_miss_updates
+
+uint64 surface_cells
+uint64 traversable_cells
+uint64 boundary_cells
+uint64 blocked_region_count
+uint64 blocked_cells
+uint64 forbidden_cells
+uint64 clearance_cells
+uint64 medial_axis_cells
+uint64 risk_cells
+
+float64 map_resolution_m

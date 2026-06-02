@@ -30,6 +30,7 @@ find_package(PCL REQUIRED COMPONENTS common io filters)
 find_package(octomap REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  msg/MappingStats.msg
   msg/PlannerStats.msg
   srv/ExportStaticCloud.srv
   srv/LoadMap.srv

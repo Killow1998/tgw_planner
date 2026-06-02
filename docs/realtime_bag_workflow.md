@@ -48,6 +48,7 @@ Realtime debug topics:
 - `/tgw_map/blocked_cloud`
 - `/tgw_map/forbidden_cloud`
 - `/tgw_map/planned_path`
+- `/tgw_mapping/stats`
 - `/tgw_map/stats_json`
 
 Control services:
@@ -131,6 +132,11 @@ derived from boundary, drop-off, wall-adjacent, forbidden-adjacent, and
 low-clearance cells. `SurfaceAstarPlanner` adds `planner_w_risk * riskCost`
 to edge cost, so this layer is both an RViz diagnostic and part of the path
 search objective.
+
+`/tgw_mapping/stats` publishes the same mapping counters as
+`/tgw_map/stats_json` in `tgw_planner/msg/MappingStats` form. Use the typed
+topic for bagged diagnostics and monitoring; keep the JSON topic for quick CLI
+inspection and text logs.
 
 Map export:
 
