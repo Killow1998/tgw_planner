@@ -70,6 +70,8 @@ Realtime debug topics:
 - `/planned_path_marker`
 - `/start_marker`
 - `/goal_marker`
+- `/planner_stats`
+- `/planner_stats_json`
 - `/tgw_mapping/stats`
 - `/tgw_map/stats_json`
 

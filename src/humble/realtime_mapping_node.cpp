@@ -187,6 +187,10 @@ public:
       create_publisher<visualization_msgs::msg::Marker>("/start_marker", latched_qos);
     goal_marker_pub_ =
       create_publisher<visualization_msgs::msg::Marker>("/goal_marker", latched_qos);
+    planner_stats_pub_ =
+      create_publisher<tgw_planner::msg::PlannerStats>("/planner_stats", latched_qos);
+    planner_stats_json_pub_ =
+      create_publisher<std_msgs::msg::String>("/planner_stats_json", latched_qos);
     mapping_stats_pub_ = create_publisher<tgw_planner::msg::MappingStats>(
       "/tgw_mapping/stats", latched_qos);
     stats_json_pub_ = create_publisher<std_msgs::msg::String>("/tgw_map/stats_json", latched_qos);
@@ -810,6 +814,75 @@ private:
     return escaped;
   }
 
+  std::string jsonEscape(const std::string & value) const
+  {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const char ch : value) {
+      if (ch == '\\' || ch == '"') {
+        escaped.push_back('\\');
+        escaped.push_back(ch);
+      } else if (ch == '\n') {
+        escaped += "\\n";
+      } else if (ch == '\r') {
+        escaped += "\\r";
+      } else if (ch == '\t') {
+        escaped += "\\t";
+      } else {
+        escaped.push_back(ch);
+      }
+    }
+    return escaped;
+  }
+
+  std::string plannerStatsJson(const tgw_planner::msg::PlannerStats & stats) const
+  {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3);
+    out << "{";
+    out << "\"map_id\":\"" << jsonEscape(stats.map_id) << "\",";
+    out << "\"map_input_mode\":\"realtime_raycast\",";
+    out << "\"success\":" << (stats.success ? "true" : "false") << ",";
+    out << "\"failure_reason\":\"" << jsonEscape(stats.failure_reason) << "\",";
+    out << "\"final_path_validated\":" << (stats.final_path_validated ? "true" : "false") << ",";
+    out << "\"final_path_fallback_to_raw\":" <<
+      (stats.final_path_fallback_to_raw ? "true" : "false") << ",";
+    out << "\"final_path_validation_failure\":\"" <<
+      jsonEscape(stats.final_path_validation_failure) << "\",";
+    out << "\"search_time_ms\":" << stats.search_time_ms << ",";
+    out << "\"total_plan_time_ms\":" << stats.total_plan_time_ms << ",";
+    out << "\"occupied_cells\":" << stats.occupied_cells << ",";
+    out << "\"traversable_cells\":" << stats.traversable_cells << ",";
+    out << "\"blocked_cells\":" << stats.blocked_cells << ",";
+    out << "\"risk_cells\":" << stats.risk_cells << ",";
+    out << "\"expanded_nodes\":" << stats.expanded_nodes << ",";
+    out << "\"generated_nodes\":" << stats.generated_nodes << ",";
+    out << "\"raw_path_waypoints\":" << stats.raw_path_waypoints << ",";
+    out << "\"raw_path_length_m\":" << stats.raw_path_length_m << ",";
+    out << "\"postprocess_floor_shortcuts\":" << stats.postprocess_floor_shortcuts << ",";
+    out << "\"path_waypoints\":" << stats.path_waypoints << ",";
+    out << "\"path_length_m\":" << stats.path_length_m << ",";
+    out << "\"path_vertical_gain_m\":" << stats.path_vertical_gain_m << ",";
+    out << "\"path_vertical_loss_m\":" << stats.path_vertical_loss_m << ",";
+    out << "\"min_path_clearance_m\":" << stats.min_path_clearance_m << ",";
+    out << "\"mean_path_clearance_m\":" << stats.mean_path_clearance_m << ",";
+    out << "\"clearance_cost_sum\":" << stats.clearance_cost_sum << ",";
+    out << "\"low_clearance_samples\":" << stats.low_clearance_samples << ",";
+    out << "\"start_snap_distance_m\":" << stats.start_snap_distance_m << ",";
+    out << "\"goal_snap_distance_m\":" << stats.goal_snap_distance_m << ",";
+    out << "\"map_resolution_m\":" << stats.map_resolution_m;
+    out << "}";
+    return out.str();
+  }
+
+  void publishPlannerStats(const tgw_planner::msg::PlannerStats & stats) const
+  {
+    planner_stats_pub_->publish(stats);
+    std_msgs::msg::String msg;
+    msg.data = plannerStatsJson(stats);
+    planner_stats_json_pub_->publish(msg);
+  }
+
   void publishSnapshot()
   {
     if (map_.size() == 0U) {
@@ -1033,6 +1106,7 @@ private:
       response->stats.success = false;
       response->stats.failure_reason = response->message;
       publishPathMarker({});
+      publishPlannerStats(response->stats);
       return;
     }
     if (!snapToTraversable(snapshot, goal_point, goal, response->stats.goal_snap_distance_m)) {
@@ -1041,6 +1115,7 @@ private:
       response->stats.success = false;
       response->stats.failure_reason = response->message;
       publishPathMarker({});
+      publishPlannerStats(response->stats);
       return;
     }
     publishPoseMarker(map_.gridToWorld(start), start_marker_pub_, "tgw_realtime_start", 0.0F, 0.95F, 1.0F);
@@ -1076,6 +1151,7 @@ private:
     if (!result.success) {
       response->path = makePathMessage(result.path);
       publishPathMarker({});
+      publishPlannerStats(response->stats);
       return;
     }
 
@@ -1111,6 +1187,7 @@ private:
           response->stats.low_clearance_samples = raw_validation.low_clearance_samples;
           planned_path_pub_->publish(response->path);
           publishPathMarker(result.raw_path);
+          publishPlannerStats(response->stats);
           return;
         }
       }
@@ -1120,12 +1197,14 @@ private:
       response->stats.failure_reason = response->message;
       response->path = makePathMessage(result.path);
       publishPathMarker({});
+      publishPlannerStats(response->stats);
       return;
     }
 
     response->path = makePathMessage(result.path);
     planned_path_pub_->publish(response->path);
     publishPathMarker(result.path);
+    publishPlannerStats(response->stats);
   }
 
   std::string buildStatsJson(
@@ -1552,6 +1631,8 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr planned_path_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_marker_pub_;
+  rclcpp::Publisher<tgw_planner::msg::PlannerStats>::SharedPtr planner_stats_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr planner_stats_json_pub_;
   rclcpp::Publisher<tgw_planner::msg::MappingStats>::SharedPtr mapping_stats_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr stats_json_pub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;
