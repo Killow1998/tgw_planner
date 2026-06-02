@@ -173,6 +173,7 @@ int main()
 
   ClearanceField clearance;
   clearance.compute(surface.traversable_cells, surface.boundary_cells, options.resolution_m);
+  CHECK(std::abs(clearance.clearanceDistance(edge) - 0.5 * options.resolution_m) < 1.0e-9);
   CHECK(clearance.clearanceDistance(center) > clearance.clearanceDistance(edge));
   CHECK(clearance.clearancePenalty(center) < clearance.clearancePenalty(edge));
   RiskField risk;

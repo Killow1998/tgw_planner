@@ -35,12 +35,13 @@ void ClearanceField::compute(
   }
 
   std::priority_queue<QueueItem, std::vector<QueueItem>, QueueCompare> queue;
+  const double boundary_center_clearance = std::max(0.0, 0.5 * resolution_m);
   for (const GridIndex & cell : boundary) {
     if (traversable.find(cell) == traversable.end()) {
       continue;
     }
-    distance_m_[cell] = 0.0;
-    queue.push({cell, 0.0});
+    distance_m_[cell] = boundary_center_clearance;
+    queue.push({cell, boundary_center_clearance});
   }
 
   if (queue.empty()) {
