@@ -279,6 +279,8 @@ int main()
   CHECK(used_center_lane);
   CHECK(plan.metrics.min_path_clearance_m >= 0.0);
   CHECK(plan.metrics.mean_path_clearance_m > 0.0);
+  CHECK(plan.metrics.risk_cost_sum >= 0.0);
+  CHECK(plan.metrics.max_path_risk >= 0.0);
 
   SurfacePlannerOptions center_bias_options;
   center_bias_options.w_clearance = 5.0;

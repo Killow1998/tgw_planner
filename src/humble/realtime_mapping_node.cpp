@@ -1046,6 +1046,8 @@ private:
     out << "\"mean_path_clearance_m\":" << stats.mean_path_clearance_m << ",";
     out << "\"clearance_cost_sum\":" << stats.clearance_cost_sum << ",";
     out << "\"unknown_cost_sum\":" << stats.unknown_cost_sum << ",";
+    out << "\"risk_cost_sum\":" << stats.risk_cost_sum << ",";
+    out << "\"max_path_risk\":" << stats.max_path_risk << ",";
     out << "\"low_clearance_samples\":" << stats.low_clearance_samples << ",";
     out << "\"start_snap_distance_m\":" << stats.start_snap_distance_m << ",";
     out << "\"goal_snap_distance_m\":" << stats.goal_snap_distance_m << ",";
@@ -1294,6 +1296,26 @@ private:
     return sum;
   }
 
+  double riskCostSum(
+    const NavigationSnapshot & snapshot, const std::vector<GridIndex> & cells) const
+  {
+    double sum = 0.0;
+    for (const GridIndex & cell : cells) {
+      sum += snapshot.risk.riskCost(cell);
+    }
+    return sum;
+  }
+
+  double maxPathRisk(
+    const NavigationSnapshot & snapshot, const std::vector<GridIndex> & cells) const
+  {
+    double max_risk = 0.0;
+    for (const GridIndex & cell : cells) {
+      max_risk = std::max(max_risk, snapshot.risk.riskCost(cell));
+    }
+    return max_risk;
+  }
+
   void handlePlanPath(
     const std::shared_ptr<tgw_planner::srv::PlanPath::Request> request,
     std::shared_ptr<tgw_planner::srv::PlanPath::Response> response)
@@ -1425,6 +1447,8 @@ private:
     response->stats.mean_path_clearance_m = result.metrics.mean_path_clearance_m;
     response->stats.clearance_cost_sum = result.metrics.clearance_cost_sum;
     response->stats.unknown_cost_sum = result.metrics.unknown_cost_sum;
+    response->stats.risk_cost_sum = result.metrics.risk_cost_sum;
+    response->stats.max_path_risk = result.metrics.max_path_risk;
     response->stats.low_clearance_samples = result.metrics.low_clearance_samples;
     response->stats.final_path_validated = result.metrics.final_path_validated;
     response->stats.final_path_fallback_to_raw = result.metrics.final_path_fallback_to_raw;
@@ -1467,6 +1491,8 @@ private:
           response->stats.mean_path_clearance_m = raw_validation.mean_clearance_m;
           response->stats.clearance_cost_sum = clearanceCostSum(snapshot, result.raw_cells);
           response->stats.unknown_cost_sum = unknownCostSum(snapshot, result.raw_cells);
+          response->stats.risk_cost_sum = riskCostSum(snapshot, result.raw_cells);
+          response->stats.max_path_risk = maxPathRisk(snapshot, result.raw_cells);
           response->stats.low_clearance_samples = raw_validation.low_clearance_samples;
           planned_path_pub_->publish(response->path);
           planned_path_compat_pub_->publish(response->path);

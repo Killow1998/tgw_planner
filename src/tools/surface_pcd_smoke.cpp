@@ -545,6 +545,8 @@ int main(int argc, char ** argv)
     << " low_clearance_samples=" << result.metrics.low_clearance_samples
     << " clearance_cost_sum=" << result.metrics.clearance_cost_sum
     << " unknown_cost_sum=" << result.metrics.unknown_cost_sum
+    << " risk_cost_sum=" << result.metrics.risk_cost_sum
+    << " max_path_risk=" << result.metrics.max_path_risk
     << "\n";
   return result.success ? 0 : 1;
 }

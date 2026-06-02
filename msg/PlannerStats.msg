@@ -38,6 +38,8 @@ float64 min_path_clearance_m
 float64 mean_path_clearance_m
 float64 clearance_cost_sum
 float64 unknown_cost_sum
+float64 risk_cost_sum
+float64 max_path_risk
 uint32 low_clearance_samples
 
 float64 start_snap_distance_m
