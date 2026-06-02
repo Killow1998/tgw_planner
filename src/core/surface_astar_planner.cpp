@@ -154,6 +154,8 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
     result.cells.push_back(current);
   }
   std::reverse(result.cells.begin(), result.cells.end());
+  result.raw_cells = result.cells;
+  result.raw_path = cellsToPath(result.raw_cells, snapshot.resolution_m);
   result.metrics.raw_path_waypoints = static_cast<std::uint32_t>(result.cells.size());
   for (std::size_t i = 1; i < result.cells.size(); ++i) {
     result.metrics.raw_path_length_m += gridDistance(result.cells[i - 1U], result.cells[i]) *
@@ -167,13 +169,7 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
       result.cells = shortcut_cells;
     }
   }
-  result.path.reserve(result.cells.size());
-  for (const GridIndex & cell : result.cells) {
-    result.path.push_back({
-      (static_cast<double>(cell.x) + 0.5) * snapshot.resolution_m,
-      (static_cast<double>(cell.y) + 0.5) * snapshot.resolution_m,
-      (static_cast<double>(cell.z) + 0.5) * snapshot.resolution_m});
-  }
+  result.path = cellsToPath(result.cells, snapshot.resolution_m);
   result.success = true;
   result.message = "path found";
   result.metrics.success = true;
@@ -278,6 +274,17 @@ GridIndex SurfaceAstarPlanner::worldToGrid(const Point3 & point, double resoluti
     static_cast<int>(std::floor(point.x / resolution_m)),
     static_cast<int>(std::floor(point.y / resolution_m)),
     static_cast<int>(std::floor(point.z / resolution_m))};
+}
+
+std::vector<Point3> SurfaceAstarPlanner::cellsToPath(
+  const std::vector<GridIndex> & cells, double resolution_m) const
+{
+  std::vector<Point3> path;
+  path.reserve(cells.size());
+  for (const GridIndex & cell : cells) {
+    path.push_back(cellCenter(cell, resolution_m));
+  }
+  return path;
 }
 
 std::vector<GridIndex> SurfaceAstarPlanner::shortcutPath(

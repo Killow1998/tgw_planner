@@ -122,6 +122,9 @@ raw grid paths, but only when the straight segment remains traversable, passes
 footprint checks, avoids forbidden/blocked cells, and does not reduce minimum
 clearance below `planner_shortcut_clearance_ratio` of the raw segment or below
 `robot_width_m / 2 + planner_shortcut_safety_margin_m`.
+If the postprocessed path later fails final validation but the preserved raw
+surface A* path validates, `/tgw_map/plan_path` falls back to the raw path and
+sets `final_path_fallback_to_raw=true`.
 
 `/tgw_map/medial_axis_cloud` publishes clearance ridges filtered by
 `medial_axis_min_clearance_m`. This is a debug layer for checking whether the

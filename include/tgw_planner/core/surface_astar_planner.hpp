@@ -50,6 +50,8 @@ struct SurfacePlanResult
 {
   bool success{false};
   std::string message;
+  std::vector<GridIndex> raw_cells;
+  std::vector<Point3> raw_path;
   std::vector<GridIndex> cells;
   std::vector<Point3> path;
   SurfacePlanMetrics metrics;
@@ -74,6 +76,8 @@ private:
     const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
   Point3 cellCenter(const GridIndex & cell, double resolution_m) const;
   GridIndex worldToGrid(const Point3 & point, double resolution_m) const;
+  std::vector<Point3> cellsToPath(
+    const std::vector<GridIndex> & cells, double resolution_m) const;
   std::vector<GridIndex> shortcutPath(
     const NavigationSnapshot & snapshot, const std::vector<GridIndex> & raw_cells) const;
   bool isShortcutAllowed(

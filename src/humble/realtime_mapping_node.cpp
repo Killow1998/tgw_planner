@@ -949,7 +949,6 @@ private:
 
     response->success = result.success;
     response->message = result.message;
-    response->path = makePathMessage(result.path);
     response->stats.success = result.success;
     response->stats.failure_reason = result.metrics.failure_reason;
     response->stats.search_time_ms =
@@ -970,6 +969,7 @@ private:
     response->stats.low_clearance_samples = result.metrics.low_clearance_samples;
 
     if (!result.success) {
+      response->path = makePathMessage(result.path);
       return;
     }
 
@@ -983,13 +983,38 @@ private:
     response->stats.low_clearance_samples = validation.low_clearance_samples;
 
     if (!validation.valid) {
+      if (!result.raw_path.empty() && result.raw_cells != result.cells) {
+        const auto raw_validation = validator.validate(snapshot, result.raw_path);
+        if (raw_validation.valid) {
+          response->success = true;
+          response->message =
+            "postprocessed path validation failed; fell back to raw surface A* path";
+          response->path = makePathMessage(result.raw_path);
+          response->stats.success = true;
+          response->stats.failure_reason.clear();
+          response->stats.final_path_validated = true;
+          response->stats.final_path_fallback_to_raw = true;
+          response->stats.final_path_validation_failure = validation.failure_reason;
+          response->stats.path_waypoints = static_cast<std::uint32_t>(result.raw_path.size());
+          response->stats.path_length_m = result.metrics.raw_path_length_m;
+          response->stats.path_vertical_gain_m = verticalGain(result.raw_path);
+          response->stats.path_vertical_loss_m = verticalLoss(result.raw_path);
+          response->stats.min_path_clearance_m = raw_validation.min_clearance_m;
+          response->stats.mean_path_clearance_m = raw_validation.mean_clearance_m;
+          response->stats.low_clearance_samples = raw_validation.low_clearance_samples;
+          planned_path_pub_->publish(response->path);
+          return;
+        }
+      }
       response->success = false;
       response->message = "final path validation failed: " + validation.failure_reason;
       response->stats.success = false;
       response->stats.failure_reason = response->message;
+      response->path = makePathMessage(result.path);
       return;
     }
 
+    response->path = makePathMessage(result.path);
     planned_path_pub_->publish(response->path);
   }
 
