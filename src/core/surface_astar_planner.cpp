@@ -170,6 +170,30 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
     }
   }
   result.path = cellsToPath(result.cells, snapshot.resolution_m);
+  std::string validation_failure;
+  if (validatePath(snapshot, result.path, validation_failure)) {
+    result.metrics.final_path_validated = true;
+  } else {
+    const std::string postprocess_failure = validation_failure;
+    std::string raw_validation_failure;
+    if (result.cells != result.raw_cells &&
+      validatePath(snapshot, result.raw_path, raw_validation_failure))
+    {
+      result.metrics.final_path_validated = true;
+      result.metrics.final_path_fallback_to_raw = true;
+      result.metrics.final_path_validation_failure = postprocess_failure;
+      result.cells = result.raw_cells;
+      result.path = result.raw_path;
+      result.metrics.shortcut_count = 0;
+    } else {
+      result.success = false;
+      result.message = "final surface path validation failed: " + postprocess_failure;
+      result.metrics.failure_reason = result.message;
+      result.metrics.final_path_validated = false;
+      result.metrics.final_path_validation_failure = postprocess_failure;
+      return result;
+    }
+  }
   result.success = true;
   result.message = "path found";
   result.metrics.success = true;
@@ -363,6 +387,67 @@ double SurfaceAstarPlanner::minRawClearance(
     min_clearance = std::min(min_clearance, snapshot.clearance.clearanceDistance(raw_cells[i]));
   }
   return std::isfinite(min_clearance) ? min_clearance : 0.0;
+}
+
+bool SurfaceAstarPlanner::validatePath(
+  const NavigationSnapshot & snapshot, const std::vector<Point3> & path,
+  std::string & failure_reason) const
+{
+  if (path.empty()) {
+    failure_reason = "final path is empty";
+    return false;
+  }
+
+  if (path.size() == 1U) {
+    const GridIndex cell = worldToGrid(path.front(), snapshot.resolution_m);
+    if (!isCellTraversable(snapshot, cell)) {
+      failure_reason = "final path sample is not traversable";
+      return false;
+    }
+    if (!isFootprintSupported(snapshot, path.front(), 0.0)) {
+      failure_reason = "final path footprint is not fully supported";
+      return false;
+    }
+    failure_reason.clear();
+    return true;
+  }
+
+  for (std::size_t i = 1; i < path.size(); ++i) {
+    const Point3 & from = path[i - 1U];
+    const Point3 & to = path[i];
+    const double segment_length = distance3d(from, to);
+    const int steps = std::max(
+      1, static_cast<int>(std::ceil(segment_length / options_.shortcut_sample_step_m)));
+    const double yaw = std::atan2(to.y - from.y, to.x - from.x);
+    GridIndex previous_cell = worldToGrid(from, snapshot.resolution_m);
+    for (int step = 0; step <= steps; ++step) {
+      if (i > 1U && step == 0) {
+        continue;
+      }
+      const double t = static_cast<double>(step) / static_cast<double>(steps);
+      const Point3 sample{
+        from.x + (to.x - from.x) * t,
+        from.y + (to.y - from.y) * t,
+        from.z + (to.z - from.z) * t};
+      const GridIndex sample_cell = worldToGrid(sample, snapshot.resolution_m);
+      if (!isCellTraversable(snapshot, sample_cell)) {
+        failure_reason = "final path sample is not traversable";
+        return false;
+      }
+      if (!isFootprintSupported(snapshot, sample, yaw)) {
+        failure_reason = "final path footprint is not fully supported";
+        return false;
+      }
+      if (step > 0 && !isTransitionAllowed(snapshot, previous_cell, sample_cell)) {
+        failure_reason = "final path transition is not allowed";
+        return false;
+      }
+      previous_cell = sample_cell;
+    }
+  }
+
+  failure_reason.clear();
+  return true;
 }
 
 void SurfaceAstarPlanner::fillMetrics(

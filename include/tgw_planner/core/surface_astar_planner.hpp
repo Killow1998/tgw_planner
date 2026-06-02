@@ -44,6 +44,9 @@ struct SurfacePlanMetrics
   std::uint32_t raw_path_waypoints{0};
   double raw_path_length_m{0.0};
   std::uint32_t shortcut_count{0};
+  bool final_path_validated{false};
+  bool final_path_fallback_to_raw{false};
+  std::string final_path_validation_failure;
 };
 
 struct SurfacePlanResult
@@ -86,6 +89,9 @@ private:
   double minRawClearance(
     const NavigationSnapshot & snapshot, const std::vector<GridIndex> & raw_cells,
     std::size_t from_index, std::size_t to_index) const;
+  bool validatePath(
+    const NavigationSnapshot & snapshot, const std::vector<Point3> & path,
+    std::string & failure_reason) const;
   void fillMetrics(const NavigationSnapshot & snapshot, SurfacePlanResult & result) const;
 
   SurfacePlannerOptions options_;

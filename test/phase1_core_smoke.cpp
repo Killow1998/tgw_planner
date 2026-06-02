@@ -168,6 +168,8 @@ int main()
   CHECK(plan.raw_cells.size() == plan.raw_path.size());
   CHECK(plan.metrics.raw_path_waypoints >= plan.cells.size());
   CHECK(plan.metrics.raw_path_length_m >= plan.metrics.path_length_m * 0.99);
+  CHECK(plan.metrics.final_path_validated);
+  CHECK(!plan.metrics.final_path_fallback_to_raw);
   bool used_center_lane = false;
   for (const auto & cell : plan.cells) {
     used_center_lane = used_center_lane || cell.y == 4;
@@ -218,6 +220,7 @@ int main()
   SurfaceAstarPlanner detour_planner(detour_options);
   const auto detour_plan = detour_planner.plan(detour_snapshot, {0, 1, 0}, {4, 1, 0});
   CHECK(detour_plan.success);
+  CHECK(detour_plan.metrics.final_path_validated);
   bool detour_used_blocked = false;
   bool detour_left_center_line = false;
   for (const auto & cell : detour_plan.cells) {
