@@ -94,6 +94,7 @@ target_link_libraries(tgw_realtime_mapping_node
 )
 ament_target_dependencies(tgw_realtime_mapping_node
   geometry_msgs
+  nav_msgs
   rclcpp
   sensor_msgs
   std_msgs
@@ -118,6 +119,7 @@ pluginlib_export_plugin_description_file(rviz_common plugins/plugin_description.
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 target_link_libraries(tgw_planner_node "${cpp_typesupport_target}")
 target_link_libraries(tgw_clicked_point_router_node "${cpp_typesupport_target}")
+target_link_libraries(tgw_realtime_mapping_node "${cpp_typesupport_target}")
 
 if(BUILD_TESTING)
   add_executable(tgw_phase1_core_smoke

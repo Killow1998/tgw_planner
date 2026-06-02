@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cmath>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -9,6 +10,7 @@
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
+#include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
@@ -20,15 +22,20 @@
 #include "tf2_ros/transform_listener.h"
 
 #include "tgw_planner/core/clearance_field.hpp"
+#include "tgw_planner/core/map_snapshot.hpp"
 #include "tgw_planner/core/mapping_options.hpp"
 #include "tgw_planner/core/probabilistic_voxel_map.hpp"
 #include "tgw_planner/core/raycast_integrator.hpp"
+#include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/surface_extractor.hpp"
+#include "tgw_planner/msg/planner_stats.hpp"
+#include "tgw_planner/srv/plan_path.hpp"
 
 namespace
 {
 using tgw_planner::core::GridIndex;
 using tgw_planner::core::MappingOptions;
+using tgw_planner::core::NavigationSnapshot;
 using tgw_planner::core::Point3;
 using tgw_planner::core::Pose3;
 using tgw_planner::core::ProbabilisticVoxelMap;
@@ -40,6 +47,8 @@ using tgw_planner::core::SurfaceExtractionOptions;
 using tgw_planner::core::SurfaceExtractor;
 using tgw_planner::core::SurfaceMap;
 using tgw_planner::core::ClearanceField;
+using tgw_planner::core::SurfaceAstarPlanner;
+using tgw_planner::core::SurfacePlannerOptions;
 
 double stampSeconds(const builtin_interfaces::msg::Time & stamp)
 {
@@ -102,6 +111,7 @@ public:
     map_ = ProbabilisticVoxelMap(mapping_options);
     integrator_ = RaycastIntegrator(mapping_options, selfFilterBox());
     surface_extractor_ = SurfaceExtractor(surfaceOptions());
+    planner_options_ = plannerOptions();
 
     points_topic_ = declare_parameter<std::string>("points_topic", "/tgw_mapping/points");
     pose_topic_ = declare_parameter<std::string>("pose_topic", "/tgw_mapping/pose");
@@ -136,6 +146,7 @@ public:
       create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/wall_boundary_cloud", latched_qos);
     clearance_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/clearance_cloud", latched_qos);
     forbidden_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/forbidden_cloud", latched_qos);
+    planned_path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_map/planned_path", latched_qos);
     stats_json_pub_ = create_publisher<std_msgs::msg::String>("/tgw_map/stats_json", latched_qos);
 
     start_srv_ = create_service<std_srvs::srv::Trigger>(
@@ -147,6 +158,9 @@ public:
     clear_srv_ = create_service<std_srvs::srv::Trigger>(
       "/tgw_mapping/clear",
       std::bind(&TgwRealtimeMappingNode::handleClear, this, std::placeholders::_1, std::placeholders::_2));
+    plan_srv_ = create_service<tgw_planner::srv::PlanPath>(
+      "/tgw_map/plan_path",
+      std::bind(&TgwRealtimeMappingNode::handlePlanPath, this, std::placeholders::_1, std::placeholders::_2));
 
     publish_timer_ = create_wall_timer(
       std::chrono::milliseconds(std::max(100, publish_period_ms_)),
@@ -201,6 +215,18 @@ private:
     options.min_static_hits = declare_parameter<int>("surface_min_static_hits", options.min_static_hits);
     options.require_static_support =
       declare_parameter<bool>("surface_require_static_support", options.require_static_support);
+    return options;
+  }
+
+  SurfacePlannerOptions plannerOptions()
+  {
+    SurfacePlannerOptions options;
+    options.w_clearance = declare_parameter<double>("planner_w_clearance", options.w_clearance);
+    options.w_slope = declare_parameter<double>("planner_w_slope", options.w_slope);
+    options.w_turn = declare_parameter<double>("planner_w_turn", options.w_turn);
+    options.w_unknown = declare_parameter<double>("planner_w_unknown", options.w_unknown);
+    options.max_iterations = static_cast<std::uint32_t>(
+      declare_parameter<int>("planner_max_iterations", static_cast<int>(options.max_iterations)));
     return options;
   }
 
@@ -359,6 +385,157 @@ private:
     publishStatsJson(&surface, &clearance);
   }
 
+  NavigationSnapshot buildNavigationSnapshot() const
+  {
+    NavigationSnapshot snapshot;
+    snapshot.surface = surface_extractor_.extract(map_);
+    snapshot.clearance.compute(
+      snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, map_.resolution());
+    snapshot.resolution_m = map_.resolution();
+    return snapshot;
+  }
+
+  bool snapToTraversable(
+    const NavigationSnapshot & snapshot, const Point3 & point, GridIndex & snapped,
+    double & snap_distance_m) const
+  {
+    const GridIndex seed = map_.worldToGrid(point);
+    double best_distance_cells = std::numeric_limits<double>::infinity();
+    bool found = false;
+    const int max_radius_cells = std::max(1, static_cast<int>(std::ceil(1.0 / map_.resolution())));
+    for (int radius = 0; radius <= max_radius_cells; ++radius) {
+      for (int dx = -radius; dx <= radius; ++dx) {
+        for (int dy = -radius; dy <= radius; ++dy) {
+          for (int dz = -radius; dz <= radius; ++dz) {
+            if (std::max({std::abs(dx), std::abs(dy), std::abs(dz)}) != radius) {
+              continue;
+            }
+            const GridIndex candidate{seed.x + dx, seed.y + dy, seed.z + dz};
+            if (snapshot.surface.traversable_cells.find(candidate) ==
+              snapshot.surface.traversable_cells.end())
+            {
+              continue;
+            }
+            if (snapshot.surface.forbidden_cells.find(candidate) !=
+              snapshot.surface.forbidden_cells.end())
+            {
+              continue;
+            }
+            const double distance_cells =
+              std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz));
+            if (distance_cells < best_distance_cells) {
+              best_distance_cells = distance_cells;
+              snapped = candidate;
+              found = true;
+            }
+          }
+        }
+      }
+      if (found) {
+        break;
+      }
+    }
+    snap_distance_m = found ? best_distance_cells * map_.resolution() : 0.0;
+    return found;
+  }
+
+  nav_msgs::msg::Path makePathMessage(const std::vector<Point3> & path) const
+  {
+    nav_msgs::msg::Path msg;
+    msg.header.frame_id = map_frame_;
+    msg.header.stamp = now();
+    msg.poses.reserve(path.size());
+    for (const Point3 & point : path) {
+      geometry_msgs::msg::PoseStamped pose;
+      pose.header = msg.header;
+      pose.pose.position.x = point.x;
+      pose.pose.position.y = point.y;
+      pose.pose.position.z = point.z;
+      pose.pose.orientation.w = 1.0;
+      msg.poses.push_back(pose);
+    }
+    return msg;
+  }
+
+  double verticalGain(const std::vector<Point3> & path) const
+  {
+    double gain = 0.0;
+    for (std::size_t i = 1; i < path.size(); ++i) {
+      gain += std::max(0.0, path[i].z - path[i - 1U].z);
+    }
+    return gain;
+  }
+
+  double verticalLoss(const std::vector<Point3> & path) const
+  {
+    double loss = 0.0;
+    for (std::size_t i = 1; i < path.size(); ++i) {
+      loss += std::max(0.0, path[i - 1U].z - path[i].z);
+    }
+    return loss;
+  }
+
+  void handlePlanPath(
+    const std::shared_ptr<tgw_planner::srv::PlanPath::Request> request,
+    std::shared_ptr<tgw_planner::srv::PlanPath::Response> response)
+  {
+    const auto started = std::chrono::steady_clock::now();
+    const NavigationSnapshot snapshot = buildNavigationSnapshot();
+    response->stats.stamp = now();
+    response->stats.map_id = "realtime_raycast";
+    response->stats.map_resolution_m = map_.resolution();
+    response->stats.occupied_cells = static_cast<std::uint32_t>(map_.occupiedVoxels().size());
+    response->stats.traversable_cells =
+      static_cast<std::uint32_t>(snapshot.surface.traversable_cells.size());
+    response->stats.blocked_cells = static_cast<std::uint32_t>(snapshot.surface.forbidden_cells.size());
+    response->stats.risk_cells = static_cast<std::uint32_t>(snapshot.surface.boundary_cells.size());
+
+    GridIndex start;
+    GridIndex goal;
+    const Point3 start_point{
+      request->start.pose.position.x, request->start.pose.position.y, request->start.pose.position.z};
+    const Point3 goal_point{
+      request->goal.pose.position.x, request->goal.pose.position.y, request->goal.pose.position.z};
+    if (!snapToTraversable(snapshot, start_point, start, response->stats.start_snap_distance_m)) {
+      response->success = false;
+      response->message = "failed to snap start to realtime traversable surface";
+      response->stats.success = false;
+      response->stats.failure_reason = response->message;
+      return;
+    }
+    if (!snapToTraversable(snapshot, goal_point, goal, response->stats.goal_snap_distance_m)) {
+      response->success = false;
+      response->message = "failed to snap goal to realtime traversable surface";
+      response->stats.success = false;
+      response->stats.failure_reason = response->message;
+      return;
+    }
+
+    const auto search_started = std::chrono::steady_clock::now();
+    const SurfaceAstarPlanner planner(planner_options_);
+    const auto result = planner.plan(snapshot, start, goal);
+    const auto search_finished = std::chrono::steady_clock::now();
+
+    response->success = result.success;
+    response->message = result.message;
+    response->path = makePathMessage(result.path);
+    response->stats.success = result.success;
+    response->stats.failure_reason = result.metrics.failure_reason;
+    response->stats.search_time_ms =
+      std::chrono::duration<double, std::milli>(search_finished - search_started).count();
+    response->stats.total_plan_time_ms =
+      std::chrono::duration<double, std::milli>(search_finished - started).count();
+    response->stats.expanded_nodes = result.metrics.expanded_nodes;
+    response->stats.generated_nodes = result.metrics.generated_nodes;
+    response->stats.path_waypoints = static_cast<std::uint32_t>(result.path.size());
+    response->stats.path_length_m = result.metrics.path_length_m;
+    response->stats.path_vertical_gain_m = verticalGain(result.path);
+    response->stats.path_vertical_loss_m = verticalLoss(result.path);
+    if (result.success) {
+      planned_path_pub_->publish(response->path);
+    }
+  }
+
   void publishStatsJson(
     const SurfaceMap * surface = nullptr, const ClearanceField * clearance = nullptr)
   {
@@ -430,6 +607,7 @@ private:
   ProbabilisticVoxelMap map_;
   RaycastIntegrator integrator_;
   SurfaceExtractor surface_extractor_;
+  SurfacePlannerOptions planner_options_;
 
   std::string points_topic_;
   std::string pose_topic_;
@@ -463,10 +641,12 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr wall_boundary_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr clearance_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr forbidden_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr planned_path_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr stats_json_pub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_srv_;
+  rclcpp::Service<tgw_planner::srv::PlanPath>::SharedPtr plan_srv_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
 };
 

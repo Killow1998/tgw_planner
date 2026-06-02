@@ -44,6 +44,7 @@ Realtime debug topics:
 - `/tgw_map/wall_boundary_cloud`
 - `/tgw_map/clearance_cloud`
 - `/tgw_map/forbidden_cloud`
+- `/tgw_map/planned_path`
 - `/tgw_map/stats_json`
 
 Control services:
@@ -51,3 +52,59 @@ Control services:
 - `/tgw_mapping/start`
 - `/tgw_mapping/stop`
 - `/tgw_mapping/clear`
+
+Planning service:
+
+- `/tgw_map/plan_path` (`tgw_planner/srv/PlanPath`)
+
+Example:
+
+```bash
+ros2 service call /tgw_map/plan_path tgw_planner/srv/PlanPath \
+  "{start: {header: {frame_id: map}, pose: {position: {x: 1.0, y: 0.0, z: 0.15}, orientation: {w: 1.0}}},
+    goal: {header: {frame_id: map}, pose: {position: {x: 5.0, y: 0.0, z: 0.15}, orientation: {w: 1.0}}}}"
+```
+
+`realtime_mapping.launch.py` forwards the core probabilistic mapping,
+surface-extraction, and clearance-aware planner parameters to the node. This is
+important for bag validation because parameters such as `enable_dynamic_filter`,
+`surface_require_static_support`, and planner weights must be testable from the
+launch command line.
+
+## Verified Smoke
+
+On 2026-06-02, the bag at `/home/user/ros_ws/bagfile/f7tof9_g2w_ros2`
+was played for about 45 seconds through:
+
+```bash
+ros2 launch fast_lio mapping_mid360.launch.py rviz:=false
+ros2 launch n3mapping mapping.launch.py rviz:=false
+ros2 launch tgw_planner realtime_mapping.launch.py \
+  points_topic:=/n3mapping/cloud_world \
+  use_tf:=false \
+  assume_cloud_in_map_frame:=true \
+  min_range_m:=0.05 \
+  max_range_m:=50.0 \
+  publish_period_ms:=1000 \
+  max_points_per_scan:=80000 \
+  surface_require_static_support:=false
+timeout 45 ros2 bag play /home/user/ros_ws/bagfile/f7tof9_g2w_ros2 --clock
+```
+
+Observed `/tgw_map/stats_json` after the short run:
+
+```json
+{
+  "received_clouds": 446,
+  "integrated_clouds": 446,
+  "dropped_clouds": 0,
+  "voxel_count": 462485,
+  "occupied_voxels": 21045,
+  "free_voxels": 387162,
+  "static_candidate_voxels": 18033,
+  "dynamic_suspect_voxels": 7799,
+  "surface_cells": 8121,
+  "traversable_cells": 8121,
+  "boundary_cells": 4316
+}
+```

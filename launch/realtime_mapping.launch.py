@@ -14,8 +14,26 @@ def generate_launch_description():
     resolution_m = LaunchConfiguration("resolution_m")
     max_range_m = LaunchConfiguration("max_range_m")
     min_range_m = LaunchConfiguration("min_range_m")
+    p_hit = LaunchConfiguration("p_hit")
+    p_miss = LaunchConfiguration("p_miss")
+    p_occupied_threshold = LaunchConfiguration("p_occupied_threshold")
+    p_free_threshold = LaunchConfiguration("p_free_threshold")
+    min_static_hits = LaunchConfiguration("min_static_hits")
+    min_distinct_views = LaunchConfiguration("min_distinct_views")
+    min_static_lifetime_sec = LaunchConfiguration("min_static_lifetime_sec")
+    enable_self_filter = LaunchConfiguration("enable_self_filter")
+    enable_dynamic_filter = LaunchConfiguration("enable_dynamic_filter")
     max_points_per_scan = LaunchConfiguration("max_points_per_scan")
     publish_period_ms = LaunchConfiguration("publish_period_ms")
+    surface_min_static_hits = LaunchConfiguration("surface_min_static_hits")
+    surface_require_static_support = LaunchConfiguration("surface_require_static_support")
+    robot_height_m = LaunchConfiguration("robot_height_m")
+    max_step_height_m = LaunchConfiguration("max_step_height_m")
+    planner_w_clearance = LaunchConfiguration("planner_w_clearance")
+    planner_w_slope = LaunchConfiguration("planner_w_slope")
+    planner_w_turn = LaunchConfiguration("planner_w_turn")
+    planner_w_unknown = LaunchConfiguration("planner_w_unknown")
+    planner_max_iterations = LaunchConfiguration("planner_max_iterations")
 
     return LaunchDescription(
         [
@@ -28,8 +46,26 @@ def generate_launch_description():
             DeclareLaunchArgument("resolution_m", default_value="0.10"),
             DeclareLaunchArgument("max_range_m", default_value="30.0"),
             DeclareLaunchArgument("min_range_m", default_value="0.30"),
+            DeclareLaunchArgument("p_hit", default_value="0.70"),
+            DeclareLaunchArgument("p_miss", default_value="0.40"),
+            DeclareLaunchArgument("p_occupied_threshold", default_value="0.65"),
+            DeclareLaunchArgument("p_free_threshold", default_value="0.35"),
+            DeclareLaunchArgument("min_static_hits", default_value="3"),
+            DeclareLaunchArgument("min_distinct_views", default_value="2"),
+            DeclareLaunchArgument("min_static_lifetime_sec", default_value="1.0"),
+            DeclareLaunchArgument("enable_self_filter", default_value="true"),
+            DeclareLaunchArgument("enable_dynamic_filter", default_value="true"),
             DeclareLaunchArgument("max_points_per_scan", default_value="120000"),
             DeclareLaunchArgument("publish_period_ms", default_value="1000"),
+            DeclareLaunchArgument("surface_min_static_hits", default_value="1"),
+            DeclareLaunchArgument("surface_require_static_support", default_value="false"),
+            DeclareLaunchArgument("robot_height_m", default_value="0.50"),
+            DeclareLaunchArgument("max_step_height_m", default_value="0.30"),
+            DeclareLaunchArgument("planner_w_clearance", default_value="0.80"),
+            DeclareLaunchArgument("planner_w_slope", default_value="0.30"),
+            DeclareLaunchArgument("planner_w_turn", default_value="0.10"),
+            DeclareLaunchArgument("planner_w_unknown", default_value="2.0"),
+            DeclareLaunchArgument("planner_max_iterations", default_value="250000"),
             Node(
                 package="tgw_planner",
                 executable="tgw_realtime_mapping_node",
@@ -46,8 +82,26 @@ def generate_launch_description():
                         "resolution_m": resolution_m,
                         "max_range_m": max_range_m,
                         "min_range_m": min_range_m,
+                        "p_hit": p_hit,
+                        "p_miss": p_miss,
+                        "p_occupied_threshold": p_occupied_threshold,
+                        "p_free_threshold": p_free_threshold,
+                        "min_static_hits": min_static_hits,
+                        "min_distinct_views": min_distinct_views,
+                        "min_static_lifetime_sec": min_static_lifetime_sec,
+                        "enable_self_filter": enable_self_filter,
+                        "enable_dynamic_filter": enable_dynamic_filter,
                         "max_points_per_scan": max_points_per_scan,
                         "publish_period_ms": publish_period_ms,
+                        "surface_min_static_hits": surface_min_static_hits,
+                        "surface_require_static_support": surface_require_static_support,
+                        "robot_height_m": robot_height_m,
+                        "max_step_height_m": max_step_height_m,
+                        "planner_w_clearance": planner_w_clearance,
+                        "planner_w_slope": planner_w_slope,
+                        "planner_w_turn": planner_w_turn,
+                        "planner_w_unknown": planner_w_unknown,
+                        "planner_max_iterations": planner_max_iterations,
                     }
                 ],
             ),
