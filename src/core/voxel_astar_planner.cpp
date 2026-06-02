@@ -186,6 +186,18 @@ PlanResult VoxelAstarPlanner::plan(
     std::chrono::duration<double, std::milli>(search_t1 - search_t0).count();
 
   if (!found) {
+    double closest_distance_cells = std::numeric_limits<double>::infinity();
+    for (const auto & state : closed) {
+      const double distance_cells = gridDistance(state.cell, result.goal_cell);
+      if (distance_cells < closest_distance_cells) {
+        closest_distance_cells = distance_cells;
+        result.closest_closed_cell = state.cell;
+        result.closest_closed_cell_valid = true;
+      }
+    }
+    if (result.closest_closed_cell_valid) {
+      result.closest_closed_distance_m = closest_distance_cells * map.resolution();
+    }
     result.message = result.metrics.expanded_nodes >= max_iterations_ ?
       "A* reached max_iterations before finding a path" : "A* failed to find a path";
     result.metrics.failure_reason = result.message;

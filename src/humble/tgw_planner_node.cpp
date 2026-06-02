@@ -34,6 +34,7 @@ using tgw_planner::core::PlanResult;
 using tgw_planner::core::PlannerMetrics;
 using tgw_planner::core::Point3;
 using tgw_planner::core::StairFlight;
+using tgw_planner::core::StairFlightType;
 using tgw_planner::core::StairFragmentRescueReason;
 using tgw_planner::core::StairFlightRejectReason;
 using tgw_planner::core::VoxelAstarPlanner;
@@ -92,6 +93,19 @@ const char * rejectReasonName(StairFlightRejectReason reason)
       return "same_floor_ends";
     case StairFlightRejectReason::Count:
       break;
+  }
+  return "unknown";
+}
+
+const char * stairFlightTypeName(StairFlightType type)
+{
+  switch (type) {
+    case StairFlightType::Straight:
+      return "straight";
+    case StairFlightType::Curved:
+      return "curved";
+    case StairFlightType::Spiral:
+      return "spiral";
   }
   return "unknown";
 }
@@ -381,9 +395,10 @@ private:
     for (const auto & flight : map_.stairFlights()) {
       RCLCPP_INFO(
         get_logger(),
-        "[NavMapBuilder] StairFlight id=%d cells=%zu width=%.3f length=%.3f slope=%.3f "
+        "[NavMapBuilder] StairFlight id=%d type=%s cells=%zu width=%.3f length=%.3f slope=%.3f "
         "z=[%.3f, %.3f] components=[%d, %d] low=[%.3f, %.3f, %.3f] high=[%.3f, %.3f, %.3f]",
-        flight.id, flight.cells.size(), flight.width_m, flight.length_m, flight.slope,
+        flight.id, stairFlightTypeName(flight.type), flight.cells.size(),
+        flight.width_m, flight.length_m, flight.slope,
         flight.z_min, flight.z_max, flight.low_component_id, flight.high_component_id,
         flight.low_endpoint.x, flight.low_endpoint.y, flight.low_endpoint.z,
         flight.high_endpoint.x, flight.high_endpoint.y, flight.high_endpoint.z);
@@ -1105,15 +1120,17 @@ private:
       get_logger(), "[Planner] goal_snapped: [%d, %d, %d]", result.goal_cell.x,
       result.goal_cell.y, result.goal_cell.z);
     RCLCPP_INFO(
-      get_logger(), "[Planner] start_cell_type: stair=%s floor_or_landing=%s flight_id=%d",
+      get_logger(),
+      "[Planner] start_cell_type: stair=%s floor_or_landing=%s flight_id=%d floor_component=%d",
       map_.isStairCell(result.start_cell) ? "true" : "false",
       map_.isFloorOrLandingCell(result.start_cell) ? "true" : "false",
-      map_.stairFlightId(result.start_cell));
+      map_.stairFlightId(result.start_cell), map_.floorComponentId(result.start_cell));
     RCLCPP_INFO(
-      get_logger(), "[Planner] goal_cell_type: stair=%s floor_or_landing=%s flight_id=%d",
+      get_logger(),
+      "[Planner] goal_cell_type: stair=%s floor_or_landing=%s flight_id=%d floor_component=%d",
       map_.isStairCell(result.goal_cell) ? "true" : "false",
       map_.isFloorOrLandingCell(result.goal_cell) ? "true" : "false",
-      map_.stairFlightId(result.goal_cell));
+      map_.stairFlightId(result.goal_cell), map_.floorComponentId(result.goal_cell));
     RCLCPP_INFO(
       get_logger(), "[Planner] start_snap_distance_m: %.3f",
       result.metrics.start_snap_distance_m);
@@ -1122,6 +1139,18 @@ private:
     RCLCPP_INFO(get_logger(), "[Planner] success: %s", result.success ? "true" : "false");
     if (!result.success) {
       RCLCPP_WARN(get_logger(), "[Planner] failure_reason: %s", result.message.c_str());
+      if (result.closest_closed_cell_valid) {
+        RCLCPP_WARN(
+          get_logger(),
+          "[Planner] closest_closed_to_goal: [%d, %d, %d] distance=%.3f stair=%s "
+          "floor_or_landing=%s flight_id=%d floor_component=%d",
+          result.closest_closed_cell.x, result.closest_closed_cell.y,
+          result.closest_closed_cell.z, result.closest_closed_distance_m,
+          map_.isStairCell(result.closest_closed_cell) ? "true" : "false",
+          map_.isFloorOrLandingCell(result.closest_closed_cell) ? "true" : "false",
+          map_.stairFlightId(result.closest_closed_cell),
+          map_.floorComponentId(result.closest_closed_cell));
+      }
     }
     RCLCPP_INFO(get_logger(), "[Planner] search_time_ms: %.3f", result.metrics.search_time_ms);
     RCLCPP_INFO(get_logger(), "[Planner] expanded_nodes: %u", result.metrics.expanded_nodes);

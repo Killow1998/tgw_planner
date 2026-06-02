@@ -387,6 +387,28 @@ int NavigationMap::overheadDistanceCells(
   return 0;
 }
 
+int NavigationMap::supportTopZNearColumn(int x, int y, int stand_z, int max_dz) const
+{
+  const ColumnInfo * column = findColumn(x, y);
+  if (!column) {
+    return std::numeric_limits<int>::min();
+  }
+
+  const int min_support_z = stand_z - max_dz - 1;
+  const int max_support_z = stand_z + max_dz;
+  int best = std::numeric_limits<int>::min();
+  for (const auto & run : column->occupied_runs) {
+    if (run.z_max < min_support_z) {
+      continue;
+    }
+    if (run.z_max > max_support_z) {
+      continue;
+    }
+    best = std::max(best, run.z_max);
+  }
+  return best;
+}
+
 bool NavigationMap::isCollisionFreeForRobot(const GridIndex & idx) const
 {
   const int radius_cells = std::max(1, static_cast<int>(std::ceil(robot_radius_m_ / resolution_m_)));
@@ -403,12 +425,17 @@ bool NavigationMap::isCollisionFreeForRobot(const GridIndex & idx) const
       if (isBlocked(footprint)) {
         return false;
       }
+      const int support_top_z =
+        supportTopZNearColumn(footprint.x, footprint.y, idx.z, maxStepCells());
+      const int local_clearance_z =
+        support_top_z == std::numeric_limits<int>::min() ?
+        idx.z + low_step_clearance_cells : support_top_z + low_step_clearance_cells + 1;
       for (int dz = 0; dz <= height_cells; ++dz) {
         const GridIndex check{idx.x + dx, idx.y + dy, idx.z + dz};
         if (isBlocked(check)) {
           return false;
         }
-        if (dz <= low_step_clearance_cells) {
+        if (check.z <= local_clearance_z) {
           continue;
         }
         if (isOccupied(check)) {
@@ -459,12 +486,17 @@ bool NavigationMap::isFootprintCollisionFreeAt(
     if (isBlocked(footprint)) {
       return false;
     }
+    const int support_top_z =
+      supportTopZNearColumn(column.x, column.y, idx.z, maxStepCells());
+    const int local_clearance_z =
+      support_top_z == std::numeric_limits<int>::min() ?
+      idx.z + low_step_clearance_cells : support_top_z + low_step_clearance_cells + 1;
     for (int dz = 0; dz <= height_cells; ++dz) {
       const GridIndex check{column.x, column.y, idx.z + dz};
       if (isBlocked(check)) {
         return false;
       }
-      if (dz <= low_step_clearance_cells) {
+      if (check.z <= local_clearance_z) {
         continue;
       }
       if (isOccupied(check)) {
@@ -620,6 +652,18 @@ int NavigationMap::stairFlightId(const GridIndex & cell) const
   return it == stair_cell_info_.end() ? -1 : it->second.stair_flight_id;
 }
 
+int NavigationMap::floorComponentId(const GridIndex & cell) const
+{
+  for (const auto & component : floor_components_) {
+    for (const auto & candidate : component.cells) {
+      if (candidate == cell) {
+        return component.id;
+      }
+    }
+  }
+  return -1;
+}
+
 bool NavigationMap::isStairCell(const GridIndex & cell) const
 {
   return isStairTraversable(cell);
@@ -705,9 +749,10 @@ double NavigationMap::distanceToFlightCenterline(const GridIndex & cell, int sta
 bool NavigationMap::isNearFlightEndpoint(
   const GridIndex & cell, const StairFlight & flight, const Point3 & endpoint) const
 {
-  (void)flight;
   const Point3 point = gridToWorld(cell);
   const double portal_radius_m =
+    flight.type == StairFlightType::Curved || flight.type == StairFlightType::Spiral ?
+    std::max({1.20, 3.0 * robot_width_m_, 5.0 * resolution_m_}) :
     std::max({0.45, 2.0 * robot_width_m_, 3.0 * resolution_m_});
   return pointDistance3d(point, endpoint) <= portal_radius_m;
 }
@@ -1385,8 +1430,31 @@ bool NavigationMap::isStairTransitionAllowed(const GridIndex & from, const GridI
       (from_info.high_component_id >= 0 &&
       (from_info.high_component_id == to_info.low_component_id ||
       from_info.high_component_id == to_info.high_component_id));
-    return shared_component && isNearStairPortal(from, from_flight) &&
-           isNearStairPortal(to, to_flight);
+    const bool portal_pair =
+      isNearStairPortal(from, from_flight) && isNearStairPortal(to, to_flight);
+    if (shared_component && portal_pair) {
+      return true;
+    }
+
+    const bool curved_pair =
+      from_info.type == StairFlightType::Curved || from_info.type == StairFlightType::Spiral ||
+      to_info.type == StairFlightType::Curved || to_info.type == StairFlightType::Spiral;
+    if (!curved_pair || !portal_pair) {
+      return false;
+    }
+
+    const double endpoint_gap_m = std::min({
+      pointDistance3d(from_info.low_endpoint, to_info.low_endpoint),
+      pointDistance3d(from_info.low_endpoint, to_info.high_endpoint),
+      pointDistance3d(from_info.high_endpoint, to_info.low_endpoint),
+      pointDistance3d(from_info.high_endpoint, to_info.high_endpoint)});
+    const double endpoint_z_gap_m = std::min({
+      std::abs(from_info.low_endpoint.z - to_info.low_endpoint.z),
+      std::abs(from_info.low_endpoint.z - to_info.high_endpoint.z),
+      std::abs(from_info.high_endpoint.z - to_info.low_endpoint.z),
+      std::abs(from_info.high_endpoint.z - to_info.high_endpoint.z)});
+    return endpoint_gap_m <= std::max(1.80, 8.0 * resolution_m_) &&
+           endpoint_z_gap_m <= std::max(1.20, 6.0 * resolution_m_);
   }
   if (!isInsideStairSafeCorridor(from, from_flight) ||
     !isInsideStairSafeCorridor(to, to_flight))
@@ -1395,6 +1463,22 @@ bool NavigationMap::isStairTransitionAllowed(const GridIndex & from, const GridI
   }
 
   const auto & flight = stair_flights_[from_flight];
+  if (flight.type == StairFlightType::Curved || flight.type == StairFlightType::Spiral) {
+    const double from_error = distanceToFlightCenterline(from, from_flight);
+    const double to_error = distanceToFlightCenterline(to, to_flight);
+    if (!std::isfinite(from_error) || !std::isfinite(to_error)) {
+      return false;
+    }
+    const int dz = to.z - from.z;
+    if (std::abs(dz) > maxStepCells()) {
+      return false;
+    }
+    if (dz == 0) {
+      return to_error <= flight.safe_half_width_m + resolution_m_;
+    }
+    return to_error <= flight.safe_half_width_m + 0.5 * resolution_m_;
+  }
+
   const double move_x = static_cast<double>(to.x - from.x) * resolution_m_;
   const double move_y = static_cast<double>(to.y - from.y) * resolution_m_;
   const double move_norm = std::hypot(move_x, move_y);
@@ -2592,6 +2676,7 @@ StairSegmentInfo NavigationMap::makeSegmentFromFragmentIds(const std::vector<int
     }
     const auto & fragment = loose_stair_fragments_[static_cast<std::size_t>(fragment_id)];
     segment.cells.insert(segment.cells.end(), fragment.cells.begin(), fragment.cells.end());
+    segment.spiral_like = segment.spiral_like || fragment.curved_like;
   }
   std::sort(
     segment.cells.begin(), segment.cells.end(),

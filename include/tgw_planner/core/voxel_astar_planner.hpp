@@ -44,8 +44,11 @@ struct PlanResult
   std::string message;
   bool start_snap_success{false};
   bool goal_snap_success{false};
+  bool closest_closed_cell_valid{false};
   GridIndex start_cell;
   GridIndex goal_cell;
+  GridIndex closest_closed_cell;
+  double closest_closed_distance_m{0.0};
   std::vector<Point3> path;
   PlannerMetrics metrics;
 };

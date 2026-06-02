@@ -297,6 +297,7 @@ public:
   double getStairCenterCost(const GridIndex & idx) const;
   std::vector<std::vector<Point3>> stairCenterlines() const;
   int stairFlightId(const GridIndex & cell) const;
+  int floorComponentId(const GridIndex & cell) const;
   bool isStairCell(const GridIndex & cell) const;
   bool isFloorOrLandingCell(const GridIndex & cell) const;
   bool isInsideStairSafeCorridor(const GridIndex & cell, int stair_flight_id) const;
@@ -362,6 +363,7 @@ private:
   const ColumnInfo * findColumn(int x, int y) const;
   bool hasHeadClearanceInColumn(const GridIndex & idx, int height_cells) const;
   int overheadDistanceCells(const GridIndex & idx, int height_cells, bool & overhead_known) const;
+  int supportTopZNearColumn(int x, int y, int stand_z, int max_dz) const;
   void rebuildStairSegments();
   bool stairSlope(const GridIndex & idx, double & slope_x, double & slope_y) const;
   bool stairAxis(const GridIndex & idx, int & axis_x, int & axis_y) const;
