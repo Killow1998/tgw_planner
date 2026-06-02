@@ -50,6 +50,23 @@ Dirty-map dynamic artifact regression:
 src/tgw_planner/scripts/run_dirty_map_tests.sh
 ```
 
+Realtime bag plan probe:
+
+```bash
+TGW_BAG_PLAY_SECONDS=75 \
+TGW_BAG_PROBE_LOG_DIR=/tmp/tgw_real_bag_plan_probe \
+src/tgw_planner/scripts/run_realtime_bag_plan_probe.sh \
+  /home/user/ros_ws/bagfile/f7tof9_g2w_ros2
+```
+
+The probe launches FAST-LIO, n3mapping, and `tgw_realtime_mapping_node`, waits
+for `/tgw_realtime_mapping_node`, `/tgw_mapping/get_snapshot`, and
+`/tgw_map/plan_path`, plays the bag, selects two points from the largest
+traversable surface component, and calls `/tgw_map/plan_path`. On failure it
+prints tails from the FAST-LIO, n3mapping, tgw, bag, probe, and snapshot logs.
+Use `TGW_BAG_PLAY_SECONDS=5` for a startup/diagnostic smoke only; it is not a
+full map quality validation.
+
 Realtime debug topics:
 
 - `/tgw_map/occupied_cloud`
