@@ -150,6 +150,21 @@ int main()
   CHECK(medial_has_center);
   CHECK(!medial_has_edge);
 
+  NavigationSnapshot clearance_snapshot;
+  clearance_snapshot.resolution_m = options.resolution_m;
+  clearance_snapshot.surface = surface;
+  clearance_snapshot.clearance = clearance;
+  clearance_snapshot.risk = risk;
+  PathValidationOptions clearance_validation_options;
+  clearance_validation_options.require_footprint_support = false;
+  clearance_validation_options.min_clearance_m = clearance.clearanceDistance(center) + 0.01;
+  PathValidator clearance_validator(footprint, clearance_validation_options);
+  const auto low_clearance_validation =
+    clearance_validator.validate(clearance_snapshot, {corridor_map.gridToWorld(center)});
+  CHECK(!low_clearance_validation.valid);
+  CHECK(low_clearance_validation.low_clearance_samples == 1U);
+  CHECK(low_clearance_validation.failure_reason == "final path clearance below minimum");
+
   ProbabilisticVoxelMap floor_ceiling_map(options);
   for (int x = 0; x <= 2; ++x) {
     for (int y = 0; y <= 2; ++y) {
