@@ -67,6 +67,20 @@ prints tails from the FAST-LIO, n3mapping, tgw, bag, probe, and snapshot logs.
 Use `TGW_BAG_PLAY_SECONDS=5` for a startup/diagnostic smoke only; it is not a
 full map quality validation.
 
+The automatic start/goal selector can be tightened for stronger probes:
+
+```bash
+TGW_PROBE_MIN_DXY=4.0 TGW_PROBE_MAX_DXY=8.0 \
+TGW_PROBE_MIN_ABS_DZ=0.0 TGW_PROBE_MAX_ABS_DZ=0.20 \
+TGW_PROBE_PLAN_TIMEOUT=45 \
+src/tgw_planner/scripts/run_realtime_bag_plan_probe.sh \
+  /home/user/ros_ws/bagfile/f7tof9_g2w_ros2
+```
+
+For cross-height validation, raise `TGW_PROBE_MIN_ABS_DZ` and
+`TGW_PROBE_MAX_ABS_DZ`. If no pair is found, the current bag segment does not
+contain a connected traversable component matching that geometry.
+
 Realtime debug topics:
 
 - `/tgw_map/occupied_cloud`

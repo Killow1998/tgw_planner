@@ -5,7 +5,12 @@ if [[ -f /opt/ros/humble/setup.bash ]]; then
   # shellcheck disable=SC1091
   source /opt/ros/humble/setup.bash
 fi
-if [[ -f install/setup.bash ]]; then
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+workspace_setup="${script_dir}/../../../install/setup.bash"
+if [[ -f "${workspace_setup}" ]]; then
+  # shellcheck disable=SC1090
+  source "${workspace_setup}"
+elif [[ -f install/setup.bash ]]; then
   # shellcheck disable=SC1091
   source install/setup.bash
 fi
@@ -19,6 +24,14 @@ bag_path="${1:-/home/user/ros_ws/bagfile/f7tof9_g2w_ros2}"
 play_seconds="${TGW_BAG_PLAY_SECONDS:-75}"
 log_dir="${TGW_BAG_PROBE_LOG_DIR:-/tmp/tgw_real_bag_plan_probe}"
 mkdir -p "${log_dir}"
+rm -f \
+  "${log_dir}/domain.log" \
+  "${log_dir}/fast_lio.log" \
+  "${log_dir}/n3mapping.log" \
+  "${log_dir}/tgw.log" \
+  "${log_dir}/bag.log" \
+  "${log_dir}/probe.out" \
+  "${log_dir}/snapshot.out"
 echo "ROS_DOMAIN_ID=${ROS_DOMAIN_ID}" >"${log_dir}/domain.log"
 
 if [[ ! -e "${bag_path}" ]]; then
@@ -128,6 +141,7 @@ fi
 set +e
 python3 - >"${log_dir}/probe.out" 2>&1 <<'PY'
 import math
+import os
 import sys
 from collections import deque
 
@@ -165,6 +179,17 @@ def spin_until(node, predicate, timeout):
 
 
 def main():
+    min_dxy = float(os.environ.get("TGW_PROBE_MIN_DXY", "1.0"))
+    max_dxy = float(os.environ.get("TGW_PROBE_MAX_DXY", "2.0"))
+    min_abs_dz = float(os.environ.get("TGW_PROBE_MIN_ABS_DZ", "0.0"))
+    max_abs_dz = float(os.environ.get("TGW_PROBE_MAX_ABS_DZ", "0.05"))
+    plan_timeout = float(os.environ.get("TGW_PROBE_PLAN_TIMEOUT", "20.0"))
+    sample_limit = int(os.environ.get("TGW_PROBE_SAMPLE_LIMIT", "2000"))
+    print(
+        f"probe_criteria=min_dxy:{min_dxy:.3f} max_dxy:{max_dxy:.3f} "
+        f"min_abs_dz:{min_abs_dz:.3f} max_abs_dz:{max_abs_dz:.3f} "
+        f"plan_timeout:{plan_timeout:.1f} sample_limit:{sample_limit}")
+
     rclpy.init()
     node = Probe()
     if not spin_until(node, lambda: node.cloud is not None, 8.0):
@@ -211,7 +236,7 @@ def main():
     components.sort(key=len, reverse=True)
     print(f"surface_component_count={len(components)} largest_component_size={len(components[0]) if components else 0}")
     largest = components[0] if components else []
-    sampled = largest[::max(1, len(largest) // 2000)]
+    sampled = largest[::max(1, len(largest) // max(1, sample_limit))]
     chosen = None
     for a_cell in sampled:
         a = cells[a_cell]
@@ -219,19 +244,20 @@ def main():
             b = cells[b_cell]
             dz = abs(a[2] - b[2])
             dxy = math.hypot(a[0] - b[0], a[1] - b[1])
-            if dz <= 0.05 and 1.0 <= dxy <= 2.0:
+            if min_abs_dz <= dz <= max_abs_dz and min_dxy <= dxy <= max_dxy:
                 chosen = (a, b, dxy)
                 break
         if chosen is not None:
             break
-    if chosen is None and len(largest) >= 2:
+    if chosen is None and min_abs_dz <= 0.0 and len(largest) >= 2:
         a = cells[largest[0]]
         b = min(
             (cells[cell] for cell in largest[1:]),
-            key=lambda p: abs(p[2] - a[2]) + abs(math.hypot(p[0] - a[0], p[1] - a[1]) - 1.0))
+            key=lambda p: abs(p[2] - a[2]) +
+            abs(math.hypot(p[0] - a[0], p[1] - a[1]) - min_dxy))
         chosen = (a, b, math.hypot(a[0] - b[0], a[1] - b[1]))
     if chosen is None:
-        print("success=False reason=no_component_pair")
+        print("success=False reason=no_component_pair_matching_probe_criteria")
         return 1
 
     start, goal, dxy = chosen
@@ -248,7 +274,7 @@ def main():
     req.goal.pose.position.x, req.goal.pose.position.y, req.goal.pose.position.z = goal
     req.goal.pose.orientation.w = 1.0
     future = node.cli.call_async(req)
-    rclpy.spin_until_future_complete(node, future, timeout_sec=20.0)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=plan_timeout)
     if not future.done() or future.result() is None:
         print("success=False reason=plan_timeout")
         return 1

@@ -127,3 +127,95 @@ set one. This prevents stale transient-local `/tgw_map/traversable_cloud` data
 from an older ROS graph from being mistaken for current realtime mapping output.
 The script also fails before planning if `/tgw_mapping/get_snapshot` reports
 `integrated_clouds=0`.
+
+## Parameterized Probe Update 2026-06-03
+
+`scripts/run_realtime_bag_plan_probe.sh` now sources the workspace overlay from
+its own path, clears stale probe logs before each run, and supports automatic
+start/goal criteria through:
+
+- `TGW_PROBE_MIN_DXY`
+- `TGW_PROBE_MAX_DXY`
+- `TGW_PROBE_MIN_ABS_DZ`
+- `TGW_PROBE_MAX_ABS_DZ`
+- `TGW_PROBE_PLAN_TIMEOUT`
+- `TGW_PROBE_SAMPLE_LIMIT`
+
+Default same-height probe after this change:
+
+```text
+received_clouds=635
+integrated_clouds=635
+dynamic_points=23072
+surface_points=1235
+traversable_points=1235
+probe_criteria=min_dxy:1.000 max_dxy:2.000 min_abs_dz:0.000 max_abs_dz:0.050 plan_timeout:20.0
+surface_component_count=548
+largest_component_size=318
+success=True
+final_path_validated=True
+expanded_nodes=79
+path_waypoints=12
+path_length_m=1.390
+mean_path_clearance_m=0.097
+```
+
+Longer same-height probe:
+
+```bash
+TGW_PROBE_MIN_DXY=3.0 TGW_PROBE_MAX_DXY=6.0 \
+TGW_PROBE_MIN_ABS_DZ=0.0 TGW_PROBE_MAX_ABS_DZ=0.20 \
+TGW_PROBE_PLAN_TIMEOUT=45 \
+scripts/run_realtime_bag_plan_probe.sh /home/user/ros_ws/bagfile/f7tof9_g2w_ros2
+```
+
+Result:
+
+```text
+received_clouds=635
+integrated_clouds=635
+surface_points=1246
+traversable_points=1246
+surface_component_count=546
+largest_component_size=323
+dxy=3.061
+success=True
+final_path_validated=True
+expanded_nodes=317
+path_waypoints=38
+path_length_m=4.363
+mean_path_clearance_m=0.066
+```
+
+Cross-height probe:
+
+```bash
+TGW_PROBE_MIN_DXY=1.0 TGW_PROBE_MAX_DXY=8.0 \
+TGW_PROBE_MIN_ABS_DZ=0.50 TGW_PROBE_MAX_ABS_DZ=3.00 \
+TGW_PROBE_PLAN_TIMEOUT=60 \
+scripts/run_realtime_bag_plan_probe.sh /home/user/ros_ws/bagfile/f7tof9_g2w_ros2
+```
+
+Result:
+
+```text
+received_clouds=633
+integrated_clouds=633
+surface_points=1264
+traversable_points=1264
+surface_component_count=568
+largest_component_size=341
+success=False
+reason=no_component_pair_matching_probe_criteria
+```
+
+Interpretation:
+
+- The realtime stack can produce validated short and 3 m same-height paths from
+  this 75 s bag slice.
+- The same slice does not produce a connected traversable component containing
+  a point pair with `abs(dz) >= 0.5 m`; this is map coverage/connectivity
+  evidence, not a failed path search between chosen cross-floor endpoints.
+- Mean clearance is low on the real-bag probes, so broader map-quality and
+  corridor-quality validation is still required before treating the realtime
+  layer as deployment-ready.
