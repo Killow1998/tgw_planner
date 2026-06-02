@@ -172,6 +172,7 @@ double SurfaceAstarPlanner::transitionCost(
 {
   const double step = gridDistance(from, to) * snapshot.resolution_m;
   const double clearance_penalty = options_.w_clearance * snapshot.clearance.clearancePenalty(to);
+  const double risk_penalty = options_.w_risk * snapshot.risk.riskCost(to);
   double slope_penalty = 0.0;
   const auto from_surface = snapshot.surface.surface_cells.find(from);
   const auto to_surface = snapshot.surface.surface_cells.find(to);
@@ -193,7 +194,7 @@ double SurfaceAstarPlanner::transitionCost(
     }
   }
 
-  return step + clearance_penalty + slope_penalty + turn_penalty;
+  return step + clearance_penalty + risk_penalty + slope_penalty + turn_penalty;
 }
 
 bool SurfaceAstarPlanner::isCellTraversable(
@@ -277,6 +278,9 @@ void SurfaceAstarPlanner::fillMetrics(
       std::min(result.metrics.min_path_clearance_m, clearance);
     clearance_sum += clearance;
     result.metrics.clearance_cost_sum += snapshot.clearance.clearancePenalty(result.cells[i]);
+    const double risk = snapshot.risk.riskCost(result.cells[i]);
+    result.metrics.risk_cost_sum += risk;
+    result.metrics.max_path_risk = std::max(result.metrics.max_path_risk, risk);
     if (clearance < 0.30) {
       ++result.metrics.low_clearance_samples;
     }

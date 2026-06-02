@@ -32,6 +32,7 @@
 #include "tgw_planner/core/path_validator.hpp"
 #include "tgw_planner/core/probabilistic_voxel_map.hpp"
 #include "tgw_planner/core/raycast_integrator.hpp"
+#include "tgw_planner/core/risk_field.hpp"
 #include "tgw_planner/core/robot_footprint.hpp"
 #include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/surface_extractor.hpp"
@@ -52,6 +53,8 @@ using tgw_planner::core::Pose3;
 using tgw_planner::core::ProbabilisticVoxelMap;
 using tgw_planner::core::RaycastIntegrator;
 using tgw_planner::core::RaycastStats;
+using tgw_planner::core::RiskField;
+using tgw_planner::core::RiskFieldOptions;
 using tgw_planner::core::RobotFootprint;
 using tgw_planner::core::RobotFootprintOptions;
 using tgw_planner::core::ScanInput;
@@ -125,6 +128,7 @@ public:
     integrator_ = RaycastIntegrator(mapping_options, selfFilterBox());
     surface_extractor_ = SurfaceExtractor(surfaceOptions());
     footprint_ = RobotFootprint(footprintOptions());
+    risk_options_ = riskOptions();
     planner_options_ = plannerOptions();
     planner_options_.footprint = footprint_.options();
     validation_options_ = validationOptions();
@@ -165,6 +169,7 @@ public:
     clearance_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/clearance_cloud", latched_qos);
     medial_axis_pub_ =
       create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/medial_axis_cloud", latched_qos);
+    risk_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/risk_cloud", latched_qos);
     forbidden_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>("/tgw_map/forbidden_cloud", latched_qos);
     planned_path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_map/planned_path", latched_qos);
     stats_json_pub_ = create_publisher<std_msgs::msg::String>("/tgw_map/stats_json", latched_qos);
@@ -250,6 +255,7 @@ private:
   {
     SurfacePlannerOptions options;
     options.w_clearance = declare_parameter<double>("planner_w_clearance", options.w_clearance);
+    options.w_risk = declare_parameter<double>("planner_w_risk", options.w_risk);
     options.w_slope = declare_parameter<double>("planner_w_slope", options.w_slope);
     options.w_turn = declare_parameter<double>("planner_w_turn", options.w_turn);
     options.w_unknown = declare_parameter<double>("planner_w_unknown", options.w_unknown);
@@ -259,6 +265,20 @@ private:
       declare_parameter<bool>("planner_require_footprint", options.require_footprint_support);
     options.swept_sample_step_m =
       declare_parameter<double>("planner_swept_sample_step_m", options.swept_sample_step_m);
+    return options;
+  }
+
+  RiskFieldOptions riskOptions()
+  {
+    RiskFieldOptions options;
+    options.boundary_risk = declare_parameter<double>("risk_boundary", options.boundary_risk);
+    options.dropoff_risk = declare_parameter<double>("risk_dropoff", options.dropoff_risk);
+    options.wall_risk = declare_parameter<double>("risk_wall", options.wall_risk);
+    options.forbidden_risk = declare_parameter<double>("risk_forbidden", options.forbidden_risk);
+    options.low_clearance_risk =
+      declare_parameter<double>("risk_low_clearance", options.low_clearance_risk);
+    options.low_clearance_threshold_m =
+      declare_parameter<double>("risk_low_clearance_threshold_m", options.low_clearance_threshold_m);
     return options;
   }
 
@@ -401,6 +421,45 @@ private:
     return msg;
   }
 
+  sensor_msgs::msg::PointCloud2 makeRiskCloud(const RiskField & risk) const
+  {
+    std::vector<GridIndex> cells;
+    cells.reserve(risk.risks().size());
+    for (const auto & entry : risk.risks()) {
+      cells.push_back(entry.first);
+    }
+
+    sensor_msgs::msg::PointCloud2 msg;
+    msg.header.frame_id = map_frame_;
+    msg.header.stamp = now();
+    msg.height = 1;
+    msg.width = static_cast<std::uint32_t>(cells.size());
+    sensor_msgs::PointCloud2Modifier modifier(msg);
+    modifier.setPointCloud2Fields(
+      4,
+      "x", 1, sensor_msgs::msg::PointField::FLOAT32,
+      "y", 1, sensor_msgs::msg::PointField::FLOAT32,
+      "z", 1, sensor_msgs::msg::PointField::FLOAT32,
+      "intensity", 1, sensor_msgs::msg::PointField::FLOAT32);
+    modifier.resize(cells.size());
+    sensor_msgs::PointCloud2Iterator<float> iter_x(msg, "x");
+    sensor_msgs::PointCloud2Iterator<float> iter_y(msg, "y");
+    sensor_msgs::PointCloud2Iterator<float> iter_z(msg, "z");
+    sensor_msgs::PointCloud2Iterator<float> iter_i(msg, "intensity");
+    for (const GridIndex & cell : cells) {
+      const Point3 point = map_.gridToWorld(cell);
+      *iter_x = static_cast<float>(point.x);
+      *iter_y = static_cast<float>(point.y);
+      *iter_z = static_cast<float>(point.z);
+      *iter_i = static_cast<float>(risk.riskCost(cell));
+      ++iter_x;
+      ++iter_y;
+      ++iter_z;
+      ++iter_i;
+    }
+    return msg;
+  }
+
   std::vector<GridIndex> setToVector(const std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> & set) const
   {
     return {set.begin(), set.end()};
@@ -497,6 +556,8 @@ private:
     const SurfaceMap surface = surface_extractor_.extract(map_);
     ClearanceField clearance;
     clearance.compute(surface.traversable_cells, surface.boundary_cells, map_.resolution());
+    tgw_planner::core::RiskField risk(risk_options_);
+    risk.compute(surface, clearance);
 
     occupied_pub_->publish(makeCloud(map_.occupiedVoxels(), 1.0F));
     free_pub_->publish(makeCloud(map_.freeVoxels(), 2.0F));
@@ -518,8 +579,9 @@ private:
     const std::vector<GridIndex> medial_axis =
       clearance.medialAxisCells(medial_axis_min_clearance_m_);
     medial_axis_pub_->publish(makeCloud(medial_axis, 11.0F, true, &clearance));
+    risk_pub_->publish(makeRiskCloud(risk));
     forbidden_pub_->publish(makeCloud(setToVector(surface.forbidden_cells), 10.0F));
-    publishStatsJson(&surface, &clearance, medial_axis.size());
+    publishStatsJson(&surface, &clearance, &risk, medial_axis.size());
   }
 
   NavigationSnapshot buildNavigationSnapshot() const
@@ -528,6 +590,8 @@ private:
     snapshot.surface = surface_extractor_.extract(map_);
     snapshot.clearance.compute(
       snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, map_.resolution());
+    snapshot.risk = tgw_planner::core::RiskField(risk_options_);
+    snapshot.risk.compute(snapshot.surface, snapshot.clearance);
     snapshot.resolution_m = map_.resolution();
     return snapshot;
   }
@@ -698,7 +762,7 @@ private:
 
   std::string buildStatsJson(
     const SurfaceMap * surface = nullptr, const ClearanceField * clearance = nullptr,
-    std::size_t medial_axis_cells = 0U) const
+    const tgw_planner::core::RiskField * risk = nullptr, std::size_t medial_axis_cells = 0U) const
   {
     std::ostringstream out;
     out << std::fixed << std::setprecision(3);
@@ -730,16 +794,19 @@ private:
       out << ",\"clearance_cells\":" << clearance->distances().size();
       out << ",\"medial_axis_cells\":" << medial_axis_cells;
     }
+    if (risk != nullptr) {
+      out << ",\"risk_cells\":" << risk->risks().size();
+    }
     out << "}";
     return out.str();
   }
 
   void publishStatsJson(
     const SurfaceMap * surface = nullptr, const ClearanceField * clearance = nullptr,
-    std::size_t medial_axis_cells = 0U)
+    const tgw_planner::core::RiskField * risk = nullptr, std::size_t medial_axis_cells = 0U)
   {
     std_msgs::msg::String msg;
-    msg.data = buildStatsJson(surface, clearance, medial_axis_cells);
+    msg.data = buildStatsJson(surface, clearance, risk, medial_axis_cells);
     stats_json_pub_->publish(msg);
   }
 
@@ -826,7 +893,7 @@ private:
       snapshot.clearance.medialAxisCells(medial_axis_min_clearance_m_);
     if (!writeTextFile(
         stats_path,
-        buildStatsJson(&snapshot.surface, &snapshot.clearance, medial_axis.size()),
+        buildStatsJson(&snapshot.surface, &snapshot.clearance, &snapshot.risk, medial_axis.size()),
         message))
     {
       response->success = false;
@@ -853,6 +920,7 @@ private:
   RaycastIntegrator integrator_;
   SurfaceExtractor surface_extractor_;
   RobotFootprint footprint_;
+  RiskFieldOptions risk_options_;
   SurfacePlannerOptions planner_options_;
   PathValidationOptions validation_options_;
 
@@ -889,6 +957,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr wall_boundary_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr clearance_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr medial_axis_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr risk_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr forbidden_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr planned_path_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr stats_json_pub_;

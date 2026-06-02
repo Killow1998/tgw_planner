@@ -2,6 +2,7 @@
 
 #include "tgw_planner/core/probabilistic_voxel_map.hpp"
 #include "tgw_planner/core/raycast_integrator.hpp"
+#include "tgw_planner/core/risk_field.hpp"
 #include "tgw_planner/core/robot_footprint.hpp"
 #include "tgw_planner/core/clearance_field.hpp"
 #include "tgw_planner/core/map_snapshot.hpp"
@@ -15,6 +16,7 @@ using tgw_planner::core::Point3;
 using tgw_planner::core::Pose3;
 using tgw_planner::core::ProbabilisticVoxelMap;
 using tgw_planner::core::RaycastIntegrator;
+using tgw_planner::core::RiskField;
 using tgw_planner::core::RobotFootprint;
 using tgw_planner::core::ScanInput;
 using tgw_planner::core::ClearanceField;
@@ -104,6 +106,10 @@ int main()
   clearance.compute(surface.traversable_cells, surface.boundary_cells, options.resolution_m);
   CHECK(clearance.clearanceDistance(center) > clearance.clearanceDistance(edge));
   CHECK(clearance.clearancePenalty(center) < clearance.clearancePenalty(edge));
+  RiskField risk;
+  risk.compute(surface, clearance);
+  CHECK(risk.riskCost(edge) > risk.riskCost(center));
+  CHECK(!risk.risks().empty());
   const auto medial_axis = clearance.medialAxisCells(0.10);
   bool medial_has_center = false;
   bool medial_has_edge = false;
@@ -125,6 +131,7 @@ int main()
   snapshot.surface = surface_extractor.extract(planner_map);
   snapshot.clearance.compute(
     snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, snapshot.resolution_m);
+  snapshot.risk.compute(snapshot.surface, snapshot.clearance);
   SurfacePlannerOptions planner_options;
   planner_options.w_clearance = 2.0;
   SurfaceAstarPlanner planner(planner_options);

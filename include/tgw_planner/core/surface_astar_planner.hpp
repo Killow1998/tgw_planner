@@ -14,6 +14,7 @@ namespace tgw_planner::core
 struct SurfacePlannerOptions
 {
   double w_clearance{0.8};
+  double w_risk{1.5};
   double w_slope{0.3};
   double w_turn{0.1};
   double w_unknown{2.0};
@@ -33,6 +34,8 @@ struct SurfacePlanMetrics
   double min_path_clearance_m{0.0};
   double mean_path_clearance_m{0.0};
   double clearance_cost_sum{0.0};
+  double risk_cost_sum{0.0};
+  double max_path_risk{0.0};
   std::uint32_t low_clearance_samples{0};
 };
 
