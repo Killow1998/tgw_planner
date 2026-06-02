@@ -39,6 +39,7 @@ SurfaceAstarPlanner::SurfaceAstarPlanner(SurfacePlannerOptions options)
 : options_(options), footprint_(options.footprint)
 {
   options_.max_iterations = std::max<std::uint32_t>(1U, options_.max_iterations);
+  options_.max_step_height_m = std::max(0.05, options_.max_step_height_m);
   options_.swept_sample_step_m = std::max(0.01, options_.swept_sample_step_m);
   options_.shortcut_sample_step_m = std::max(0.01, options_.shortcut_sample_step_m);
   options_.shortcut_clearance_ratio = std::clamp(options_.shortcut_clearance_ratio, 0.0, 1.0);
@@ -83,6 +84,8 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
   open.push({start, gridDistance(start, goal) * snapshot.resolution_m, 0.0});
 
   bool found = false;
+  const int max_step_cells =
+    std::max(1, static_cast<int>(std::ceil(options_.max_step_height_m / snapshot.resolution_m)));
   while (!open.empty() && result.metrics.expanded_nodes < options_.max_iterations) {
     const QueueNode current = open.top();
     open.pop();
@@ -107,7 +110,7 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
 
     for (int dx = -1; dx <= 1; ++dx) {
       for (int dy = -1; dy <= 1; ++dy) {
-        for (int dz = -1; dz <= 1; ++dz) {
+        for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
           if (dx == 0 && dy == 0 && dz == 0) {
             continue;
           }

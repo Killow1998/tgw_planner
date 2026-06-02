@@ -135,6 +135,8 @@ ComponentSummary summarizeComponents(
   ComponentSummary summary;
   std::unordered_map<GridIndex, int, GridIndexHash> component_by_cell;
   std::vector<std::size_t> component_sizes;
+  const int max_step_cells =
+    std::max(1, static_cast<int>(std::ceil(0.30 / snapshot.resolution_m)));
 
   for (const GridIndex & seed : snapshot.surface.traversable_cells) {
     if (component_by_cell.find(seed) != component_by_cell.end()) {
@@ -151,7 +153,7 @@ ComponentSummary summarizeComponents(
       ++component_sizes[component_id];
       for (int dx = -1; dx <= 1; ++dx) {
         for (int dy = -1; dy <= 1; ++dy) {
-          for (int dz = -1; dz <= 1; ++dz) {
+          for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
             if (dx == 0 && dy == 0 && dz == 0) {
               continue;
             }

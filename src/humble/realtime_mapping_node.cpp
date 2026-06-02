@@ -299,6 +299,8 @@ private:
       declare_parameter<int>("planner_max_iterations", static_cast<int>(options.max_iterations)));
     options.require_footprint_support =
       declare_parameter<bool>("planner_require_footprint", options.require_footprint_support);
+    options.max_step_height_m =
+      declare_parameter<double>("planner_max_step_height_m", options.max_step_height_m);
     options.swept_sample_step_m =
       declare_parameter<double>("planner_swept_sample_step_m", options.swept_sample_step_m);
     options.enable_shortcut =

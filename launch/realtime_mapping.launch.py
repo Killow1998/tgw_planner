@@ -42,6 +42,7 @@ def generate_launch_description():
     planner_w_unknown = LaunchConfiguration("planner_w_unknown")
     planner_max_iterations = LaunchConfiguration("planner_max_iterations")
     planner_require_footprint = LaunchConfiguration("planner_require_footprint")
+    planner_max_step_height_m = LaunchConfiguration("planner_max_step_height_m")
     planner_swept_sample_step_m = LaunchConfiguration("planner_swept_sample_step_m")
     planner_enable_shortcut = LaunchConfiguration("planner_enable_shortcut")
     planner_shortcut_sample_step_m = LaunchConfiguration("planner_shortcut_sample_step_m")
@@ -96,6 +97,7 @@ def generate_launch_description():
             DeclareLaunchArgument("planner_w_unknown", default_value="2.0"),
             DeclareLaunchArgument("planner_max_iterations", default_value="250000"),
             DeclareLaunchArgument("planner_require_footprint", default_value="true"),
+            DeclareLaunchArgument("planner_max_step_height_m", default_value="0.30"),
             DeclareLaunchArgument("planner_swept_sample_step_m", default_value="0.05"),
             DeclareLaunchArgument("planner_enable_shortcut", default_value="true"),
             DeclareLaunchArgument("planner_shortcut_sample_step_m", default_value="0.05"),
@@ -154,6 +156,7 @@ def generate_launch_description():
                         "planner_w_unknown": planner_w_unknown,
                         "planner_max_iterations": planner_max_iterations,
                         "planner_require_footprint": planner_require_footprint,
+                        "planner_max_step_height_m": planner_max_step_height_m,
                         "planner_swept_sample_step_m": planner_swept_sample_step_m,
                         "planner_enable_shortcut": planner_enable_shortcut,
                         "planner_shortcut_sample_step_m": planner_shortcut_sample_step_m,

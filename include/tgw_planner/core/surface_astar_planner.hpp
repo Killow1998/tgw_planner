@@ -20,6 +20,7 @@ struct SurfacePlannerOptions
   double w_unknown{2.0};
   std::uint32_t max_iterations{250000};
   bool require_footprint_support{true};
+  double max_step_height_m{0.30};
   double swept_sample_step_m{0.05};
   bool enable_shortcut{true};
   double shortcut_sample_step_m{0.05};
