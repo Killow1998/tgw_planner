@@ -31,6 +31,13 @@ ros2 launch tgw_planner realtime_mapping.launch.py \
   assume_cloud_in_map_frame:=true
 ```
 
+Realtime surface extraction defaults to
+`surface_require_observed_free_space:=true`. A standing cell is only promoted to
+surface/traversable when ray clearing has observed that cell as free. This keeps
+ceiling tops and other unobserved occupied tops out of the realtime navigation
+surface. Use `surface_require_observed_free_space:=false` only for clean static
+PCD-style smoke tests that do not contain free-space evidence.
+
 Realtime debug topics:
 
 - `/tgw_map/occupied_cloud`

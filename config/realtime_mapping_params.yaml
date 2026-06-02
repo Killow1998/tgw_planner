@@ -34,3 +34,4 @@ tgw_realtime_mapping_node:
     max_step_height_m: 0.30
     surface_min_static_hits: 1
     surface_require_static_support: false
+    surface_require_observed_free_space: true

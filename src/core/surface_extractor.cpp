@@ -6,30 +6,6 @@
 
 namespace tgw_planner::core
 {
-namespace
-{
-struct XYKey
-{
-  int x{0};
-  int y{0};
-
-  bool operator==(const XYKey & other) const
-  {
-    return x == other.x && y == other.y;
-  }
-};
-
-struct XYKeyHash
-{
-  std::size_t operator()(const XYKey & key) const
-  {
-    std::size_t seed = std::hash<int>{}(key.x);
-    seed ^= std::hash<int>{}(key.y) + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
-    return seed;
-  }
-};
-}  // namespace
-
 SurfaceExtractor::SurfaceExtractor(SurfaceExtractionOptions options)
 : options_(options)
 {
@@ -40,27 +16,20 @@ SurfaceExtractor::SurfaceExtractor(SurfaceExtractionOptions options)
 SurfaceMap SurfaceExtractor::extract(const ProbabilisticVoxelMap & occupancy) const
 {
   SurfaceMap surface;
-  std::unordered_map<XYKey, GridIndex, XYKeyHash> top_support;
-  std::unordered_map<GridIndex, int, GridIndexHash> support_by_xy;
-
-  for (const GridIndex & idx : occupancy.occupiedVoxels()) {
-    const VoxelState * state = occupancy.lookup(idx);
-    if (state == nullptr || !supportAccepted(*state)) {
-      continue;
-    }
-    const XYKey key{idx.x, idx.y};
-    const auto old = top_support.find(key);
-    if (old == top_support.end() || idx.z > old->second.z) {
-      top_support[key] = idx;
-    }
-  }
+  std::unordered_map<GridIndex, int, GridIndexHash> support_by_cell;
 
   const int height_cells =
     std::max(1, static_cast<int>(std::ceil(options_.robot_height_m / occupancy.resolution())));
-  for (const auto & entry : top_support) {
-    const GridIndex support = entry.second;
+  for (const GridIndex & support : occupancy.occupiedVoxels()) {
+    const VoxelState * state = occupancy.lookup(support);
+    if (state == nullptr || !supportAccepted(*state)) {
+      continue;
+    }
     const GridIndex stand{support.x, support.y, support.z + 1};
-    if (occupancy.isOccupied(stand) || !hasHeadClearance(occupancy, stand, height_cells)) {
+    if (occupancy.isOccupied(stand) ||
+      !hasHeadClearance(occupancy, stand, height_cells) ||
+      !hasObservedFreeSpace(occupancy, stand))
+    {
       surface.forbidden_cells.insert(stand);
       continue;
     }
@@ -70,11 +39,11 @@ SurfaceMap SurfaceExtractor::extract(const ProbabilisticVoxelMap & occupancy) co
     cell.height_m = occupancy.gridToWorld(stand).z;
     surface.surface_cells[stand] = cell;
     surface.traversable_cells.insert(stand);
-    support_by_xy[{stand.x, stand.y, 0}] = support.z;
+    support_by_cell[stand] = support.z;
   }
 
   for (auto & entry : surface.surface_cells) {
-    entry.second.label = classify(entry.first, support_by_xy, occupancy.resolution());
+    entry.second.label = classify(entry.first, support_by_cell, occupancy.resolution());
   }
 
   rebuildBoundaryLayer(surface, occupancy);
@@ -141,6 +110,15 @@ bool SurfaceExtractor::hasHeadClearance(
   return true;
 }
 
+bool SurfaceExtractor::hasObservedFreeSpace(
+  const ProbabilisticVoxelMap & occupancy, const GridIndex & stand) const
+{
+  if (!options_.require_observed_free_space) {
+    return true;
+  }
+  return occupancy.isFree(stand);
+}
+
 bool SurfaceExtractor::supportAccepted(const VoxelState & state) const
 {
   if (options_.require_static_support) {
@@ -152,23 +130,40 @@ bool SurfaceExtractor::supportAccepted(const VoxelState & state) const
 
 SurfaceLabel SurfaceExtractor::classify(
   const GridIndex & cell,
-  const std::unordered_map<GridIndex, int, GridIndexHash> & support_by_xy,
+  const std::unordered_map<GridIndex, int, GridIndexHash> & support_by_cell,
   double resolution_m) const
 {
-  const auto center_it = support_by_xy.find({cell.x, cell.y, 0});
-  if (center_it == support_by_xy.end()) {
+  const auto center_it = support_by_cell.find(cell);
+  if (center_it == support_by_cell.end()) {
     return SurfaceLabel::Unknown;
   }
 
   int max_abs_dz = 0;
   int neighbor_count = 0;
+  const int max_step_cells =
+    std::max(1, static_cast<int>(std::ceil(options_.max_step_height_m / resolution_m)));
   for (int dx = -1; dx <= 1; ++dx) {
     for (int dy = -1; dy <= 1; ++dy) {
       if (dx == 0 && dy == 0) {
         continue;
       }
-      const auto neighbor_it = support_by_xy.find({cell.x + dx, cell.y + dy, 0});
-      if (neighbor_it == support_by_xy.end()) {
+      const auto same_level_it = support_by_cell.find({cell.x + dx, cell.y + dy, cell.z});
+      auto neighbor_it = same_level_it;
+      int best_abs_dz = std::numeric_limits<int>::max();
+      if (same_level_it == support_by_cell.end()) {
+        for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
+          const auto candidate_it = support_by_cell.find({cell.x + dx, cell.y + dy, cell.z + dz});
+          if (candidate_it == support_by_cell.end()) {
+            continue;
+          }
+          const int abs_dz = std::abs(dz);
+          if (abs_dz < best_abs_dz) {
+            neighbor_it = candidate_it;
+            best_abs_dz = abs_dz;
+          }
+        }
+      }
+      if (neighbor_it == support_by_cell.end()) {
         continue;
       }
       max_abs_dz = std::max(max_abs_dz, std::abs(neighbor_it->second - center_it->second));

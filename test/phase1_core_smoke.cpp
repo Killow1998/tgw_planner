@@ -97,6 +97,7 @@ int main()
   SurfaceExtractionOptions surface_options;
   surface_options.min_static_hits = 1;
   surface_options.require_static_support = false;
+  surface_options.require_observed_free_space = false;
   SurfaceExtractor surface_extractor(surface_options);
   const auto surface = surface_extractor.extract(corridor_map);
   CHECK(surface.traversable_cells.size() == 35U);
@@ -122,6 +123,28 @@ int main()
   }
   CHECK(medial_has_center);
   CHECK(!medial_has_edge);
+
+  ProbabilisticVoxelMap floor_ceiling_map(options);
+  for (int x = 0; x <= 2; ++x) {
+    for (int y = 0; y <= 2; ++y) {
+      floor_ceiling_map.updateHit({x, y, 0}, 0.0, 1);
+      floor_ceiling_map.updateHit({x, y, 20}, 0.0, 1);
+      floor_ceiling_map.updateMiss({x, y, 1}, 0.1, 1);
+      floor_ceiling_map.updateMiss({x, y, 1}, 0.2, 1);
+    }
+  }
+  SurfaceExtractionOptions observed_surface_options;
+  observed_surface_options.min_static_hits = 1;
+  observed_surface_options.require_static_support = false;
+  observed_surface_options.require_observed_free_space = true;
+  SurfaceExtractor observed_surface_extractor(observed_surface_options);
+  const auto observed_surface = observed_surface_extractor.extract(floor_ceiling_map);
+  CHECK(observed_surface.traversable_cells.find({1, 1, 1}) !=
+    observed_surface.traversable_cells.end());
+  CHECK(observed_surface.traversable_cells.find({1, 1, 21}) ==
+    observed_surface.traversable_cells.end());
+  CHECK(observed_surface.forbidden_cells.find({1, 1, 21}) !=
+    observed_surface.forbidden_cells.end());
 
   ProbabilisticVoxelMap planner_map(options);
   for (int x = -6; x <= 18; ++x) {

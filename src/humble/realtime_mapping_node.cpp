@@ -282,6 +282,8 @@ private:
     options.min_static_hits = declare_parameter<int>("surface_min_static_hits", options.min_static_hits);
     options.require_static_support =
       declare_parameter<bool>("surface_require_static_support", options.require_static_support);
+    options.require_observed_free_space = declare_parameter<bool>(
+      "surface_require_observed_free_space", options.require_observed_free_space);
     return options;
   }
 

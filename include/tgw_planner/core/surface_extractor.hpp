@@ -45,6 +45,7 @@ struct SurfaceExtractionOptions
   double max_step_height_m{0.30};
   int min_static_hits{1};
   bool require_static_support{false};
+  bool require_observed_free_space{true};
 };
 
 class SurfaceExtractor
@@ -58,10 +59,12 @@ public:
 private:
   bool hasHeadClearance(
     const ProbabilisticVoxelMap & occupancy, const GridIndex & stand, int height_cells) const;
+  bool hasObservedFreeSpace(
+    const ProbabilisticVoxelMap & occupancy, const GridIndex & stand) const;
   bool supportAccepted(const VoxelState & state) const;
   SurfaceLabel classify(
     const GridIndex & cell,
-    const std::unordered_map<GridIndex, int, GridIndexHash> & support_by_xy,
+    const std::unordered_map<GridIndex, int, GridIndexHash> & support_by_cell,
     double resolution_m) const;
 
   SurfaceExtractionOptions options_;
