@@ -490,3 +490,79 @@ Interpretation:
 - Even footprint-validated paths can have low-clearance samples, so corridor
   quality should remain an explicit metric and not just a boolean validity
   check.
+
+## Footprint-Aware Service Snapping 2026-06-03
+
+`/tgw_map/plan_path` now snaps requested start/goal poses to cells that are
+both traversable and footprint-supported whenever either planner or final
+validation footprint checking is enabled. The snap logic also rechecks the
+snapped start-goal heading, because the planner validates endpoint footprint
+using the heading from the snapped start cell to the snapped goal cell.
+
+Regression command:
+
+```bash
+TGW_PLANNER_REQUIRE_FOOTPRINT=true \
+TGW_VALIDATION_REQUIRE_FOOTPRINT=true \
+rtk src/tgw_planner/scripts/run_realtime_bag_plan_probe.sh \
+  /home/user/ros_ws/bagfile/f7tof9_g2w_ros2
+```
+
+Result using the default `/tgw_map/traversable_cloud` candidate pool:
+
+```text
+received_clouds=659
+integrated_clouds=659
+surface_points=12346
+traversable_points=12346
+probe_cloud_topic=/tgw_map/traversable_cloud
+candidate_pairs=92606
+attempt=1
+start=(4.1500000954, -3.0499999523, 2.3499999046)
+goal=(4.1500000954, -1.5499999523, 2.3499999046)
+dxy=1.500
+success=True
+message="path found"
+final_path_validated=True
+final_path_fallback_to_raw=False
+expanded_nodes=286
+raw_path_waypoints=16
+path_waypoints=4
+path_length_m=1.930
+min_path_clearance_m=0.283
+mean_path_clearance_m=0.514
+low_clearance_samples=2
+```
+
+Medial-axis candidates still pass with footprint checks enabled:
+
+```text
+TGW_PROBE_CLOUD_TOPIC=/tgw_map/medial_axis_cloud
+TGW_PROBE_COMPONENT_POOL=all
+TGW_PROBE_MAX_PLAN_ATTEMPTS=12
+probe_cloud_points=249
+candidate_pairs=2428
+attempt=1
+start=(6.0500001907, 0.1500000060, 2.3499999046)
+goal=(4.5500001907, 0.1500000060, 2.3499999046)
+dxy=1.500
+success=True
+final_path_validated=True
+path_waypoints=9
+path_length_m=5.419
+min_path_clearance_m=0.241
+mean_path_clearance_m=0.430
+low_clearance_samples=7
+```
+
+Interpretation:
+
+- The previous service-entry failure where an arbitrary traversable endpoint
+  reached the planner and was rejected as `start/goal footprint is not fully
+  supported` is fixed for the tested real bag.
+- The fix does not make every traversable cell a good robot pose. It changes
+  service snapping to search for a nearby footprint-supported pose before
+  invoking A*.
+- Medial-axis candidates remain preferable for deployment-facing goal
+  selection because they bias toward clearance, while footprint-aware snapping
+  is a service safety guard.

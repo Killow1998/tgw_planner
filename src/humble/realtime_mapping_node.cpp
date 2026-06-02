@@ -121,6 +121,24 @@ Pose3 poseFromPoseStamped(const geometry_msgs::msg::PoseStamped & msg)
     matrix[2][0], matrix[2][1], matrix[2][2]};
   return pose;
 }
+
+double yawFromPoseStamped(const geometry_msgs::msg::PoseStamped & msg)
+{
+  tf2::Quaternion q{
+    msg.pose.orientation.x,
+    msg.pose.orientation.y,
+    msg.pose.orientation.z,
+    msg.pose.orientation.w};
+  if (q.length2() <= 1.0e-9) {
+    q = tf2::Quaternion{0.0, 0.0, 0.0, 1.0};
+  }
+  q.normalize();
+  double roll = 0.0;
+  double pitch = 0.0;
+  double yaw = 0.0;
+  tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+  return yaw;
+}
 }  // namespace
 
 class TgwRealtimeMappingNode : public rclcpp::Node
@@ -1095,11 +1113,12 @@ private:
   }
 
   bool snapToTraversable(
-    const NavigationSnapshot & snapshot, const Point3 & point, GridIndex & snapped,
-    double & snap_distance_m) const
+    const NavigationSnapshot & snapshot, const Point3 & point, const double yaw_rad,
+    const bool require_footprint_support, GridIndex & snapped, double & snap_distance_m) const
   {
     const GridIndex seed = map_.worldToGrid(point);
     double best_distance_cells = std::numeric_limits<double>::infinity();
+    double best_clearance_m = -std::numeric_limits<double>::infinity();
     bool found = false;
     const int max_radius_cells = std::max(1, static_cast<int>(std::ceil(1.0 / map_.resolution())));
     for (int radius = 0; radius <= max_radius_cells; ++radius) {
@@ -1110,20 +1129,24 @@ private:
               continue;
             }
             const GridIndex candidate{seed.x + dx, seed.y + dy, seed.z + dz};
-            if (snapshot.surface.traversable_cells.find(candidate) ==
-              snapshot.surface.traversable_cells.end())
-            {
+            if (!isRealtimePoseCellUsable(snapshot, candidate)) {
               continue;
             }
-            if (snapshot.surface.forbidden_cells.find(candidate) !=
-              snapshot.surface.forbidden_cells.end())
+            const Point3 candidate_point = map_.gridToWorld(candidate);
+            if (require_footprint_support &&
+              !isRealtimeFootprintSupported(snapshot, candidate_point, yaw_rad))
             {
               continue;
             }
             const double distance_cells =
               std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz));
-            if (distance_cells < best_distance_cells) {
+            const double clearance_m = snapshot.clearance.clearanceDistance(candidate);
+            if (distance_cells < best_distance_cells ||
+              (std::abs(distance_cells - best_distance_cells) <= 1.0e-9 &&
+              clearance_m > best_clearance_m))
+            {
               best_distance_cells = distance_cells;
+              best_clearance_m = clearance_m;
               snapped = candidate;
               found = true;
             }
@@ -1136,6 +1159,27 @@ private:
     }
     snap_distance_m = found ? best_distance_cells * map_.resolution() : 0.0;
     return found;
+  }
+
+  bool isRealtimePoseCellUsable(
+    const NavigationSnapshot & snapshot, const GridIndex & cell) const
+  {
+    return snapshot.surface.traversable_cells.find(cell) != snapshot.surface.traversable_cells.end() &&
+           snapshot.surface.forbidden_cells.find(cell) == snapshot.surface.forbidden_cells.end() &&
+           snapshot.surface.blocked_cells.find(cell) == snapshot.surface.blocked_cells.end();
+  }
+
+  bool isRealtimeFootprintSupported(
+    const NavigationSnapshot & snapshot, const Point3 & point, const double yaw_rad) const
+  {
+    for (const Point3 & sample :
+      footprint_.sampleFootprint(point, yaw_rad, snapshot.resolution_m))
+    {
+      if (!isRealtimePoseCellUsable(snapshot, map_.worldToGrid(sample))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   nav_msgs::msg::Path makePathMessage(const std::vector<Point3> & path) const
@@ -1260,18 +1304,81 @@ private:
       request->start.pose.position.x, request->start.pose.position.y, request->start.pose.position.z};
     const Point3 goal_point{
       request->goal.pose.position.x, request->goal.pose.position.y, request->goal.pose.position.z};
-    if (!snapToTraversable(snapshot, start_point, start, response->stats.start_snap_distance_m)) {
+    const double plan_dx = goal_point.x - start_point.x;
+    const double plan_dy = goal_point.y - start_point.y;
+    const double snap_yaw = std::hypot(plan_dx, plan_dy) > 1.0e-6 ?
+      std::atan2(plan_dy, plan_dx) : yawFromPoseStamped(request->start);
+    const bool snap_requires_footprint =
+      planner_options_.require_footprint_support || validation_options_.require_footprint_support;
+
+    double endpoint_snap_yaw = snap_yaw;
+    bool endpoints_snapped = false;
+    bool start_snap_failed = false;
+    bool goal_snap_failed = false;
+    for (int snap_attempt = 0; snap_attempt < 4; ++snap_attempt) {
+      double start_snap_distance = 0.0;
+      double goal_snap_distance = 0.0;
+      GridIndex candidate_start;
+      GridIndex candidate_goal;
+      start_snap_failed = !snapToTraversable(
+        snapshot, start_point, endpoint_snap_yaw, snap_requires_footprint, candidate_start,
+        start_snap_distance);
+      if (start_snap_failed) {
+        break;
+      }
+      goal_snap_failed = !snapToTraversable(
+        snapshot, goal_point, endpoint_snap_yaw, snap_requires_footprint, candidate_goal,
+        goal_snap_distance);
+      if (goal_snap_failed) {
+        break;
+      }
+
+      const Point3 snapped_start_point = map_.gridToWorld(candidate_start);
+      const Point3 snapped_goal_point = map_.gridToWorld(candidate_goal);
+      const double snapped_dx = snapped_goal_point.x - snapped_start_point.x;
+      const double snapped_dy = snapped_goal_point.y - snapped_start_point.y;
+      const double snapped_yaw = std::hypot(snapped_dx, snapped_dy) > 1.0e-6 ?
+        std::atan2(snapped_dy, snapped_dx) : endpoint_snap_yaw;
+      if (!snap_requires_footprint ||
+        (isRealtimeFootprintSupported(snapshot, snapped_start_point, snapped_yaw) &&
+        isRealtimeFootprintSupported(snapshot, snapped_goal_point, snapped_yaw)))
+      {
+        start = candidate_start;
+        goal = candidate_goal;
+        response->stats.start_snap_distance_m = start_snap_distance;
+        response->stats.goal_snap_distance_m = goal_snap_distance;
+        endpoints_snapped = true;
+        break;
+      }
+      endpoint_snap_yaw = snapped_yaw;
+    }
+
+    if (!endpoints_snapped && start_snap_failed) {
       response->success = false;
-      response->message = "failed to snap start to realtime traversable surface";
+      response->message = snap_requires_footprint ?
+        "failed to snap start to footprint-supported realtime traversable surface" :
+        "failed to snap start to realtime traversable surface";
       response->stats.success = false;
       response->stats.failure_reason = response->message;
       publishPathMarker({});
       publishPlannerStats(response->stats);
       return;
     }
-    if (!snapToTraversable(snapshot, goal_point, goal, response->stats.goal_snap_distance_m)) {
+    if (!endpoints_snapped && goal_snap_failed) {
       response->success = false;
-      response->message = "failed to snap goal to realtime traversable surface";
+      response->message = snap_requires_footprint ?
+        "failed to snap goal to footprint-supported realtime traversable surface" :
+        "failed to snap goal to realtime traversable surface";
+      response->stats.success = false;
+      response->stats.failure_reason = response->message;
+      publishPathMarker({});
+      publishPlannerStats(response->stats);
+      return;
+    }
+    if (!endpoints_snapped) {
+      response->success = false;
+      response->message =
+        "failed to snap start/goal to a mutually footprint-supported realtime heading";
       response->stats.success = false;
       response->stats.failure_reason = response->message;
       publishPathMarker({});
