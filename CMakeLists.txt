@@ -31,7 +31,9 @@ find_package(octomap REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   msg/PlannerStats.msg
+  srv/ExportStaticCloud.srv
   srv/PlanPath.srv
+  srv/SaveMap.srv
   srv/SetBlockedRegion.srv
   srv/SetClickMode.srv
   DEPENDENCIES

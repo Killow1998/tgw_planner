@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -11,6 +13,9 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav_msgs/msg/path.hpp"
+#include <pcl/io/pcd_io.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
@@ -31,7 +36,9 @@
 #include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/surface_extractor.hpp"
 #include "tgw_planner/msg/planner_stats.hpp"
+#include "tgw_planner/srv/export_static_cloud.hpp"
 #include "tgw_planner/srv/plan_path.hpp"
+#include "tgw_planner/srv/save_map.hpp"
 
 namespace
 {
@@ -171,6 +178,14 @@ public:
     clear_srv_ = create_service<std_srvs::srv::Trigger>(
       "/tgw_mapping/clear",
       std::bind(&TgwRealtimeMappingNode::handleClear, this, std::placeholders::_1, std::placeholders::_2));
+    save_map_srv_ = create_service<tgw_planner::srv::SaveMap>(
+      "/tgw_mapping/save_map",
+      std::bind(&TgwRealtimeMappingNode::handleSaveMap, this, std::placeholders::_1, std::placeholders::_2));
+    export_static_cloud_srv_ = create_service<tgw_planner::srv::ExportStaticCloud>(
+      "/tgw_mapping/export_static_pcd",
+      std::bind(
+        &TgwRealtimeMappingNode::handleExportStaticCloud, this,
+        std::placeholders::_1, std::placeholders::_2));
     plan_srv_ = create_service<tgw_planner::srv::PlanPath>(
       "/tgw_map/plan_path",
       std::bind(&TgwRealtimeMappingNode::handlePlanPath, this, std::placeholders::_1, std::placeholders::_2));
@@ -391,6 +406,87 @@ private:
     return {set.begin(), set.end()};
   }
 
+  pcl::PointCloud<pcl::PointXYZI>::Ptr makePclCloud(const std::vector<GridIndex> & cells) const
+  {
+    auto cloud = pcl::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
+    cloud->reserve(cells.size());
+    for (const GridIndex & cell : cells) {
+      const Point3 point = map_.gridToWorld(cell);
+      pcl::PointXYZI pcl_point;
+      pcl_point.x = static_cast<float>(point.x);
+      pcl_point.y = static_cast<float>(point.y);
+      pcl_point.z = static_cast<float>(point.z);
+      pcl_point.intensity = map_.probability(cell);
+      cloud->push_back(pcl_point);
+    }
+    cloud->width = static_cast<std::uint32_t>(cloud->size());
+    cloud->height = 1;
+    cloud->is_dense = true;
+    return cloud;
+  }
+
+  bool writePcd(
+    const std::filesystem::path & path, const std::vector<GridIndex> & cells,
+    std::string & message) const
+  {
+    try {
+      const std::filesystem::path parent = path.parent_path();
+      if (!parent.empty()) {
+        std::filesystem::create_directories(parent);
+      }
+      if (cells.empty()) {
+        std::ofstream out(path);
+        if (!out) {
+          message = "failed to open empty PCD: " + path.string();
+          return false;
+        }
+        out << "# .PCD v0.7 - Point Cloud Data file format\n";
+        out << "VERSION 0.7\n";
+        out << "FIELDS x y z intensity\n";
+        out << "SIZE 4 4 4 4\n";
+        out << "TYPE F F F F\n";
+        out << "COUNT 1 1 1 1\n";
+        out << "WIDTH 0\n";
+        out << "HEIGHT 1\n";
+        out << "VIEWPOINT 0 0 0 1 0 0 0\n";
+        out << "POINTS 0\n";
+        out << "DATA ascii\n";
+        return true;
+      }
+      const auto cloud = makePclCloud(cells);
+      if (pcl::io::savePCDFileBinary(path.string(), *cloud) != 0) {
+        message = "failed to write PCD: " + path.string();
+        return false;
+      }
+      return true;
+    } catch (const std::exception & error) {
+      message = error.what();
+      return false;
+    }
+  }
+
+  bool writeTextFile(
+    const std::filesystem::path & path, const std::string & content,
+    std::string & message) const
+  {
+    try {
+      const std::filesystem::path parent = path.parent_path();
+      if (!parent.empty()) {
+        std::filesystem::create_directories(parent);
+      }
+      std::ofstream out(path);
+      if (!out) {
+        message = "failed to open file: " + path.string();
+        return false;
+      }
+      out << content << "\n";
+      return true;
+    } catch (const std::exception & error) {
+      message = error.what();
+      return false;
+    }
+  }
+
   void publishSnapshot()
   {
     if (map_.size() == 0U) {
@@ -600,11 +696,10 @@ private:
     planned_path_pub_->publish(response->path);
   }
 
-  void publishStatsJson(
+  std::string buildStatsJson(
     const SurfaceMap * surface = nullptr, const ClearanceField * clearance = nullptr,
-    std::size_t medial_axis_cells = 0U)
+    std::size_t medial_axis_cells = 0U) const
   {
-    std_msgs::msg::String msg;
     std::ostringstream out;
     out << std::fixed << std::setprecision(3);
     out << "{";
@@ -636,7 +731,15 @@ private:
       out << ",\"medial_axis_cells\":" << medial_axis_cells;
     }
     out << "}";
-    msg.data = out.str();
+    return out.str();
+  }
+
+  void publishStatsJson(
+    const SurfaceMap * surface = nullptr, const ClearanceField * clearance = nullptr,
+    std::size_t medial_axis_cells = 0U)
+  {
+    std_msgs::msg::String msg;
+    msg.data = buildStatsJson(surface, clearance, medial_axis_cells);
     stats_json_pub_->publish(msg);
   }
 
@@ -666,6 +769,82 @@ private:
     response->success = true;
     response->message = "realtime map cleared";
     publishStatsJson();
+  }
+
+  void handleExportStaticCloud(
+    const std::shared_ptr<tgw_planner::srv::ExportStaticCloud::Request> request,
+    std::shared_ptr<tgw_planner::srv::ExportStaticCloud::Response> response)
+  {
+    const std::filesystem::path output =
+      request->output_pcd.empty() ?
+      std::filesystem::path{"./tgw_static_candidate_cloud.pcd"} :
+      std::filesystem::path{request->output_pcd};
+    const std::vector<GridIndex> static_cells = map_.staticCandidateVoxels();
+    std::string message;
+    if (!writePcd(output, static_cells, message)) {
+      response->success = false;
+      response->message = message;
+      response->saved_points = 0U;
+      return;
+    }
+    response->success = true;
+    response->message = "exported static candidate cloud to " + output.string();
+    response->saved_points = static_cast<std::uint32_t>(static_cells.size());
+  }
+
+  void handleSaveMap(
+    const std::shared_ptr<tgw_planner::srv::SaveMap::Request> request,
+    std::shared_ptr<tgw_planner::srv::SaveMap::Response> response)
+  {
+    const std::filesystem::path output_dir =
+      request->output_dir.empty() ? std::filesystem::path{"./tgw_realtime_map"} :
+      std::filesystem::path{request->output_dir};
+    const std::filesystem::path occupied_path = output_dir / "occupied_cloud.pcd";
+    const std::filesystem::path free_path = output_dir / "free_cloud.pcd";
+    const std::filesystem::path static_path = output_dir / "static_candidate_cloud.pcd";
+    const std::filesystem::path dynamic_path = output_dir / "dynamic_suspect_cloud.pcd";
+    const std::filesystem::path stats_path = output_dir / "stats.json";
+
+    const std::vector<GridIndex> occupied_cells = map_.occupiedVoxels();
+    const std::vector<GridIndex> free_cells = map_.freeVoxels();
+    const std::vector<GridIndex> static_cells = map_.staticCandidateVoxels();
+    const std::vector<GridIndex> dynamic_cells = map_.dynamicSuspectVoxels();
+
+    std::string message;
+    if (!writePcd(occupied_path, occupied_cells, message) ||
+      !writePcd(free_path, free_cells, message) ||
+      !writePcd(static_path, static_cells, message) ||
+      !writePcd(dynamic_path, dynamic_cells, message))
+    {
+      response->success = false;
+      response->message = message;
+      return;
+    }
+
+    const NavigationSnapshot snapshot = buildNavigationSnapshot();
+    const std::vector<GridIndex> medial_axis =
+      snapshot.clearance.medialAxisCells(medial_axis_min_clearance_m_);
+    if (!writeTextFile(
+        stats_path,
+        buildStatsJson(&snapshot.surface, &snapshot.clearance, medial_axis.size()),
+        message))
+    {
+      response->success = false;
+      response->message = message;
+      return;
+    }
+
+    response->success = true;
+    response->message = "saved realtime map package to " + output_dir.string();
+    response->occupied_pcd = occupied_path.string();
+    response->free_pcd = free_path.string();
+    response->static_pcd = static_path.string();
+    response->dynamic_pcd = dynamic_path.string();
+    response->stats_json = stats_path.string();
+    response->occupied_points = static_cast<std::uint32_t>(occupied_cells.size());
+    response->free_points = static_cast<std::uint32_t>(free_cells.size());
+    response->static_points = static_cast<std::uint32_t>(static_cells.size());
+    response->dynamic_points = static_cast<std::uint32_t>(dynamic_cells.size());
   }
 
   tf2_ros::Buffer tf_buffer_;
@@ -716,6 +895,8 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr start_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_srv_;
+  rclcpp::Service<tgw_planner::srv::SaveMap>::SharedPtr save_map_srv_;
+  rclcpp::Service<tgw_planner::srv::ExportStaticCloud>::SharedPtr export_static_cloud_srv_;
   rclcpp::Service<tgw_planner::srv::PlanPath>::SharedPtr plan_srv_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
 };

@@ -53,6 +53,8 @@ Control services:
 - `/tgw_mapping/start`
 - `/tgw_mapping/stop`
 - `/tgw_mapping/clear`
+- `/tgw_mapping/save_map` (`tgw_planner/srv/SaveMap`)
+- `/tgw_mapping/export_static_pcd` (`tgw_planner/srv/ExportStaticCloud`)
 
 Planning service:
 
@@ -97,6 +99,21 @@ before publishing `/tgw_map/planned_path`.
 `/tgw_map/medial_axis_cloud` publishes clearance ridges filtered by
 `medial_axis_min_clearance_m`. This is a debug layer for checking whether the
 clearance map places high-safety cells near corridor or passage centers.
+
+Map export:
+
+```bash
+ros2 service call /tgw_mapping/export_static_pcd tgw_planner/srv/ExportStaticCloud \
+  "{output_pcd: /tmp/tgw_static_candidate_cloud.pcd}"
+
+ros2 service call /tgw_mapping/save_map tgw_planner/srv/SaveMap \
+  "{output_dir: /tmp/tgw_realtime_map}"
+```
+
+`save_map` writes `occupied_cloud.pcd`, `free_cloud.pcd`,
+`static_candidate_cloud.pcd`, `dynamic_suspect_cloud.pcd`, and `stats.json`.
+The exported PCD intensity is the current occupancy probability for each voxel
+center.
 
 ## Verified Smoke
 
