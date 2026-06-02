@@ -218,6 +218,30 @@ int main()
   CHECK(used_center_lane);
   CHECK(plan.metrics.min_path_clearance_m >= 0.0);
   CHECK(plan.metrics.mean_path_clearance_m > 0.0);
+
+  SurfacePlannerOptions center_bias_options;
+  center_bias_options.w_clearance = 5.0;
+  center_bias_options.w_risk = 0.0;
+  center_bias_options.w_slope = 0.0;
+  center_bias_options.w_turn = 0.2;
+  center_bias_options.require_footprint_support = false;
+  center_bias_options.enable_shortcut = false;
+  SurfaceAstarPlanner center_bias_planner(center_bias_options);
+  const auto center_bias_plan = center_bias_planner.plan(snapshot, {2, 1, 1}, {16, 1, 1});
+  CHECK(center_bias_plan.success);
+  bool moved_to_center_lane = false;
+  bool stayed_wall_hugging = true;
+  for (const auto & cell : center_bias_plan.cells) {
+    if (cell.x >= 5 && cell.x <= 13 && cell.y == 4) {
+      moved_to_center_lane = true;
+    }
+    if (cell.x >= 5 && cell.x <= 13 && cell.y > 1) {
+      stayed_wall_hugging = false;
+    }
+  }
+  CHECK(moved_to_center_lane);
+  CHECK(!stayed_wall_hugging);
+
   PathValidator validator(footprint);
   const auto validation = validator.validate(snapshot, plan.path);
   if (!validation.valid) {
