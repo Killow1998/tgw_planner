@@ -47,11 +47,12 @@ Synthetic realtime regression:
 src/tgw_planner/scripts/run_realtime_mapping_sim_tests.sh
 ```
 
-This regression also exercises `/tgw_mapping/start`, `/tgw_mapping/stop`, and
-`/tgw_mapping/clear`: it launches with `start_enabled:=false`, verifies that
-point clouds are not integrated while stopped, verifies that `/start` resumes
-integration, then verifies that `/stop` plus `/clear` leaves the map empty and
-prevents fresh integration.
+This regression also exercises `/tgw_mapping/start`, `/tgw_mapping/stop`,
+`/tgw_mapping/pause`, and `/tgw_mapping/clear`: it launches with
+`start_enabled:=false`, verifies that point clouds are not integrated while
+stopped, verifies that `/start` resumes integration, verifies that `/pause` plus
+`/clear` prevents fresh integration, then verifies the same for `/stop` plus
+`/clear`.
 
 Dirty-map dynamic artifact regression:
 

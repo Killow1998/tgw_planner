@@ -329,14 +329,19 @@ run_mapping_control_case()
   cleanup_case
   local log_file="${tmp_root}/mapping_control_launch.log"
   local start_file="${tmp_root}/mapping_control_start.out"
+  local restart_file="${tmp_root}/mapping_control_restart.out"
+  local pause_file="${tmp_root}/mapping_control_pause.out"
   local stop_file="${tmp_root}/mapping_control_stop.out"
   local clear_file="${tmp_root}/mapping_control_clear.out"
   local snapshot_initial_stopped="${tmp_root}/mapping_control_initial_stopped_snapshot.out"
   local snapshot_started="${tmp_root}/mapping_control_started_snapshot.out"
+  local snapshot_paused="${tmp_root}/mapping_control_paused_snapshot.out"
+  local snapshot_restarted="${tmp_root}/mapping_control_restarted_snapshot.out"
   local snapshot_final_stopped="${tmp_root}/mapping_control_final_stopped_snapshot.out"
   tmp_paths+=(
-    "${stop_file}" "${start_file}" "${clear_file}"
-    "${snapshot_initial_stopped}" "${snapshot_started}" "${snapshot_final_stopped}")
+    "${pause_file}" "${stop_file}" "${start_file}" "${restart_file}" "${clear_file}"
+    "${snapshot_initial_stopped}" "${snapshot_started}" "${snapshot_paused}"
+    "${snapshot_restarted}" "${snapshot_final_stopped}")
 
   setsid ros2 launch tgw_planner realtime_mapping.launch.py \
     start_enabled:=false \
@@ -360,7 +365,7 @@ run_mapping_control_case()
     tail -n 120 "${log_file}" || true
     return 1
   fi
-  for service in /tgw_mapping/stop /tgw_mapping/start /tgw_mapping/clear /tgw_mapping/get_snapshot; do
+  for service in /tgw_mapping/stop /tgw_mapping/start /tgw_mapping/pause /tgw_mapping/clear /tgw_mapping/get_snapshot; do
     if ! wait_for_service "${service}"; then
       echo "FAIL mapping_control: ${service} did not appear"
       tail -n 120 "${log_file}" || true
@@ -379,6 +384,19 @@ run_mapping_control_case()
   local started_occupied
   started_occupied="$(snapshot_occupied_points "${snapshot_started}")"
 
+  ros2 service call /tgw_mapping/pause std_srvs/srv/Trigger "{}" >"${pause_file}" 2>&1
+  ros2 service call /tgw_mapping/clear std_srvs/srv/Trigger "{}" >"${clear_file}" 2>&1
+  publish_single_static_point_scene
+  sleep 0.5
+  local paused_occupied
+  paused_occupied="$(snapshot_occupied_points "${snapshot_paused}")"
+
+  ros2 service call /tgw_mapping/start std_srvs/srv/Trigger "{}" >"${restart_file}" 2>&1
+  publish_single_static_point_scene
+  sleep 0.5
+  local restarted_occupied
+  restarted_occupied="$(snapshot_occupied_points "${snapshot_restarted}")"
+
   ros2 service call /tgw_mapping/stop std_srvs/srv/Trigger "{}" >"${stop_file}" 2>&1
   ros2 service call /tgw_mapping/clear std_srvs/srv/Trigger "{}" >"${clear_file}" 2>&1
   publish_single_static_point_scene
@@ -386,7 +404,7 @@ run_mapping_control_case()
   local final_stopped_occupied
   final_stopped_occupied="$(snapshot_occupied_points "${snapshot_final_stopped}")"
 
-  echo "mapping_control: initial_stopped_occupied=${initial_stopped_occupied:-unknown} started_occupied=${started_occupied:-unknown} final_stopped_occupied=${final_stopped_occupied:-unknown}"
+  echo "mapping_control: initial_stopped_occupied=${initial_stopped_occupied:-unknown} started_occupied=${started_occupied:-unknown} paused_occupied=${paused_occupied:-unknown} restarted_occupied=${restarted_occupied:-unknown} final_stopped_occupied=${final_stopped_occupied:-unknown}"
   if (( ${initial_stopped_occupied:-999999} != 0 )); then
     echo "FAIL mapping_control: start_enabled=false did not prevent integration"
     cat "${snapshot_initial_stopped}"
@@ -395,6 +413,16 @@ run_mapping_control_case()
   if (( ${started_occupied:-0} == 0 )); then
     echo "FAIL mapping_control: start did not resume integration"
     cat "${start_file}" "${snapshot_started}"
+    return 1
+  fi
+  if (( ${paused_occupied:-999999} != 0 )); then
+    echo "FAIL mapping_control: pause+clear did not prevent fresh integration"
+    cat "${pause_file}" "${clear_file}" "${snapshot_paused}"
+    return 1
+  fi
+  if (( ${restarted_occupied:-0} == 0 )); then
+    echo "FAIL mapping_control: restart after pause did not resume integration"
+    cat "${restart_file}" "${snapshot_restarted}"
     return 1
   fi
   if (( ${final_stopped_occupied:-999999} != 0 )); then
