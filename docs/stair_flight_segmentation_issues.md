@@ -188,14 +188,23 @@ surface_pct_spiral:
   start_surface_component_size=20144
   goal_surface_component_size=16650
   surface_component_count=811
+  start_goal_component_gap_m=0.8
+  gap_start_cell=[-109,-92,1]
+  gap_goal_cell=[-113,-92,1]
+  gap_line_cells=5
+  gap_line_occupied_cells=2
+  gap_line_surface_cells=3
+  gap_line_traversable_cells=3
+  gap_line_forbidden_cells=2
 ```
 
 This means the PCT spiral failure is currently a surface connectivity problem:
 the chosen start and goal snap to different traversable surface components. It
 should not be treated as only a stair centerline smoothing issue. The next useful
-work is to identify whether the PCD has real gaps, whether surface extraction is
-over-splitting curved/spiral steps, or whether a conservative bridge/recovery
-rule can prove safe connectivity without map-specific threshold tuning.
+work is not to blindly bridge the gap: the closest component gap currently
+contains occupied/forbidden cells. The next useful investigation is whether those
+occupied cells are true geometry, railing/wall artifacts, or PCD-mode artifacts
+that realtime ray clearing would remove.
 
 ## Useful Debug Signals To Keep
 

@@ -127,10 +127,36 @@ struct ComponentSummary
   std::size_t goal_component_size{0U};
   std::size_t component_count{0U};
   std::size_t largest_component_size{0U};
+  double start_goal_component_gap_m{0.0};
+  GridIndex gap_start_cell;
+  GridIndex gap_goal_cell;
+  std::size_t gap_line_cells{0U};
+  std::size_t gap_line_occupied_cells{0U};
+  std::size_t gap_line_surface_cells{0U};
+  std::size_t gap_line_traversable_cells{0U};
+  std::size_t gap_line_forbidden_cells{0U};
 };
 
+std::vector<GridIndex> rasterLine(const GridIndex & from, const GridIndex & to)
+{
+  const int steps = std::max({
+    std::abs(to.x - from.x), std::abs(to.y - from.y), std::abs(to.z - from.z), 1});
+  std::vector<GridIndex> cells;
+  cells.reserve(static_cast<std::size_t>(steps + 1));
+  for (int i = 0; i <= steps; ++i) {
+    const double t = static_cast<double>(i) / static_cast<double>(steps);
+    cells.push_back({
+      static_cast<int>(std::lround(static_cast<double>(from.x) + (to.x - from.x) * t)),
+      static_cast<int>(std::lround(static_cast<double>(from.y) + (to.y - from.y) * t)),
+      static_cast<int>(std::lround(static_cast<double>(from.z) + (to.z - from.z) * t))});
+  }
+  cells.erase(std::unique(cells.begin(), cells.end()), cells.end());
+  return cells;
+}
+
 ComponentSummary summarizeComponents(
-  const NavigationSnapshot & snapshot, const GridIndex & start, const GridIndex & goal)
+  const NavigationSnapshot & snapshot, const ProbabilisticVoxelMap & map,
+  const GridIndex & start, const GridIndex & goal)
 {
   ComponentSummary summary;
   std::unordered_map<GridIndex, int, GridIndexHash> component_by_cell;
@@ -193,6 +219,56 @@ ComponentSummary summarizeComponents(
   if (goal_it != component_by_cell.end()) {
     summary.goal_component = goal_it->second;
     summary.goal_component_size = component_sizes[static_cast<std::size_t>(goal_it->second)];
+  }
+  if (summary.start_component >= 0 && summary.goal_component >= 0 &&
+    summary.start_component != summary.goal_component)
+  {
+    std::vector<GridIndex> start_cells;
+    std::vector<GridIndex> goal_cells;
+    start_cells.reserve(summary.start_component_size);
+    goal_cells.reserve(summary.goal_component_size);
+    for (const auto & entry : component_by_cell) {
+      if (entry.second == summary.start_component) {
+        start_cells.push_back(entry.first);
+      } else if (entry.second == summary.goal_component) {
+        goal_cells.push_back(entry.first);
+      }
+    }
+
+    double best_distance_cells = std::numeric_limits<double>::infinity();
+    for (const GridIndex & a : start_cells) {
+      for (const GridIndex & b : goal_cells) {
+        const double dx = static_cast<double>(a.x - b.x);
+        const double dy = static_cast<double>(a.y - b.y);
+        const double dz = static_cast<double>(a.z - b.z);
+        const double distance_cells = dx * dx + dy * dy + dz * dz;
+        if (distance_cells < best_distance_cells) {
+          best_distance_cells = distance_cells;
+          summary.gap_start_cell = a;
+          summary.gap_goal_cell = b;
+        }
+      }
+    }
+    if (std::isfinite(best_distance_cells)) {
+      summary.start_goal_component_gap_m = std::sqrt(best_distance_cells) * snapshot.resolution_m;
+      for (const GridIndex & cell : rasterLine(summary.gap_start_cell, summary.gap_goal_cell)) {
+        ++summary.gap_line_cells;
+        if (map.isOccupied(cell)) {
+          ++summary.gap_line_occupied_cells;
+        }
+        if (snapshot.surface.surface_cells.find(cell) != snapshot.surface.surface_cells.end()) {
+          ++summary.gap_line_surface_cells;
+        }
+        if (snapshot.surface.traversable_cells.find(cell) !=
+          snapshot.surface.traversable_cells.end())
+        {
+          ++summary.gap_line_traversable_cells;
+        }
+        if (snapshot.surface.forbidden_cells.find(cell) != snapshot.surface.forbidden_cells.end()) {
+          ++summary.gap_line_forbidden_cells;
+        }
+      }
+    }
   }
   return summary;
 }
@@ -269,7 +345,7 @@ int main(int argc, char ** argv)
   planner_options.enable_shortcut = true;
   planner_options.w_clearance = 1.2;
   SurfaceAstarPlanner planner(planner_options);
-  const ComponentSummary components = summarizeComponents(snapshot, snapped_start, snapped_goal);
+  const ComponentSummary components = summarizeComponents(snapshot, map, snapped_start, snapped_goal);
   const auto result = planner.plan(snapshot, snapped_start, snapped_goal);
 
   std::cout << "success=" << (result.success ? "true" : "false")
@@ -288,6 +364,16 @@ int main(int argc, char ** argv)
     << " goal_surface_component=" << components.goal_component
     << " start_surface_component_size=" << components.start_component_size
     << " goal_surface_component_size=" << components.goal_component_size
+    << " start_goal_component_gap_m=" << components.start_goal_component_gap_m
+    << " gap_start_cell=[" << components.gap_start_cell.x << "," <<
+      components.gap_start_cell.y << "," << components.gap_start_cell.z << "]"
+    << " gap_goal_cell=[" << components.gap_goal_cell.x << "," <<
+      components.gap_goal_cell.y << "," << components.gap_goal_cell.z << "]"
+    << " gap_line_cells=" << components.gap_line_cells
+    << " gap_line_occupied_cells=" << components.gap_line_occupied_cells
+    << " gap_line_surface_cells=" << components.gap_line_surface_cells
+    << " gap_line_traversable_cells=" << components.gap_line_traversable_cells
+    << " gap_line_forbidden_cells=" << components.gap_line_forbidden_cells
     << " expanded_nodes=" << result.metrics.expanded_nodes
     << " raw_path_waypoints=" << result.metrics.raw_path_waypoints
     << " raw_path_length_m=" << result.metrics.raw_path_length_m
