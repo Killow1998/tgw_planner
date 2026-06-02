@@ -279,6 +279,14 @@ private:
       declare_parameter<bool>("planner_require_footprint", options.require_footprint_support);
     options.swept_sample_step_m =
       declare_parameter<double>("planner_swept_sample_step_m", options.swept_sample_step_m);
+    options.enable_shortcut =
+      declare_parameter<bool>("planner_enable_shortcut", options.enable_shortcut);
+    options.shortcut_sample_step_m =
+      declare_parameter<double>("planner_shortcut_sample_step_m", options.shortcut_sample_step_m);
+    options.shortcut_clearance_ratio =
+      declare_parameter<double>("planner_shortcut_clearance_ratio", options.shortcut_clearance_ratio);
+    options.shortcut_safety_margin_m =
+      declare_parameter<double>("planner_shortcut_safety_margin_m", options.shortcut_safety_margin_m);
     return options;
   }
 
@@ -843,6 +851,9 @@ private:
       std::chrono::duration<double, std::milli>(search_finished - started).count();
     response->stats.expanded_nodes = result.metrics.expanded_nodes;
     response->stats.generated_nodes = result.metrics.generated_nodes;
+    response->stats.raw_path_waypoints = result.metrics.raw_path_waypoints;
+    response->stats.raw_path_length_m = result.metrics.raw_path_length_m;
+    response->stats.postprocess_floor_shortcuts = result.metrics.shortcut_count;
     response->stats.path_waypoints = static_cast<std::uint32_t>(result.path.size());
     response->stats.path_length_m = result.metrics.path_length_m;
     response->stats.path_vertical_gain_m = verticalGain(result.path);

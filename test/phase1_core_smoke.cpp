@@ -137,6 +137,8 @@ int main()
   SurfaceAstarPlanner planner(planner_options);
   const auto plan = planner.plan(snapshot, {2, 4, 1}, {10, 4, 1});
   CHECK(plan.success);
+  CHECK(plan.metrics.raw_path_waypoints >= plan.cells.size());
+  CHECK(plan.metrics.raw_path_length_m >= plan.metrics.path_length_m * 0.99);
   bool used_center_lane = false;
   for (const auto & cell : plan.cells) {
     used_center_lane = used_center_lane || cell.y == 4;

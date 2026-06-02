@@ -94,6 +94,9 @@ launch command line.
 
 The realtime planning response populates:
 
+- `raw_path_waypoints`
+- `raw_path_length_m`
+- `postprocess_floor_shortcuts`
 - `final_path_validated`
 - `final_path_fallback_to_raw`
 - `final_path_validation_failure`
@@ -111,6 +114,12 @@ configured rectangular footprint at start/goal, at each neighbor cell, and along
 sampled swept transitions. This prevents many invalid point-center paths from
 being generated in the first place. Final validation remains as a second proof
 before publishing `/tgw_map/planned_path`.
+
+With `planner_enable_shortcut:=true`, the realtime surface planner can simplify
+raw grid paths, but only when the straight segment remains traversable, passes
+footprint checks, avoids forbidden/blocked cells, and does not reduce minimum
+clearance below `planner_shortcut_clearance_ratio` of the raw segment or below
+`robot_width_m / 2 + planner_shortcut_safety_margin_m`.
 
 `/tgw_map/medial_axis_cloud` publishes clearance ridges filtered by
 `medial_axis_min_clearance_m`. This is a debug layer for checking whether the

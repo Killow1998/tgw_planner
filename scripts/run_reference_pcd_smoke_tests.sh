@@ -93,7 +93,7 @@ run_case()
   local success
   success="$(grep -o "success=True\\|success=False" "${call_file}" | tail -n 1 || true)"
   local summary
-  summary="$(grep -o "expanded_nodes=[0-9]*\\|path_waypoints=[0-9]*\\|path_length_m=[0-9.]*\\|path_vertical_gain_m=[0-9.]*" "${call_file}" | tr '\n' ' ')"
+  summary="$(grep -o "expanded_nodes=[0-9]*\\| raw_path_waypoints=[0-9]*\\| raw_path_length_m=[0-9.]*\\| postprocess_floor_shortcuts=[0-9]*\\| path_waypoints=[0-9]*\\| path_length_m=[0-9.]*\\| path_vertical_gain_m=[0-9.]*" "${call_file}" | sed 's/^ //' | tr '\n' ' ')"
   echo "${name}: ${success:-success=unknown} ${summary}"
 
   cleanup

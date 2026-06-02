@@ -668,6 +668,12 @@ private:
     msg.generated_nodes = metrics.generated_nodes;
     msg.reopened_nodes = metrics.reopened_nodes;
     msg.max_open_set_size = metrics.max_open_set_size;
+    msg.raw_path_waypoints = metrics.raw_path_waypoints;
+    msg.raw_path_length_m = metrics.raw_path_length_m;
+    msg.raw_path_vertical_gain_m = metrics.raw_path_vertical_gain_m;
+    msg.raw_path_vertical_loss_m = metrics.raw_path_vertical_loss_m;
+    msg.postprocess_floor_shortcuts = metrics.postprocess_floor_shortcuts;
+    msg.postprocess_stair_centerline_replacements = metrics.postprocess_stair_centerline_replacements;
     msg.path_waypoints = metrics.path_waypoints;
     msg.path_length_m = metrics.path_length_m;
     msg.path_vertical_gain_m = metrics.path_vertical_gain_m;

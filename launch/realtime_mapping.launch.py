@@ -41,6 +41,10 @@ def generate_launch_description():
     planner_max_iterations = LaunchConfiguration("planner_max_iterations")
     planner_require_footprint = LaunchConfiguration("planner_require_footprint")
     planner_swept_sample_step_m = LaunchConfiguration("planner_swept_sample_step_m")
+    planner_enable_shortcut = LaunchConfiguration("planner_enable_shortcut")
+    planner_shortcut_sample_step_m = LaunchConfiguration("planner_shortcut_sample_step_m")
+    planner_shortcut_clearance_ratio = LaunchConfiguration("planner_shortcut_clearance_ratio")
+    planner_shortcut_safety_margin_m = LaunchConfiguration("planner_shortcut_safety_margin_m")
     validation_sample_step_m = LaunchConfiguration("validation_sample_step_m")
     validation_min_clearance_m = LaunchConfiguration("validation_min_clearance_m")
     validation_require_footprint = LaunchConfiguration("validation_require_footprint")
@@ -89,6 +93,10 @@ def generate_launch_description():
             DeclareLaunchArgument("planner_max_iterations", default_value="250000"),
             DeclareLaunchArgument("planner_require_footprint", default_value="true"),
             DeclareLaunchArgument("planner_swept_sample_step_m", default_value="0.05"),
+            DeclareLaunchArgument("planner_enable_shortcut", default_value="true"),
+            DeclareLaunchArgument("planner_shortcut_sample_step_m", default_value="0.05"),
+            DeclareLaunchArgument("planner_shortcut_clearance_ratio", default_value="0.80"),
+            DeclareLaunchArgument("planner_shortcut_safety_margin_m", default_value="0.02"),
             DeclareLaunchArgument("validation_sample_step_m", default_value="0.05"),
             DeclareLaunchArgument("validation_min_clearance_m", default_value="0.0"),
             DeclareLaunchArgument("validation_require_footprint", default_value="true"),
@@ -141,6 +149,10 @@ def generate_launch_description():
                         "planner_max_iterations": planner_max_iterations,
                         "planner_require_footprint": planner_require_footprint,
                         "planner_swept_sample_step_m": planner_swept_sample_step_m,
+                        "planner_enable_shortcut": planner_enable_shortcut,
+                        "planner_shortcut_sample_step_m": planner_shortcut_sample_step_m,
+                        "planner_shortcut_clearance_ratio": planner_shortcut_clearance_ratio,
+                        "planner_shortcut_safety_margin_m": planner_shortcut_safety_margin_m,
                         "validation_sample_step_m": validation_sample_step_m,
                         "validation_min_clearance_m": validation_min_clearance_m,
                         "validation_require_footprint": validation_require_footprint,

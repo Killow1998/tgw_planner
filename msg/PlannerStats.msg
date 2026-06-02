@@ -18,6 +18,13 @@ uint32 generated_nodes
 uint32 reopened_nodes
 uint32 max_open_set_size
 
+uint32 raw_path_waypoints
+float64 raw_path_length_m
+float64 raw_path_vertical_gain_m
+float64 raw_path_vertical_loss_m
+uint32 postprocess_floor_shortcuts
+uint32 postprocess_stair_centerline_replacements
+
 uint32 path_waypoints
 float64 path_length_m
 float64 path_vertical_gain_m

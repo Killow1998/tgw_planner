@@ -40,6 +40,8 @@ SurfaceAstarPlanner::SurfaceAstarPlanner(SurfacePlannerOptions options)
 {
   options_.max_iterations = std::max<std::uint32_t>(1U, options_.max_iterations);
   options_.swept_sample_step_m = std::max(0.01, options_.swept_sample_step_m);
+  options_.shortcut_sample_step_m = std::max(0.01, options_.shortcut_sample_step_m);
+  options_.shortcut_clearance_ratio = std::clamp(options_.shortcut_clearance_ratio, 0.0, 1.0);
 }
 
 SurfacePlanResult SurfaceAstarPlanner::plan(
@@ -152,6 +154,19 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
     result.cells.push_back(current);
   }
   std::reverse(result.cells.begin(), result.cells.end());
+  result.metrics.raw_path_waypoints = static_cast<std::uint32_t>(result.cells.size());
+  for (std::size_t i = 1; i < result.cells.size(); ++i) {
+    result.metrics.raw_path_length_m += gridDistance(result.cells[i - 1U], result.cells[i]) *
+      snapshot.resolution_m;
+  }
+  if (options_.enable_shortcut) {
+    const std::vector<GridIndex> shortcut_cells = shortcutPath(snapshot, result.cells);
+    if (shortcut_cells.size() >= 2U && shortcut_cells.size() < result.cells.size()) {
+      result.metrics.shortcut_count =
+        static_cast<std::uint32_t>(result.cells.size() - shortcut_cells.size());
+      result.cells = shortcut_cells;
+    }
+  }
   result.path.reserve(result.cells.size());
   for (const GridIndex & cell : result.cells) {
     result.path.push_back({
@@ -262,6 +277,84 @@ GridIndex SurfaceAstarPlanner::worldToGrid(const Point3 & point, double resoluti
     static_cast<int>(std::floor(point.x / resolution_m)),
     static_cast<int>(std::floor(point.y / resolution_m)),
     static_cast<int>(std::floor(point.z / resolution_m))};
+}
+
+std::vector<GridIndex> SurfaceAstarPlanner::shortcutPath(
+  const NavigationSnapshot & snapshot, const std::vector<GridIndex> & raw_cells) const
+{
+  if (raw_cells.size() < 3U) {
+    return raw_cells;
+  }
+
+  std::vector<GridIndex> simplified;
+  simplified.reserve(raw_cells.size());
+  std::size_t i = 0U;
+  simplified.push_back(raw_cells.front());
+  while (i + 1U < raw_cells.size()) {
+    std::size_t best = i + 1U;
+    for (std::size_t candidate = raw_cells.size() - 1U; candidate > i + 1U; --candidate) {
+      if (isShortcutAllowed(snapshot, raw_cells, i, candidate)) {
+        best = candidate;
+        break;
+      }
+    }
+    simplified.push_back(raw_cells[best]);
+    i = best;
+  }
+  return simplified;
+}
+
+bool SurfaceAstarPlanner::isShortcutAllowed(
+  const NavigationSnapshot & snapshot, const std::vector<GridIndex> & raw_cells,
+  std::size_t from_index, std::size_t to_index) const
+{
+  const Point3 from = cellCenter(raw_cells[from_index], snapshot.resolution_m);
+  const Point3 to = cellCenter(raw_cells[to_index], snapshot.resolution_m);
+  const double segment_length = distance3d(from, to);
+  if (segment_length <= snapshot.resolution_m) {
+    return true;
+  }
+
+  const double raw_min_clearance = minRawClearance(snapshot, raw_cells, from_index, to_index);
+  const double required_clearance = std::max(
+    raw_min_clearance * options_.shortcut_clearance_ratio,
+    options_.footprint.width_m * 0.5 + options_.shortcut_safety_margin_m);
+  const double yaw = std::atan2(to.y - from.y, to.x - from.x);
+  const int steps = std::max(1, static_cast<int>(std::ceil(segment_length / options_.shortcut_sample_step_m)));
+  double shortcut_min_clearance = std::numeric_limits<double>::infinity();
+  GridIndex previous_cell = raw_cells[from_index];
+  for (int step = 0; step <= steps; ++step) {
+    const double t = static_cast<double>(step) / static_cast<double>(steps);
+    const Point3 sample{
+      from.x + (to.x - from.x) * t,
+      from.y + (to.y - from.y) * t,
+      from.z + (to.z - from.z) * t};
+    const GridIndex sample_cell = worldToGrid(sample, snapshot.resolution_m);
+    if (!isCellTraversable(snapshot, sample_cell)) {
+      return false;
+    }
+    if (!isFootprintSupported(snapshot, sample, yaw)) {
+      return false;
+    }
+    if (step > 0 && !isTransitionAllowed(snapshot, previous_cell, sample_cell)) {
+      return false;
+    }
+    shortcut_min_clearance =
+      std::min(shortcut_min_clearance, snapshot.clearance.clearanceDistance(sample_cell));
+    previous_cell = sample_cell;
+  }
+  return shortcut_min_clearance >= required_clearance;
+}
+
+double SurfaceAstarPlanner::minRawClearance(
+  const NavigationSnapshot & snapshot, const std::vector<GridIndex> & raw_cells,
+  std::size_t from_index, std::size_t to_index) const
+{
+  double min_clearance = std::numeric_limits<double>::infinity();
+  for (std::size_t i = from_index; i <= to_index; ++i) {
+    min_clearance = std::min(min_clearance, snapshot.clearance.clearanceDistance(raw_cells[i]));
+  }
+  return std::isfinite(min_clearance) ? min_clearance : 0.0;
 }
 
 void SurfaceAstarPlanner::fillMetrics(

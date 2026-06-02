@@ -21,6 +21,10 @@ struct SurfacePlannerOptions
   std::uint32_t max_iterations{250000};
   bool require_footprint_support{true};
   double swept_sample_step_m{0.05};
+  bool enable_shortcut{true};
+  double shortcut_sample_step_m{0.05};
+  double shortcut_clearance_ratio{0.80};
+  double shortcut_safety_margin_m{0.02};
   RobotFootprintOptions footprint;
 };
 
@@ -37,6 +41,9 @@ struct SurfacePlanMetrics
   double risk_cost_sum{0.0};
   double max_path_risk{0.0};
   std::uint32_t low_clearance_samples{0};
+  std::uint32_t raw_path_waypoints{0};
+  double raw_path_length_m{0.0};
+  std::uint32_t shortcut_count{0};
 };
 
 struct SurfacePlanResult
@@ -67,6 +74,14 @@ private:
     const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
   Point3 cellCenter(const GridIndex & cell, double resolution_m) const;
   GridIndex worldToGrid(const Point3 & point, double resolution_m) const;
+  std::vector<GridIndex> shortcutPath(
+    const NavigationSnapshot & snapshot, const std::vector<GridIndex> & raw_cells) const;
+  bool isShortcutAllowed(
+    const NavigationSnapshot & snapshot, const std::vector<GridIndex> & raw_cells,
+    std::size_t from_index, std::size_t to_index) const;
+  double minRawClearance(
+    const NavigationSnapshot & snapshot, const std::vector<GridIndex> & raw_cells,
+    std::size_t from_index, std::size_t to_index) const;
   void fillMetrics(const NavigationSnapshot & snapshot, SurfacePlanResult & result) const;
 
   SurfacePlannerOptions options_;
