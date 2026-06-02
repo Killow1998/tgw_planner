@@ -4,6 +4,7 @@
 #include "tgw_planner/core/raycast_integrator.hpp"
 #include "tgw_planner/core/risk_field.hpp"
 #include "tgw_planner/core/robot_footprint.hpp"
+#include "tgw_planner/core/boundary_extractor.hpp"
 #include "tgw_planner/core/clearance_field.hpp"
 #include "tgw_planner/core/map_snapshot.hpp"
 #include "tgw_planner/core/path_validator.hpp"
@@ -18,6 +19,7 @@ using tgw_planner::core::ProbabilisticVoxelMap;
 using tgw_planner::core::RaycastIntegrator;
 using tgw_planner::core::RiskField;
 using tgw_planner::core::RobotFootprint;
+using tgw_planner::core::BoundaryExtractor;
 using tgw_planner::core::ScanInput;
 using tgw_planner::core::SelfFilterBox;
 using tgw_planner::core::ClearanceField;
@@ -28,6 +30,7 @@ using tgw_planner::core::SurfaceExtractionOptions;
 using tgw_planner::core::SurfaceAstarPlanner;
 using tgw_planner::core::SurfacePlannerOptions;
 using tgw_planner::core::SurfaceExtractor;
+using tgw_planner::core::SurfaceMap;
 
 #define CHECK(condition) \
   do { \
@@ -149,6 +152,30 @@ int main()
   }
   CHECK(medial_has_center);
   CHECK(!medial_has_edge);
+
+  SurfaceMap explicit_boundary_surface;
+  ProbabilisticVoxelMap explicit_boundary_occupancy(options);
+  for (int x = 0; x <= 2; ++x) {
+    for (int y = 0; y <= 2; ++y) {
+      const GridIndex cell{x, y, 1};
+      explicit_boundary_surface.traversable_cells.insert(cell);
+      explicit_boundary_surface.surface_cells[cell].cell = cell;
+      explicit_boundary_surface.surface_cells[cell].support = {x, y, 0};
+      explicit_boundary_occupancy.updateHit({x, y, 0}, 0.0, 1);
+    }
+  }
+  explicit_boundary_surface.forbidden_cells.insert({1, 3, 1});
+  explicit_boundary_occupancy.updateHit({2, 1, 2}, 0.0, 1);
+  BoundaryExtractor().rebuildBoundaryLayer(
+    explicit_boundary_surface, explicit_boundary_occupancy);
+  CHECK(explicit_boundary_surface.boundary_cells.find({1, 1, 1}) !=
+    explicit_boundary_surface.boundary_cells.end());
+  CHECK(explicit_boundary_surface.dropoff_boundary_cells.find({0, 1, 1}) !=
+    explicit_boundary_surface.dropoff_boundary_cells.end());
+  CHECK(explicit_boundary_surface.forbidden_boundary_cells.find({1, 2, 1}) !=
+    explicit_boundary_surface.forbidden_boundary_cells.end());
+  CHECK(explicit_boundary_surface.wall_boundary_cells.find({1, 1, 1}) !=
+    explicit_boundary_surface.wall_boundary_cells.end());
 
   NavigationSnapshot clearance_snapshot;
   clearance_snapshot.resolution_m = options.resolution_m;
