@@ -170,6 +170,13 @@ if(BUILD_TESTING)
     tgw_planner_core
   )
   add_test(NAME tgw_phase1_core_smoke COMMAND tgw_phase1_core_smoke)
+
+  add_test(
+    NAME tgw_synthetic_surface_scene_tests
+    COMMAND ${CMAKE_COMMAND} -E env
+      "TGW_SURFACE_PCD_SMOKE_BIN=$<TARGET_FILE:tgw_surface_pcd_smoke>"
+      bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_synthetic_surface_scene_tests.sh
+  )
 endif()
 
 install(TARGETS

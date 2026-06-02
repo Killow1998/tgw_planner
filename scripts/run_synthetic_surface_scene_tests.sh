@@ -11,6 +11,8 @@ if [[ -f install/setup.bash ]]; then
 fi
 set -u
 
+surface_pcd_smoke_bin="${TGW_SURFACE_PCD_SMOKE_BIN:-}"
+
 tmp_root="$(mktemp -d /tmp/tgw_synthetic_surface.XXXXXX)"
 cleanup()
 {
@@ -123,7 +125,11 @@ run_success_case()
   write_pcd "${name}" "${pcd}"
   local output
   set +e
-  output="$(ros2 run tgw_planner tgw_surface_pcd_smoke "${pcd}" 0.20 ${start} ${goal} "${require_footprint}" 2>&1)"
+  if [[ -n "${surface_pcd_smoke_bin}" ]]; then
+    output="$("${surface_pcd_smoke_bin}" "${pcd}" 0.20 ${start} ${goal} "${require_footprint}" 2>&1)"
+  else
+    output="$(ros2 run tgw_planner tgw_surface_pcd_smoke "${pcd}" 0.20 ${start} ${goal} "${require_footprint}" 2>&1)"
+  fi
   local rc=$?
   set -e
   echo "${name}: ${output}"
@@ -151,7 +157,11 @@ run_failure_case()
   write_pcd "${name}" "${pcd}"
   set +e
   local output
-  output="$(ros2 run tgw_planner tgw_surface_pcd_smoke "${pcd}" 0.20 ${start} ${goal} "${require_footprint}" 2>&1)"
+  if [[ -n "${surface_pcd_smoke_bin}" ]]; then
+    output="$("${surface_pcd_smoke_bin}" "${pcd}" 0.20 ${start} ${goal} "${require_footprint}" 2>&1)"
+  else
+    output="$(ros2 run tgw_planner tgw_surface_pcd_smoke "${pcd}" 0.20 ${start} ${goal} "${require_footprint}" 2>&1)"
+  fi
   local rc=$?
   set -e
   echo "${name}: ${output}"

@@ -60,6 +60,17 @@ Dirty-map dynamic artifact regression:
 src/tgw_planner/scripts/run_dirty_map_tests.sh
 ```
 
+Core and synthetic surface tests:
+
+```bash
+ctest --test-dir build/tgw_planner --output-on-failure
+```
+
+This includes `tgw_phase1_core_smoke` plus
+`tgw_synthetic_surface_scene_tests`, covering straight stairs, switchback
+stairs, spiral stairs, steep step chains, disconnected gaps, and railing-like
+negative bridges through the refactored surface planner.
+
 Realtime bag plan probe:
 
 ```bash
