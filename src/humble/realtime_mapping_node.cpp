@@ -2094,6 +2094,8 @@ private:
       loaded_blocked_cells_.insert(entry.first);
     }
     response->blocked_points = static_cast<std::uint32_t>(loaded_blocked_cells_.size());
+    response->loaded_voxel_evidence = voxel_evidence.exists;
+    response->voxel_count = static_cast<std::uint64_t>(map_.size());
     response->success = true;
     response->message = "loaded realtime map package from " + input_dir.string();
     publishSnapshot();
@@ -2157,11 +2159,17 @@ private:
     response->free_pcd = free_path.string();
     response->static_pcd = static_path.string();
     response->dynamic_pcd = dynamic_path.string();
+    response->blocked_pcd = blocked_path.string();
+    response->voxel_evidence_csv = evidence_path.string();
+    response->metadata_yaml = metadata_path.string();
+    response->blocked_regions_yaml = blocked_regions_path.string();
     response->stats_json = stats_path.string();
     response->occupied_points = static_cast<std::uint32_t>(occupied_cells.size());
     response->free_points = static_cast<std::uint32_t>(free_cells.size());
     response->static_points = static_cast<std::uint32_t>(static_cells.size());
     response->dynamic_points = static_cast<std::uint32_t>(dynamic_cells.size());
+    response->blocked_points = static_cast<std::uint32_t>(blocked_cells.size());
+    response->voxel_evidence_rows = static_cast<std::uint64_t>(map_.size());
   }
 
   tf2_ros::Buffer tf_buffer_;

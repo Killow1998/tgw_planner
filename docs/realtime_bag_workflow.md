@@ -307,7 +307,9 @@ whose saved resolution does not match the running node resolution, and restores
 editable blocked region objects from `blocked_regions.yaml` plus discrete loaded
 blocked cells from `blocked_cloud.pcd`. When `voxel_evidence.csv` is present,
 the per-layer PCD files are debug/compatibility assets rather than the primary
-state source.
+state source. The `SaveMap` response reports the evidence, metadata, blocked,
+and PCD asset paths; the `LoadMap` response reports `loaded_voxel_evidence` and
+`voxel_count` so automation can verify which restore path was used.
 
 `get_snapshot` is intentionally lightweight: it returns `MappingStats`, the
 same JSON string as `/tgw_map/stats_json`, and per-layer point counts. The

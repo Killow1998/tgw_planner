@@ -484,6 +484,11 @@ run_blocked_region_persistence_case()
     >"${add_file}" 2>&1
   ros2 service call /tgw_mapping/save_map tgw_planner/srv/SaveMap \
     "{output_dir: ${output_dir}}" >"${save_file}" 2>&1
+  if ! grep -q "voxel_evidence_csv=" "${save_file}"; then
+    echo "FAIL blocked_region_persistence: SaveMap response did not report voxel_evidence_csv"
+    cat "${save_file}"
+    return 1
+  fi
   if [[ ! -f "${output_dir}/metadata.yaml" ]]; then
     echo "FAIL blocked_region_persistence: save_map did not write metadata.yaml"
     cat "${save_file}"
@@ -541,14 +546,16 @@ PY
     "{operation: remove, min: {x: 0.0, y: 0.0, z: 0.0}, max: {x: 1.0, y: 1.0, z: 1.0}, reason: regression}" \
     >"${remove_file}" 2>&1
 
-  local save_success load_success evidence_only_success mismatch_failed bad_format_failed removed_region
+  local save_success load_success evidence_only_success loaded_evidence evidence_only_loaded_evidence mismatch_failed bad_format_failed removed_region
   save_success="$(grep -o "success=True\\|success=False" "${save_file}" | tail -n 1 || true)"
   load_success="$(grep -o "success=True\\|success=False" "${load_file}" | tail -n 1 || true)"
   evidence_only_success="$(grep -o "success=True\\|success=False" "${evidence_only_load_file}" | tail -n 1 || true)"
+  loaded_evidence="$(grep -o "loaded_voxel_evidence=True" "${load_file}" | tail -n 1 || true)"
+  evidence_only_loaded_evidence="$(grep -o "loaded_voxel_evidence=True" "${evidence_only_load_file}" | tail -n 1 || true)"
   mismatch_failed="$(grep -o "map resolution mismatch" "${mismatch_load_file}" | tail -n 1 || true)"
   bad_format_failed="$(grep -o "unsupported realtime map format" "${bad_format_load_file}" | tail -n 1 || true)"
   removed_region="$(grep -o "removed 1 realtime blocked regions" "${remove_file}" | tail -n 1 || true)"
-  echo "blocked_region_persistence: ${save_success:-save=unknown} ${load_success:-load=unknown} evidence_only_load=${evidence_only_success:-unknown} metadata_mismatch_rejected=${mismatch_failed:+true} bad_format_rejected=${bad_format_failed:+true} removed_region=${removed_region:+true}"
+  echo "blocked_region_persistence: ${save_success:-save=unknown} ${load_success:-load=unknown} loaded_evidence=${loaded_evidence:+true} evidence_only_load=${evidence_only_success:-unknown} evidence_only_loaded_evidence=${evidence_only_loaded_evidence:+true} metadata_mismatch_rejected=${mismatch_failed:+true} bad_format_rejected=${bad_format_failed:+true} removed_region=${removed_region:+true}"
   if [[ "${save_success}" != "success=True" || "${load_success}" != "success=True" ]]; then
     echo "FAIL blocked_region_persistence: save/load failed"
     cat "${save_file}" "${load_file}"
@@ -557,6 +564,11 @@ PY
   if [[ "${evidence_only_success}" != "success=True" ]]; then
     echo "FAIL blocked_region_persistence: evidence-only map package did not load"
     cat "${evidence_only_load_file}"
+    return 1
+  fi
+  if [[ -z "${loaded_evidence}" || -z "${evidence_only_loaded_evidence}" ]]; then
+    echo "FAIL blocked_region_persistence: LoadMap did not report loaded_voxel_evidence=true"
+    cat "${load_file}" "${evidence_only_load_file}"
     return 1
   fi
   if [[ -z "${mismatch_failed}" ]]; then

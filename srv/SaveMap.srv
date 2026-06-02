@@ -6,8 +6,14 @@ string occupied_pcd
 string free_pcd
 string static_pcd
 string dynamic_pcd
+string blocked_pcd
+string voxel_evidence_csv
+string metadata_yaml
+string blocked_regions_yaml
 string stats_json
 uint32 occupied_points
 uint32 free_points
 uint32 static_points
 uint32 dynamic_points
+uint32 blocked_points
+uint64 voxel_evidence_rows
