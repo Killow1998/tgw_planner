@@ -238,10 +238,27 @@ PlanResult VoxelAstarPlanner::plan(
     result.path = std::move(processed_path);
     result.metrics.final_path_validated = true;
   } else {
-    result.path = raw_path;
-    result.metrics.final_path_validated = false;
-    result.metrics.final_path_fallback_to_raw = true;
-    result.metrics.final_path_validation_failure = validation_failure;
+    const std::string postprocess_failure = validation_failure;
+    std::string raw_validation_failure;
+    if (validateFinalPath(map, raw_path, raw_validation_failure)) {
+      result.path = raw_path;
+      result.metrics.final_path_validated = true;
+      result.metrics.final_path_fallback_to_raw = true;
+      result.metrics.final_path_validation_failure = postprocess_failure;
+    } else {
+      result.path = raw_path;
+      result.metrics.final_path_validated = false;
+      result.metrics.final_path_fallback_to_raw = true;
+      result.metrics.final_path_validation_failure = postprocess_failure;
+      result.success = false;
+      result.message = "final voxel path validation failed: " + postprocess_failure +
+        "; raw fallback failed: " + raw_validation_failure;
+      result.metrics.failure_reason = result.message;
+      const auto total_t1 = std::chrono::steady_clock::now();
+      result.metrics.total_plan_time_ms =
+        std::chrono::duration<double, std::milli>(total_t1 - total_t0).count();
+      return result;
+    }
   }
   fillPathMetrics(result.path, result.metrics);
   result.success = true;
@@ -613,9 +630,54 @@ bool VoxelAstarPlanner::validateFinalPath(
     return false;
   }
 
+  auto validate_edge = [&](const GridIndex & from, const GridIndex & to, const std::size_t segment)
+    -> bool
+    {
+      if (!map.isTraversable(to)) {
+        failure = "sample_not_traversable segment=" + std::to_string(segment) + " cell=[" +
+          std::to_string(to.x) + "," + std::to_string(to.y) + "," + std::to_string(to.z) + "]";
+        return false;
+      }
+      if (!map.isStairTransitionAllowed(from, to)) {
+        failure = "illegal_stair_transition segment=" + std::to_string(segment) + " from=[" +
+          std::to_string(from.x) + "," + std::to_string(from.y) + "," +
+          std::to_string(from.z) + "] to=[" + std::to_string(to.x) + "," +
+          std::to_string(to.y) + "," + std::to_string(to.z) + "]";
+        return false;
+      }
+      if (!map.isFootprintTransitionSupported(from, to)) {
+        failure = "unsupported_footprint_transition segment=" + std::to_string(segment) +
+          " from=[" + std::to_string(from.x) + "," + std::to_string(from.y) + "," +
+          std::to_string(from.z) + "] to=[" + std::to_string(to.x) + "," +
+          std::to_string(to.y) + "," + std::to_string(to.z) + "]";
+        return false;
+      }
+      return true;
+    };
+
+  const auto is_search_edge = [&](const GridIndex & from, const GridIndex & to) {
+      const int dx = to.x - from.x;
+      const int dy = to.y - from.y;
+      const int dz = to.z - from.z;
+      return std::abs(dx) <= 1 && std::abs(dy) <= 1 && (dx != 0 || dy != 0) &&
+             std::abs(dz) <= map.maxStepCells();
+    };
+
   for (std::size_t segment = 1U; segment < path.size(); ++segment) {
     const Point3 & from = path[segment - 1U];
     const Point3 & to = path[segment];
+    const GridIndex endpoint = map.worldToGrid(to);
+    if (endpoint == previous) {
+      continue;
+    }
+    if (is_search_edge(previous, endpoint)) {
+      if (!validate_edge(previous, endpoint, segment)) {
+        return false;
+      }
+      previous = endpoint;
+      continue;
+    }
+
     const double distance = pointDistance(from, to);
     const int samples = std::max(
       1, static_cast<int>(std::ceil(distance / std::max(0.5 * map.resolution(), 1.0e-6))));
@@ -630,24 +692,14 @@ bool VoxelAstarPlanner::validateFinalPath(
       if (current == previous) {
         continue;
       }
-      if (!map.isTraversable(current)) {
-        failure = "sample_not_traversable segment=" + std::to_string(segment) + " cell=[" +
-          std::to_string(current.x) + "," + std::to_string(current.y) + "," +
-          std::to_string(current.z) + "]";
-        return false;
-      }
-      if (!map.isStairTransitionAllowed(previous, current)) {
-        failure = "illegal_stair_transition segment=" + std::to_string(segment) + " from=[" +
+      if (!is_search_edge(previous, current)) {
+        failure = "sample_skips_search_edge segment=" + std::to_string(segment) + " from=[" +
           std::to_string(previous.x) + "," + std::to_string(previous.y) + "," +
           std::to_string(previous.z) + "] to=[" + std::to_string(current.x) + "," +
           std::to_string(current.y) + "," + std::to_string(current.z) + "]";
         return false;
       }
-      if (!map.isFootprintTransitionSupported(previous, current)) {
-        failure = "unsupported_footprint_transition segment=" + std::to_string(segment) +
-          " from=[" + std::to_string(previous.x) + "," + std::to_string(previous.y) + "," +
-          std::to_string(previous.z) + "] to=[" + std::to_string(current.x) + "," +
-          std::to_string(current.y) + "," + std::to_string(current.z) + "]";
+      if (!validate_edge(previous, current, segment)) {
         return false;
       }
       previous = current;

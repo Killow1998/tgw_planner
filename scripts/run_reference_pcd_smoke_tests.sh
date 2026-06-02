@@ -23,7 +23,7 @@ launch_pid=""
 cleanup()
 {
   if [[ -n "${launch_pid}" ]]; then
-    kill "${launch_pid}" >/dev/null 2>&1 || true
+    kill -- "-${launch_pid}" >/dev/null 2>&1 || kill "${launch_pid}" >/dev/null 2>&1 || true
     wait "${launch_pid}" >/dev/null 2>&1 || true
     launch_pid=""
   fi
@@ -96,6 +96,37 @@ require_surface_metrics()
   fi
 }
 
+require_legacy_metrics()
+{
+  local name="$1"
+  local call_file="$2"
+  local final_path_validated expanded_nodes path_waypoints path_length
+  final_path_validated="$(grep -o "final_path_validated=True\\|final_path_validated=False" "${call_file}" | tail -n 1 | cut -d= -f2 || true)"
+  expanded_nodes="$(grep -o "expanded_nodes=[0-9]*" "${call_file}" | tail -n 1 | cut -d= -f2 || true)"
+  path_waypoints="$(grep -o "path_waypoints=[0-9]*" "${call_file}" | tail -n 1 | cut -d= -f2 || true)"
+  path_length="$(grep -o "path_length_m=[0-9.]*" "${call_file}" | tail -n 1 | cut -d= -f2 || true)"
+  if [[ "${final_path_validated}" != "True" ]]; then
+    echo "FAIL ${name}: final_path_validated is not true"
+    cat "${call_file}"
+    return 1
+  fi
+  if (( ${expanded_nodes:-0} == 0 )); then
+    echo "FAIL ${name}: expanded_nodes is zero"
+    cat "${call_file}"
+    return 1
+  fi
+  if (( ${path_waypoints:-0} == 0 )); then
+    echo "FAIL ${name}: path_waypoints is zero"
+    cat "${call_file}"
+    return 1
+  fi
+  if [[ -z "${path_length}" ]]; then
+    echo "FAIL ${name}: path_length_m is missing"
+    cat "${call_file}"
+    return 1
+  fi
+}
+
 run_case()
 {
   local name="$1"
@@ -117,7 +148,7 @@ run_case()
   cleanup
   local log_file="/tmp/tgw_${name}_launch.log"
   local call_file="/tmp/tgw_${name}_service.out"
-  ros2 launch tgw_planner pcd_to_path_mvp.launch.py \
+  setsid ros2 launch tgw_planner pcd_to_path_mvp.launch.py \
     use_rviz:=false \
     max_marker_cells:=20 \
     map_resolution_m:="${resolution}" \
@@ -148,6 +179,9 @@ run_case()
   if [[ "${expected}" == "pass" && "${success}" != "success=True" ]]; then
     echo "FAIL ${name}: expected success"
     return 1
+  fi
+  if [[ "${expected}" == "pass" ]]; then
+    require_legacy_metrics "${name}" "${call_file}" || return 1
   fi
   if [[ "${expected}" == "spiral" && "${success}" != "success=True" && "${require_legacy_spiral_pass}" == "1" ]]; then
     echo "FAIL ${name}: legacy spiral pass is required"
