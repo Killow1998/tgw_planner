@@ -566,3 +566,45 @@ Interpretation:
 - Medial-axis candidates remain preferable for deployment-facing goal
   selection because they bias toward clearance, while footprint-aware snapping
   is a service safety guard.
+
+## Boundary Clearance Semantics 2026-06-03
+
+`ClearanceField` no longer seeds traversable boundary cells with exactly
+`0.0 m`. A traversable cell stores the distance from the cell center to the
+nearest unsafe boundary, so a boundary cell center has a minimum physical
+clearance of `0.5 * resolution_m`. This avoids reporting an impossible zero
+clearance for paths that legitimately pass through the center of a boundary
+voxel.
+
+The reference surface smoke tools now also print:
+
+```text
+start_snap_clearance_m
+goal_snap_clearance_m
+min_path_clearance_cell=[x,y,z]
+```
+
+This makes low-clearance paths easier to debug: endpoint snap quality and the
+lowest-clearance path cell are visible without opening RViz.
+
+Verification after the change:
+
+```text
+ctest --test-dir build/tgw_planner --output-on-failure -R tgw_phase1_core_smoke
+```
+
+passed, including an assertion that a boundary cell clearance equals
+`0.5 * resolution_m`.
+
+Direct PCT surface smoke checks, run through the built `tgw_surface_pcd_smoke`
+tool with the workspace sourced, also passed:
+
+```text
+surface_pct_building: success=true final_path_validated=true min_path_clearance_m=0.05 mean_path_clearance_m=0.261169
+surface_pct_spiral: success=true final_path_validated=true min_path_clearance_m=0.1 mean_path_clearance_m=1.09014
+```
+
+The full `run_reference_pcd_smoke_tests.sh` launch path was not rerun in the
+current sandbox because DDS socket creation is blocked (`Operation not
+permitted`). The direct surface smoke commands cover the refactored surface
+planner and clearance field without requiring ROS graph sockets.
