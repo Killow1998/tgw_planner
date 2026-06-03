@@ -697,3 +697,56 @@ Verbose reference PCD metrics:
 surface_pct_building: success=true final_path_validated=true final_path_fallback_to_raw=false build_time_ms=1754.22 expanded_nodes=228864 path_waypoints=209 path_length_m=81.771 min_path_clearance_m=0.05 mean_path_clearance_m=0.261169
 surface_pct_spiral: success=true final_path_validated=true final_path_fallback_to_raw=false build_time_ms=1466.87 expanded_nodes=19044 path_waypoints=9 path_length_m=9.74401 min_path_clearance_m=0.1 mean_path_clearance_m=1.09014
 ```
+
+## Host Real-Bag And Full Regression Validation 2026-06-03
+
+The real-bag probe was rerun in the host ROS environment with DDS/socket
+permissions available. The default same-height probe passed on the reference
+Go2-W bag:
+
+```text
+bag_path=/home/user/ros_ws/bagfile/f7tof9_g2w_ros2
+summary_json=/tmp/tgw_real_bag_plan_probe/summary.json
+received_clouds=646 integrated_clouds=646
+surface_points=10151 traversable_points=10151 dynamic_points=20023
+candidate_pairs=179521
+attempt=1 success=true final_path_validated=true final_path_fallback_to_raw=false
+expanded_nodes=3044 path_waypoints=31 path_length_m=4.168
+min_path_clearance_m=0.05 mean_path_clearance_m=0.165
+```
+
+The cross-height probe also passed with `TGW_PROBE_MIN_ABS_DZ=0.50` and
+`TGW_PROBE_MAX_ABS_DZ=3.00`:
+
+```text
+summary_json=/tmp/tgw_real_bag_plan_probe_crossheight/summary.json
+received_clouds=656 integrated_clouds=656
+surface_points=10001 traversable_points=10001 dynamic_points=22698
+candidate_pairs=422048 top_components_with_required_z_span=5
+attempt=1 success=true final_path_validated=true final_path_fallback_to_raw=false
+expanded_nodes=3543 path_waypoints=19 path_length_m=5.673
+start_snap_distance_m=0.4 goal_snap_distance_m=0.3
+min_path_clearance_m=0.05 mean_path_clearance_m=0.398
+```
+
+The full dirty-map regression passed in the same host ROS environment:
+
+```text
+floor_ceiling_free_space: success=True surface_points=55 traversable_points=55 forbidden_points=57
+dynamic_disappears: success=True dynamic_points=20 static_points=0
+mapping_control: initial_stopped_occupied=0 started_occupied=1 paused_occupied=0 restarted_occupied=1 final_stopped_occupied=0
+blocked_region_persistence: success=True success=True loaded_evidence=true evidence_only_load=success=True evidence_only_loaded_evidence=true evidence_only_voxel_count=11 metadata_mismatch_rejected=true bad_format_rejected=true bad_schema_rejected=true bad_header_rejected=true removed_region=true
+dirty_pcd_artifact_warning: success=true
+dirty_map_tests passed
+```
+
+The full reference PCD smoke script also passed. The refactored surface PCD
+building and spiral checks passed; the legacy spiral launch/service branch
+remains diagnostic and is not required by `TGW_REQUIRE_LEGACY_SPIRAL_PASS=0`:
+
+```text
+surface_pct_building: success=true final_path_validated=true final_path_fallback_to_raw=false build_time_ms=1737.84 expanded_nodes=228864 path_waypoints=209 path_length_m=81.771 min_path_clearance_m=0.05 mean_path_clearance_m=0.261169
+surface_pct_spiral: success=true final_path_validated=true final_path_fallback_to_raw=false build_time_ms=1469.89 expanded_nodes=19044 path_waypoints=9 path_length_m=9.74401 min_path_clearance_m=0.1 mean_path_clearance_m=1.09014
+pct_building: success=True final_path_validated=True final_path_fallback_to_raw=False expanded_nodes=66526 path_waypoints=644 path_length_m=150.9761919101576
+pct_spiral: success=False final_path_validated=False
+```
