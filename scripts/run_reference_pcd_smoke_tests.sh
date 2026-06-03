@@ -22,6 +22,7 @@ pcd_dir="${PCT_PCD_DIR:-$HOME/robot_nav_refs/PCT_planner/rsc/pcd}"
 require_legacy_spiral_pass="${TGW_REQUIRE_LEGACY_SPIRAL_PASS:-0}"
 require_surface_spiral_pass="${TGW_REQUIRE_SURFACE_SPIRAL_PASS:-${TGW_REQUIRE_SPIRAL_PASS:-1}}"
 skip_legacy_pcd_smoke="${TGW_SKIP_LEGACY_PCD_SMOKE:-0}"
+surface_pcd_smoke_bin="${TGW_SURFACE_PCD_SMOKE_BIN:-}"
 
 launch_pid=""
 cleanup()
@@ -34,12 +35,14 @@ cleanup()
 }
 trap cleanup EXIT
 
-existing_nodes="$(ros2 node list 2>/dev/null | grep -E '^/tgw_planner_node$|^/tgw_clicked_point_router_node$' || true)"
-if [[ -n "${existing_nodes}" ]]; then
-  echo "Refusing to run while tgw_planner nodes already exist:"
-  echo "${existing_nodes}"
-  echo "Stop the existing launch first so /plan_path is not served by the wrong map."
-  exit 1
+if [[ "${skip_legacy_pcd_smoke}" != "1" || -z "${surface_pcd_smoke_bin}" ]]; then
+  existing_nodes="$(ros2 node list 2>/dev/null | grep -E '^/tgw_planner_node$|^/tgw_clicked_point_router_node$' || true)"
+  if [[ -n "${existing_nodes}" ]]; then
+    echo "Refusing to run while tgw_planner nodes already exist:"
+    echo "${existing_nodes}"
+    echo "Stop the existing launch first so /plan_path is not served by the wrong map."
+    exit 1
+  fi
 fi
 
 wait_for_node()
@@ -85,10 +88,11 @@ require_surface_metrics()
 {
   local name="$1"
   local output="$2"
-  local final_path_validated path_waypoints expanded_nodes min_clearance mean_clearance low_clearance
+  local final_path_validated path_waypoints expanded_nodes build_time min_clearance mean_clearance low_clearance
   final_path_validated="$(metric_value "${output}" "final_path_validated")"
   path_waypoints="$(metric_value "${output}" "path_waypoints")"
   expanded_nodes="$(metric_value "${output}" "expanded_nodes")"
+  build_time="$(metric_value "${output}" "build_time_ms")"
   min_clearance="$(metric_value "${output}" "min_path_clearance_m")"
   mean_clearance="$(metric_value "${output}" "mean_path_clearance_m")"
   low_clearance="$(metric_value "${output}" "low_clearance_samples")"
@@ -102,6 +106,10 @@ require_surface_metrics()
   fi
   if (( ${expanded_nodes:-0} == 0 )); then
     echo "FAIL ${name}: expanded_nodes is zero"
+    return 1
+  fi
+  if [[ -z "${build_time}" ]]; then
+    echo "FAIL ${name}: build_time_ms is missing"
     return 1
   fi
   if [[ -z "${min_clearance}" || -z "${mean_clearance}" ]]; then
@@ -230,9 +238,15 @@ run_surface_case()
 
   local output
   set +e
-  output="$(ros2 run tgw_planner tgw_surface_pcd_smoke \
-    "${pcd}" "${resolution}" "${start_x}" "${start_y}" "${start_z}" \
-    "${goal_x}" "${goal_y}" "${goal_z}" 0 2>&1)"
+  if [[ -n "${surface_pcd_smoke_bin}" ]]; then
+    output="$("${surface_pcd_smoke_bin}" \
+      "${pcd}" "${resolution}" "${start_x}" "${start_y}" "${start_z}" \
+      "${goal_x}" "${goal_y}" "${goal_z}" 0 2>&1)"
+  else
+    output="$(ros2 run tgw_planner tgw_surface_pcd_smoke \
+      "${pcd}" "${resolution}" "${start_x}" "${start_y}" "${start_z}" \
+      "${goal_x}" "${goal_y}" "${goal_z}" 0 2>&1)"
+  fi
   local rc=$?
   set -e
   echo "${name}: ${output}"

@@ -667,3 +667,33 @@ ctest --test-dir build/tgw_planner --output-on-failure
 ```
 
 Both passed in the current workspace.
+
+## Reference PCD Surface CTest 2026-06-03
+
+The PCT building and spiral surface smoke checks now run as
+`tgw_reference_surface_pcd_smoke_tests` under CTest. The test uses the built
+`tgw_surface_pcd_smoke` binary directly, sets
+`TGW_SKIP_LEGACY_PCD_SMOKE=1`, and points `PCT_PCD_DIR` at the local reference
+PCD directory. This keeps the refactored PCD surface path in ordinary test
+coverage without requiring ROS graph sockets.
+
+Verification:
+
+```text
+ctest --test-dir build/tgw_planner --output-on-failure
+```
+
+passed 3/3 tests:
+
+```text
+tgw_phase1_core_smoke
+tgw_synthetic_surface_scene_tests
+tgw_reference_surface_pcd_smoke_tests
+```
+
+Verbose reference PCD metrics:
+
+```text
+surface_pct_building: success=true final_path_validated=true final_path_fallback_to_raw=false build_time_ms=1754.22 expanded_nodes=228864 path_waypoints=209 path_length_m=81.771 min_path_clearance_m=0.05 mean_path_clearance_m=0.261169
+surface_pct_spiral: success=true final_path_validated=true final_path_fallback_to_raw=false build_time_ms=1466.87 expanded_nodes=19044 path_waypoints=9 path_length_m=9.74401 min_path_clearance_m=0.1 mean_path_clearance_m=1.09014
+```

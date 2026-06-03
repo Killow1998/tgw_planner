@@ -77,6 +77,10 @@ This includes `tgw_phase1_core_smoke` plus
 `tgw_synthetic_surface_scene_tests`, covering straight stairs, switchback
 stairs, spiral stairs, steep step chains, flat narrow corridors, disconnected
 gaps, and railing-like negative bridges through the refactored surface planner.
+When the local PCT reference PCDs are available under
+`$HOME/robot_nav_refs/PCT_planner/rsc/pcd`, CTest also runs
+`tgw_reference_surface_pcd_smoke_tests` for PCT building and spiral through the
+direct `tgw_surface_pcd_smoke` binary with legacy ROS launch checks skipped.
 Successful synthetic cases are checked for final path validation, no raw-path
 fallback, nonzero build/expansion/path metrics, and positive clearance metrics.
 
@@ -242,11 +246,13 @@ use:
 
 ```bash
 TGW_SKIP_LEGACY_PCD_SMOKE=1 \
+TGW_SURFACE_PCD_SMOKE_BIN=build/tgw_planner/tgw_surface_pcd_smoke \
 src/tgw_planner/scripts/run_reference_pcd_smoke_tests.sh
 ```
 
 This still verifies the surface planner PCD path and skips only the legacy
-launch/service path.
+launch/service path. With `TGW_SURFACE_PCD_SMOKE_BIN` set, the surface PCD path
+does not require ROS graph sockets.
 
 The realtime planning response populates:
 

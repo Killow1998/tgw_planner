@@ -178,6 +178,15 @@ if(BUILD_TESTING)
       "TGW_SURFACE_PCD_SMOKE_BIN=$<TARGET_FILE:tgw_surface_pcd_smoke>"
       bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_synthetic_surface_scene_tests.sh
   )
+
+  add_test(
+    NAME tgw_reference_surface_pcd_smoke_tests
+    COMMAND ${CMAKE_COMMAND} -E env
+      "TGW_SKIP_LEGACY_PCD_SMOKE=1"
+      "PCT_PCD_DIR=$ENV{HOME}/robot_nav_refs/PCT_planner/rsc/pcd"
+      "TGW_SURFACE_PCD_SMOKE_BIN=$<TARGET_FILE:tgw_surface_pcd_smoke>"
+      bash ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_reference_pcd_smoke_tests.sh
+  )
 endif()
 
 install(TARGETS
