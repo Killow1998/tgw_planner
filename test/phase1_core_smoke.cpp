@@ -1,5 +1,7 @@
 #include <iostream>
+#include <unordered_set>
 
+#include "tgw_planner/core/pcd_artifact_detector.hpp"
 #include "tgw_planner/core/probabilistic_voxel_map.hpp"
 #include "tgw_planner/core/raycast_integrator.hpp"
 #include "tgw_planner/core/risk_field.hpp"
@@ -12,6 +14,7 @@
 #include "tgw_planner/core/surface_extractor.hpp"
 
 using tgw_planner::core::GridIndex;
+using tgw_planner::core::GridIndexHash;
 using tgw_planner::core::MappingOptions;
 using tgw_planner::core::Point3;
 using tgw_planner::core::Pose3;
@@ -137,6 +140,32 @@ int main()
   CHECK(!map.lookup(stable_wall)->dynamic_suspect);
   CHECK(map.lookup(stable_wall)->static_candidate);
   CHECK(map.isOccupied(stable_wall));
+
+  std::unordered_set<GridIndex, GridIndexHash> clean_pcd_occupied;
+  for (int x = -10; x <= 10; ++x) {
+    for (int y = -5; y <= 5; ++y) {
+      clean_pcd_occupied.insert({x, y, 0});
+      clean_pcd_occupied.insert({x, y, 10});
+    }
+  }
+  CHECK(!tgw_planner::core::possibleVerticalPcdArtifactsDetected(clean_pcd_occupied, 0.20));
+  CHECK(!tgw_planner::core::possiblePcdArtifactsDetected(
+    clean_pcd_occupied, 0.20, 0U, 0U, 0U, 0U));
+  CHECK(tgw_planner::core::possiblePcdArtifactsDetected(
+    clean_pcd_occupied, 0.20, 200U, 0U, 0U, 0U));
+
+  std::unordered_set<GridIndex, GridIndexHash> dirty_human_like_pcd = clean_pcd_occupied;
+  for (int x = -1; x <= 1; ++x) {
+    for (int y = -1; y <= 1; ++y) {
+      for (int z = 1; z <= 8; ++z) {
+        dirty_human_like_pcd.insert({x, y, z});
+      }
+    }
+  }
+  CHECK(tgw_planner::core::possibleVerticalPcdArtifactsDetected(
+    dirty_human_like_pcd, 0.20));
+  CHECK(tgw_planner::core::possiblePcdArtifactsDetected(
+    dirty_human_like_pcd, 0.20, 0U, 0U, 0U, 0U));
 
   RobotFootprint footprint;
   const std::vector<Point3> samples = footprint.sampleFootprint({0.0, 0.0, 0.0}, 0.0, 0.10);

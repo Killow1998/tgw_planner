@@ -637,3 +637,31 @@ min_path_clearance_m=0.5 mean_path_clearance_m=0.5
 ```
 
 The synthetic surface script passed in the current workspace after this change.
+
+## Direct PCD Artifact Detector Coverage 2026-06-03
+
+The PCD artifact-risk detector was moved from a private ROS node method into
+`tgw_planner/core/pcd_artifact_detector.*`. The PCD import node still reports
+the same `possible_artifacts_detected` value, but the core decision can now be
+tested without launching ROS.
+
+`tgw_phase1_core_smoke` now asserts:
+
+```text
+clean floor/ceiling PCD-like cells -> possible_artifacts_detected=false
+rejected artifact-like count above threshold -> possible_artifacts_detected=true
+compact human-like vertical column cluster -> possible_artifacts_detected=true
+```
+
+This does not replace `run_dirty_map_tests.sh`, which still validates the
+PCD-mode warning topic/log publication path when ROS graph sockets are
+available. It makes the core dirty-PCD artifact decision part of normal CTest.
+
+Verification:
+
+```text
+colcon build --packages-select tgw_planner --symlink-install
+ctest --test-dir build/tgw_planner --output-on-failure
+```
+
+Both passed in the current workspace.

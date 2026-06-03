@@ -60,6 +60,13 @@ Dirty-map dynamic artifact regression:
 src/tgw_planner/scripts/run_dirty_map_tests.sh
 ```
 
+The core PCD artifact detector is also covered by
+`tgw_phase1_core_smoke`: clean floor/ceiling PCD-like cells must not trigger
+artifact risk, while a compact human-like vertical column cluster must trigger
+`possible_artifacts_detected`. `run_dirty_map_tests.sh` still covers the ROS
+PCD-mode warning publication and console-log path when ROS graph sockets are
+available.
+
 Core and synthetic surface tests:
 
 ```bash
