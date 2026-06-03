@@ -78,7 +78,7 @@ This includes `tgw_phase1_core_smoke` plus
 stairs, spiral stairs, steep step chains, flat narrow corridors, disconnected
 gaps, and railing-like negative bridges through the refactored surface planner.
 Successful synthetic cases are checked for final path validation, no raw-path
-fallback, nonzero expansion/path metrics, and positive clearance metrics.
+fallback, nonzero build/expansion/path metrics, and positive clearance metrics.
 
 Realtime bag plan probe:
 

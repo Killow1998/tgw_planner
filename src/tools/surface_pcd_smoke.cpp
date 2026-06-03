@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -477,6 +478,7 @@ int main(int argc, char ** argv)
   const Point3 goal{argDouble(argv, 6), argDouble(argv, 7), argDouble(argv, 8)};
   const bool require_footprint = argc >= 10 && std::string(argv[9]) == "1";
 
+  const auto build_start = std::chrono::steady_clock::now();
   pcl::PointCloud<pcl::PointXYZ> cloud;
   if (pcl::io::loadPCDFile(pcd_path, cloud) != 0) {
     std::cerr << "failed to load PCD: " << pcd_path << "\n";
@@ -512,6 +514,9 @@ int main(int argc, char ** argv)
   RiskField risk;
   risk.compute(snapshot.surface, snapshot.clearance);
   snapshot.risk = risk;
+  const auto build_end = std::chrono::steady_clock::now();
+  const double build_time_ms =
+    std::chrono::duration<double, std::milli>(build_end - build_start).count();
 
   GridIndex snapped_start;
   GridIndex snapped_goal;
@@ -529,6 +534,7 @@ int main(int argc, char ** argv)
       << " goal_ok=" << (goal_ok ? "true" : "false")
       << " occupied_voxels=" << map.occupiedVoxels().size()
       << " traversable_cells=" << snapshot.surface.traversable_cells.size()
+      << " build_time_ms=" << build_time_ms
       << "\n";
     return 1;
   }
@@ -549,6 +555,7 @@ int main(int argc, char ** argv)
     << " traversable_cells=" << snapshot.surface.traversable_cells.size()
     << " boundary_cells=" << snapshot.surface.boundary_cells.size()
     << " risk_cells=" << snapshot.risk.risks().size()
+    << " build_time_ms=" << build_time_ms
     << " start_snap_distance_m=" << start_snap
     << " goal_snap_distance_m=" << goal_snap
     << " start_snap_clearance_m=" << start_snap_clearance

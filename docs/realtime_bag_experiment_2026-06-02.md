@@ -621,6 +621,7 @@ success=true
 final_path_validated=true
 final_path_fallback_to_raw=false
 expanded_nodes > 0
+build_time_ms > 0
 path_length_m > 0
 min_path_clearance_m > configured threshold
 mean_path_clearance_m > 0
@@ -631,6 +632,7 @@ that clearance-aware snapping and planning stay on the safer corridor center:
 
 ```text
 flat_narrow_corridor: success=true final_path_validated=true final_path_fallback_to_raw=false
+build_time_ms=0.616086
 start_snap_clearance_m=0.5 goal_snap_clearance_m=0.5
 expanded_nodes=170 path_waypoints=2 path_length_m=6.4
 min_path_clearance_m=0.5 mean_path_clearance_m=0.5

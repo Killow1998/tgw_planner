@@ -176,6 +176,7 @@ run_success_case()
     return 1
   fi
   require_numeric_metric_gt "${name}" "expanded_nodes" "$(metric_value "${output}" "expanded_nodes")" "0"
+  require_numeric_metric_gt "${name}" "build_time_ms" "$(metric_value "${output}" "build_time_ms")" "0.0"
   require_numeric_metric_gt "${name}" "path_length_m" "$(metric_value "${output}" "path_length_m")" "0.0"
   require_numeric_metric_gt \
     "${name}" "min_path_clearance_m" "$(metric_value "${output}" "min_path_clearance_m")" \
