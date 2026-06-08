@@ -1,0 +1,5 @@
+tgw_experience_planner_node:
+  ros__parameters:
+    pbstream_path: ""
+    map_frame: "map"
+    max_trajectory_points: 200000

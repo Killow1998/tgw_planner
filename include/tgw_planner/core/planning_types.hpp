@@ -13,6 +13,14 @@ struct Point3
   double z{0.0};
 };
 
+struct PointXYZI
+{
+  double x{0.0};
+  double y{0.0};
+  double z{0.0};
+  double intensity{0.0};
+};
+
 struct Pose3
 {
   Point3 translation;

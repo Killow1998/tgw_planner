@@ -3,7 +3,7 @@
 <package format="3">
   <name>tgw_planner</name>
   <version>0.1.0</version>
-  <description>ROS 2 Humble MVP planner for Unitree Go2-W multi-floor point-cloud navigation.</description>
+  <description>Experience-based ROS 2 planner skeleton for reachable surfaces derived from n3map.pbstream resources.</description>
 
   <maintainer email="killow1998@gmail.com">killow</maintainer>
   <license>MIT</license>
@@ -16,6 +16,7 @@
 
   <depend>builtin_interfaces</depend>
   <depend>geometry_msgs</depend>
+  <depend>n3mapping</depend>
   <depend>nav_msgs</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
@@ -23,13 +24,7 @@
   <depend>rviz_default_plugins</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
-  <depend>std_srvs</depend>
-  <depend>tf2</depend>
-  <depend>tf2_ros</depend>
   <depend>visualization_msgs</depend>
-
-  <depend>liboctomap-dev</depend>
-  <depend>libpcl-all-dev</depend>
 
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

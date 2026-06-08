@@ -4,7 +4,7 @@
 
 #include "tgw_planner/core/clearance_field.hpp"
 #include "tgw_planner/core/grid_index.hpp"
-#include "tgw_planner/core/surface_extractor.hpp"
+#include "tgw_planner/core/surface_map.hpp"
 
 namespace tgw_planner::core
 {

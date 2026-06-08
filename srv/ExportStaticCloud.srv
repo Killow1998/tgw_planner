@@ -1,5 +1,0 @@
-string output_pcd
----
-bool success
-string message
-uint32 saved_points
