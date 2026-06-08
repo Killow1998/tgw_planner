@@ -36,6 +36,12 @@ struct ReachableExpansionResult
   std::size_t body_obstructed_rejected_count{0};
   std::size_t anchor_envelope_rejected_count{0};
   std::size_t hole_filled_count{0};
+  std::size_t bridge_seed_count{0};
+  std::size_t bridge_used_as_expansion_anchor{0};
+  std::size_t hole_fill_from_bridge_rejected{0};
+  std::size_t support_component_count{0};
+  std::size_t anchored_support_component_count{0};
+  std::size_t rejected_unanchored_component_cells{0};
 };
 
 class ReachableExpander
@@ -44,7 +50,8 @@ public:
   explicit ReachableExpander(ReachableExpanderOptions options = {});
 
   ReachableExpansionResult expand(
-    const std::unordered_set<GridIndex, GridIndexHash> & proven_seed_cells,
+    const std::unordered_set<GridIndex, GridIndexHash> & observed_seed_cells,
+    const std::unordered_set<GridIndex, GridIndexHash> & bridge_seed_cells,
     const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry_cells) const;
 
 private:

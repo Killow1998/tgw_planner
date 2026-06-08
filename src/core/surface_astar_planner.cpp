@@ -221,6 +221,7 @@ double SurfaceAstarPlanner::transitionCost(
   const double clearance_penalty = options_.w_clearance * snapshot.clearance.clearancePenalty(to);
   const double risk_penalty = options_.w_risk * snapshot.risk.riskCost(to);
   const double unknown_penalty = options_.w_unknown * unknownPenalty(snapshot, to);
+  double bridge_penalty = 0.0;
   double slope_penalty = 0.0;
   const auto from_surface = snapshot.surface.surface_cells.find(from);
   const auto to_surface = snapshot.surface.surface_cells.find(to);
@@ -229,6 +230,11 @@ double SurfaceAstarPlanner::transitionCost(
   {
     slope_penalty =
       options_.w_slope * std::abs(to_surface->second.height_m - from_surface->second.height_m);
+    if (to_surface->second.label == SurfaceLabel::TrajectoryBridge ||
+      to_surface->second.reachability == ReachabilityLabel::LowConfidenceReachable)
+    {
+      bridge_penalty = options_.w_bridge;
+    }
   }
 
   double turn_penalty = 0.0;
@@ -245,7 +251,8 @@ double SurfaceAstarPlanner::transitionCost(
     }
   }
 
-  return step + clearance_penalty + risk_penalty + unknown_penalty + slope_penalty + turn_penalty;
+  return step + clearance_penalty + risk_penalty + unknown_penalty + bridge_penalty +
+         slope_penalty + turn_penalty;
 }
 
 bool SurfaceAstarPlanner::isCellTraversable(

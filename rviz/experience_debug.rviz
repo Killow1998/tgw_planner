@@ -83,6 +83,30 @@ Visualization Manager:
             Value: /tgw_experience/keyframe_geometry_cloud
           Use Fixed Frame: true
           Value: false
+        - Alpha: 0.60
+          Autocompute Intensity Bounds: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 230; 230; 230
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: false
+          Name: Support Candidates
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 2
+          Size (m): 0.04
+          Style: Points
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/support_candidate_cloud
+          Use Fixed Frame: true
+          Value: false
         - Alpha: 0.85
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -332,6 +356,114 @@ Visualization Manager:
             Reliability Policy: Reliable
             Value: /tgw_experience/risk_cloud
           Use Fixed Frame: true
+          Value: false
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/start_marker
+          Name: Start Marker
+          Namespaces:
+            tgw_start: true
+          Queue Size: 100
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/goal_marker
+          Name: Goal Marker
+          Namespaces:
+            tgw_goal: true
+          Queue Size: 100
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/plan_status_marker
+          Name: Plan Status
+          Namespaces:
+            tgw_plan_status: true
+          Queue Size: 100
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_pose_tool_preview
+          Name: TGW Pose Tool Preview
+          Namespaces:
+            tgw_pose_preview: true
+          Queue Size: 100
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz_default_plugins/Path
+          Color: 255; 255; 255
+          Enabled: true
+          Head Diameter: 0.12
+          Head Length: 0.20
+          Length: 0.20
+          Line Style: Lines
+          Line Width: 0.08
+          Name: Planned Path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0.08
+          Pose Color: 255; 255; 255
+          Pose Style: None
+          Radius: 0.03
+          Shaft Diameter: 0.05
+          Shaft Length: 0.15
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/path
+          Value: true
+        - Alpha: 0.55
+          Buffer Length: 1
+          Class: rviz_default_plugins/Path
+          Color: 255; 80; 80
+          Enabled: false
+          Head Diameter: 0.12
+          Head Length: 0.20
+          Length: 0.20
+          Line Style: Lines
+          Line Width: 0.04
+          Name: Raw Path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0.10
+          Pose Color: 255; 80; 80
+          Pose Style: None
+          Radius: 0.03
+          Shaft Diameter: 0.05
+          Shaft Length: 0.15
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/raw_path
           Value: false
       Enabled: true
       Name: Experience Clouds

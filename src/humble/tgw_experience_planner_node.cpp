@@ -1,5 +1,9 @@
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstddef>
+#include <functional>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -7,15 +11,23 @@
 #include <unordered_set>
 #include <vector>
 
+#include "geometry_msgs/msg/point_stamped.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
+#include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_srvs/srv/trigger.hpp"
+#include "visualization_msgs/msg/marker.hpp"
 
 #include "tgw_planner/core/experience_surface_builder.hpp"
 #include "tgw_planner/core/grid_index.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
+#include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/trajectory_projector.hpp"
+#include "tgw_planner/msg/planner_stats.hpp"
+#include "tgw_planner/srv/plan_path.hpp"
 
 namespace
 {
@@ -29,6 +41,9 @@ using tgw_planner::core::ExperienceBuildResult;
 using tgw_planner::core::ExperienceSurfaceBuilder;
 using tgw_planner::core::ExperienceSurfaceBuilderOptions;
 using tgw_planner::core::GridIndex;
+using tgw_planner::core::SurfaceAstarPlanner;
+using tgw_planner::core::SurfacePlanResult;
+using tgw_planner::core::SurfacePlannerOptions;
 using tgw_planner::core::TrajectoryProjectionResult;
 using tgw_planner::core::TrajectoryProjector;
 using tgw_planner::core::TrajectoryProjectorOptions;
@@ -100,10 +115,18 @@ std::string toStatsJson(
   json << ",\"nav_filter_raw_points\":" << resource.nav_filter_raw_points;
   json << ",\"nav_filter_kept_points\":" << resource.nav_filter_kept_points;
   json << ",\"nav_filter_removed_points\":" << resource.nav_filter_removed_points;
+  json << ",\"raw_geometry_cells\":" <<
+    (build && build->success ? build->raw_geometry_cell_count : 0U);
+  json << ",\"support_candidate_cells\":" <<
+    (build && build->success ? build->support_candidate_count : 0U);
   json << ",\"projected_support_count\":" <<
     (projection ? projection->projected_support_samples.size() : 0U);
   json << ",\"proven_reachable_count\":" <<
-    (projection ? projection->proven_seed_cells.size() : 0U);
+    (projection ? projection->observed_seed_cells.size() : 0U);
+  json << ",\"observed_seed_cells\":" <<
+    (projection ? projection->observed_seed_cells.size() : 0U);
+  json << ",\"bridge_seed_cells\":" <<
+    (projection ? projection->bridge_seed_cells.size() : 0U);
   json << ",\"rejected_projection_count\":" <<
     (projection ? projection->rejected_samples.size() : 0U);
   if (projection) {
@@ -139,6 +162,16 @@ std::string toStatsJson(
     (build && build->success ? build->anchor_envelope_rejected_count : 0U);
   json << ",\"hole_filled_count\":" <<
     (build && build->success ? build->hole_filled_count : 0U);
+  json << ",\"bridge_used_as_expansion_anchor\":" <<
+    (build && build->success ? build->bridge_used_as_expansion_anchor : 0U);
+  json << ",\"hole_fill_from_bridge_rejected\":" <<
+    (build && build->success ? build->hole_fill_from_bridge_rejected : 0U);
+  json << ",\"support_components\":" <<
+    (build && build->success ? build->support_component_count : 0U);
+  json << ",\"anchored_support_components\":" <<
+    (build && build->success ? build->anchored_support_component_count : 0U);
+  json << ",\"rejected_unanchored_component_cells\":" <<
+    (build && build->success ? build->rejected_unanchored_component_cells : 0U);
   json << ",\"boundary_count\":" <<
     (build && build->success ? build->snapshot.surface.boundary_cells.size() : 0U);
   json << ",\"clearance_count\":" <<
@@ -216,6 +249,101 @@ Point3 cellCenter(const GridIndex & cell, double resolution_m)
     (static_cast<double>(cell.y) + 0.5) * resolution_m,
     (static_cast<double>(cell.z) + 0.5) * resolution_m};
 }
+
+Point3 posePoint(const geometry_msgs::msg::PoseStamped & pose)
+{
+  return {pose.pose.position.x, pose.pose.position.y, pose.pose.position.z};
+}
+
+Point3 stampedPoint(const geometry_msgs::msg::PointStamped & point)
+{
+  return {point.point.x, point.point.y, point.point.z};
+}
+
+nav_msgs::msg::Path makePathMsg(
+  const rclcpp::Time & stamp,
+  const std::string & frame_id,
+  const std::vector<Point3> & path)
+{
+  nav_msgs::msg::Path msg;
+  msg.header.stamp = stamp;
+  msg.header.frame_id = frame_id;
+  msg.poses.reserve(path.size());
+  for (const Point3 & point : path) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header = msg.header;
+    pose.pose.position.x = point.x;
+    pose.pose.position.y = point.y;
+    pose.pose.position.z = point.z;
+    pose.pose.orientation.w = 1.0;
+    msg.poses.push_back(pose);
+  }
+  return msg;
+}
+
+visualization_msgs::msg::Marker makeSphereMarker(
+  const rclcpp::Time & stamp,
+  const std::string & frame_id,
+  const std::string & ns,
+  const int id,
+  const Point3 & point,
+  const double scale_m,
+  const float r,
+  const float g,
+  const float b)
+{
+  visualization_msgs::msg::Marker marker;
+  marker.header.stamp = stamp;
+  marker.header.frame_id = frame_id;
+  marker.ns = ns;
+  marker.id = id;
+  marker.type = visualization_msgs::msg::Marker::SPHERE;
+  marker.action = visualization_msgs::msg::Marker::ADD;
+  marker.pose.position.x = point.x;
+  marker.pose.position.y = point.y;
+  marker.pose.position.z = point.z + 0.25;
+  marker.pose.orientation.w = 1.0;
+  marker.scale.x = scale_m;
+  marker.scale.y = scale_m;
+  marker.scale.z = scale_m;
+  marker.color.r = r;
+  marker.color.g = g;
+  marker.color.b = b;
+  marker.color.a = 1.0F;
+  return marker;
+}
+
+visualization_msgs::msg::Marker makeTextMarker(
+  const rclcpp::Time & stamp,
+  const std::string & frame_id,
+  const std::string & ns,
+  const int id,
+  const Point3 & point,
+  const std::string & text,
+  const double scale_m,
+  const float r,
+  const float g,
+  const float b)
+{
+  visualization_msgs::msg::Marker marker;
+  marker.header.stamp = stamp;
+  marker.header.frame_id = frame_id;
+  marker.ns = ns;
+  marker.id = id;
+  marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+  marker.action = visualization_msgs::msg::Marker::ADD;
+  marker.pose.position.x = point.x;
+  marker.pose.position.y = point.y;
+  marker.pose.position.z = point.z + 0.7;
+  marker.pose.orientation.w = 1.0;
+  marker.scale.z = scale_m;
+  marker.color.r = r;
+  marker.color.g = g;
+  marker.color.b = b;
+  marker.color.a = 1.0F;
+  marker.text = text;
+  return marker;
+}
 }  // namespace
 
 class TgwExperiencePlannerNode : public rclcpp::Node
@@ -256,6 +384,9 @@ public:
     declare_parameter<int>("hole_fill_iterations", 2);
     declare_parameter<int>("min_hole_fill_neighbors", 5);
     declare_parameter<double>("max_hole_fill_height_spread_m", 0.12);
+    declare_parameter<double>("plan_max_step_height_m", 0.35);
+    declare_parameter<int>("plan_max_iterations", 250000);
+    declare_parameter<double>("plan_bridge_cost", 2.5);
     declare_parameter<int>("max_trajectory_points", 200000);
     declare_parameter<int>("max_geometry_debug_points", 400000);
 
@@ -264,6 +395,8 @@ public:
       "/tgw_experience/trajectory_cloud", latched_qos);
     keyframe_geometry_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/tgw_experience/keyframe_geometry_cloud", latched_qos);
+    support_candidate_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/tgw_experience/support_candidate_cloud", latched_qos);
     projected_support_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/tgw_experience/projected_support_cloud", latched_qos);
     trajectory_bridge_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -284,8 +417,39 @@ public:
       "/tgw_experience/clearance_cloud", latched_qos);
     risk_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/tgw_experience/risk_cloud", latched_qos);
+    path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_experience/path", latched_qos);
+    raw_path_pub_ = create_publisher<nav_msgs::msg::Path>(
+      "/tgw_experience/raw_path", latched_qos);
+    start_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/tgw_experience/start_marker", latched_qos);
+    goal_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/tgw_experience/goal_marker", latched_qos);
+    plan_status_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/tgw_experience/plan_status_marker", latched_qos);
     stats_json_pub_ = create_publisher<std_msgs::msg::String>(
       "/tgw_experience/stats_json", latched_qos);
+    plan_path_srv_ = create_service<tgw_planner::srv::PlanPath>(
+      "/tgw_experience/plan_path",
+      std::bind(
+        &TgwExperiencePlannerNode::handlePlanPath, this, std::placeholders::_1,
+        std::placeholders::_2));
+    clear_plan_srv_ = create_service<std_srvs::srv::Trigger>(
+      "/tgw_experience/clear_plan",
+      std::bind(
+        &TgwExperiencePlannerNode::handleClearPlan, this, std::placeholders::_1,
+        std::placeholders::_2));
+    start_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
+      "/start_point", rclcpp::QoS(10),
+      std::bind(&TgwExperiencePlannerNode::onStartPoint, this, std::placeholders::_1));
+    goal_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
+      "/goal_point", rclcpp::QoS(10),
+      std::bind(&TgwExperiencePlannerNode::onGoalPoint, this, std::placeholders::_1));
+    start_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+      "/start_pose", rclcpp::QoS(10),
+      std::bind(&TgwExperiencePlannerNode::onStartPose, this, std::placeholders::_1));
+    goal_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+      "/goal_pose", rclcpp::QoS(10),
+      std::bind(&TgwExperiencePlannerNode::onGoalPose, this, std::placeholders::_1));
 
     loadResource();
   }
@@ -316,6 +480,10 @@ private:
       result.resource);
     const ExperienceBuildResult build = ExperienceSurfaceBuilder(builderOptions()).build(
       result.resource);
+    if (build.success) {
+      snapshot_ = build.snapshot;
+      has_snapshot_ = true;
+    }
     publishKeyframeGeometry(result.resource);
     publishTrajectory(result.resource);
     publishProjectionDebug(result.resource, projection);
@@ -327,18 +495,24 @@ private:
     }
     RCLCPP_INFO(
       get_logger(),
-      "loaded n3map experience resource: keyframes=%zu dense_trajectory=%zu projected_support=%zu proven_reachable=%zu expanded_reachable=%zu rejected_projection=%zu no_support=%zu ambiguous_multifloor=%zu reanchored_support=%zu retry_support=%zu bridge_seeds=%zu footprint_rejected=%zu body_obstructed_rejected=%zu anchor_envelope_rejected=%zu hole_filled=%zu frame=%s body=%s",
+      "loaded n3map experience resource: keyframes=%zu dense_trajectory=%zu raw_geometry=%zu support_candidates=%zu projected_support=%zu observed_seed=%zu bridge_seed=%zu expanded_reachable=%zu rejected_projection=%zu no_support=%zu ambiguous_multifloor=%zu reanchored_support=%zu retry_support=%zu bridge_used_as_expansion_anchor=%zu support_components=%zu anchored_components=%zu rejected_unanchored_component=%zu footprint_rejected=%zu body_obstructed_rejected=%zu anchor_envelope_rejected=%zu hole_filled=%zu frame=%s body=%s",
       result.resource.keyframes.size(),
       result.resource.dense_trajectory.size(),
+      build.success ? build.raw_geometry_cell_count : 0U,
+      build.success ? build.support_candidate_count : 0U,
       projection.projected_support_samples.size(),
-      projection.proven_seed_cells.size(),
+      projection.observed_seed_cells.size(),
+      projection.bridge_seed_cells.size(),
       build.success ? build.snapshot.surface.traversable_cells.size() : 0U,
       projection.rejected_samples.size(),
       rejected_counts["support_projection_failed"],
       rejected_counts["support_projection_ambiguous_multifloor"],
       projection.reanchored_support_samples,
       projection.retry_support_samples,
-      projection.trajectory_bridge_seed_count,
+      build.success ? build.bridge_used_as_expansion_anchor : 0U,
+      build.success ? build.support_component_count : 0U,
+      build.success ? build.anchored_support_component_count : 0U,
+      build.success ? build.rejected_unanchored_component_cells : 0U,
       projection.footprint_rejected_samples,
       build.success ? build.body_obstructed_rejected_count : 0U,
       build.success ? build.anchor_envelope_rejected_count : 0U,
@@ -458,6 +632,437 @@ private:
     stats_json_pub_->publish(msg);
   }
 
+  SurfacePlannerOptions plannerOptions() const
+  {
+    SurfacePlannerOptions options;
+    options.max_step_height_m = get_parameter("plan_max_step_height_m").as_double();
+    options.max_iterations = static_cast<std::uint32_t>(
+      std::max<std::int64_t>(1, get_parameter("plan_max_iterations").as_int()));
+    options.w_bridge = get_parameter("plan_bridge_cost").as_double();
+    options.footprint.length_m = get_parameter("robot_length_m").as_double();
+    options.footprint.width_m = get_parameter("robot_width_m").as_double();
+    options.footprint.base_to_front_m = get_parameter("base_to_front_m").as_double();
+    options.footprint.height_m = get_parameter("body_clearance_height_m").as_double();
+    options.footprint.support_height_tolerance_m =
+      get_parameter("footprint_support_height_tolerance_m").as_double();
+    options.require_footprint_support = true;
+    options.enable_shortcut = true;
+    return options;
+  }
+
+  bool nearestTraversableCell(
+    const Point3 & point, GridIndex * nearest_cell, double * nearest_distance_m) const
+  {
+    if (!has_snapshot_) {
+      return false;
+    }
+    const double layer_tolerance_m = 0.75 * snapshot_.resolution_m;
+    const double z_ceiling = point.z + 0.5 * snapshot_.resolution_m;
+    double nearest_xy_distance = std::numeric_limits<double>::infinity();
+    double target_layer_z = -std::numeric_limits<double>::infinity();
+    bool found_layer = false;
+
+    for (const GridIndex & cell : snapshot_.surface.traversable_cells) {
+      const Point3 center = cellCenter(cell, snapshot_.resolution_m);
+      const double dx = point.x - center.x;
+      const double dy = point.y - center.y;
+      const double xy_distance = std::sqrt(dx * dx + dy * dy);
+      if (center.z > z_ceiling) {
+        continue;
+      }
+      if (snapshot_.surface.blocked_cells.find(cell) != snapshot_.surface.blocked_cells.end() ||
+        snapshot_.surface.forbidden_cells.find(cell) != snapshot_.surface.forbidden_cells.end())
+      {
+        continue;
+      }
+      if (xy_distance > nearest_xy_distance + snapshot_.resolution_m) {
+        continue;
+      }
+      if (xy_distance < nearest_xy_distance - snapshot_.resolution_m) {
+        nearest_xy_distance = xy_distance;
+        target_layer_z = center.z;
+        found_layer = true;
+        continue;
+      }
+      if (!found_layer || center.z > target_layer_z) {
+        target_layer_z = center.z;
+        found_layer = true;
+      }
+    }
+
+    if (!found_layer) {
+      *nearest_distance_m = 0.0;
+      return false;
+    }
+
+    const double required_clearance_m = std::max(
+      get_parameter("robot_width_m").as_double(), snapshot_.resolution_m);
+    double best_safe_score = std::numeric_limits<double>::infinity();
+    double best_fallback_score = -std::numeric_limits<double>::infinity();
+    GridIndex best_safe_cell;
+    GridIndex best_fallback_cell;
+    double best_distance = 0.0;
+    double best_fallback_distance = 0.0;
+    bool found_safe = false;
+    bool found_fallback = false;
+
+    for (const GridIndex & cell : snapshot_.surface.traversable_cells) {
+      const Point3 center = cellCenter(cell, snapshot_.resolution_m);
+      if (std::abs(center.z - target_layer_z) > layer_tolerance_m) {
+        continue;
+      }
+      const double dx = point.x - center.x;
+      const double dy = point.y - center.y;
+      const double xy_distance = std::sqrt(dx * dx + dy * dy);
+      if (snapshot_.surface.blocked_cells.find(cell) != snapshot_.surface.blocked_cells.end() ||
+        snapshot_.surface.forbidden_cells.find(cell) != snapshot_.surface.forbidden_cells.end())
+      {
+        continue;
+      }
+
+      const double clearance = snapshot_.clearance.clearanceDistance(cell);
+      if (clearance >= required_clearance_m) {
+        const double score = xy_distance + 0.05 / std::max(clearance, 1.0e-3);
+        if (!found_safe || score < best_safe_score) {
+          best_safe_score = score;
+          best_distance = tgw_planner::core::distance3d(point, center);
+          best_safe_cell = cell;
+          found_safe = true;
+        }
+      }
+
+      const double fallback_score = clearance - 0.05 * xy_distance;
+      if (!found_fallback || fallback_score > best_fallback_score) {
+        best_fallback_score = fallback_score;
+        best_fallback_distance = tgw_planner::core::distance3d(point, center);
+        best_fallback_cell = cell;
+        found_fallback = true;
+      }
+    }
+
+    if (found_safe) {
+      *nearest_cell = best_safe_cell;
+      *nearest_distance_m = best_distance;
+      return true;
+    }
+    if (found_fallback) {
+      *nearest_cell = best_fallback_cell;
+      *nearest_distance_m = best_fallback_distance;
+      return true;
+    }
+    *nearest_distance_m = 0.0;
+    return false;
+  }
+
+  tgw_planner::msg::PlannerStats makePlannerStats(
+    const SurfacePlanResult & plan,
+    double search_time_ms,
+    double start_snap_distance_m,
+    double goal_snap_distance_m) const
+  {
+    tgw_planner::msg::PlannerStats stats;
+    stats.stamp = now();
+    stats.map_id = "n3map_experience";
+    stats.success = plan.success;
+    stats.failure_reason = plan.success ? "" : plan.message;
+    stats.search_time_ms = search_time_ms;
+    stats.total_plan_time_ms = search_time_ms;
+    stats.traversable_cells = static_cast<std::uint32_t>(
+      std::min<std::size_t>(
+        snapshot_.surface.traversable_cells.size(), std::numeric_limits<std::uint32_t>::max()));
+    stats.blocked_cells = static_cast<std::uint32_t>(
+      std::min<std::size_t>(
+        snapshot_.surface.blocked_cells.size(), std::numeric_limits<std::uint32_t>::max()));
+    stats.risk_cells = static_cast<std::uint32_t>(
+      std::min<std::size_t>(
+        snapshot_.risk.risks().size(), std::numeric_limits<std::uint32_t>::max()));
+    stats.expanded_nodes = plan.metrics.expanded_nodes;
+    stats.generated_nodes = plan.metrics.generated_nodes;
+    stats.raw_path_waypoints = plan.metrics.raw_path_waypoints;
+    stats.raw_path_length_m = plan.metrics.raw_path_length_m;
+    stats.postprocess_floor_shortcuts = plan.metrics.shortcut_count;
+    stats.path_waypoints = static_cast<std::uint32_t>(plan.path.size());
+    stats.path_length_m = plan.metrics.path_length_m;
+    stats.final_path_validated = plan.metrics.final_path_validated;
+    stats.final_path_fallback_to_raw = plan.metrics.final_path_fallback_to_raw;
+    stats.final_path_validation_failure = plan.metrics.final_path_validation_failure;
+    stats.min_path_clearance_m = plan.metrics.min_path_clearance_m;
+    stats.mean_path_clearance_m = plan.metrics.mean_path_clearance_m;
+    stats.clearance_cost_sum = plan.metrics.clearance_cost_sum;
+    stats.unknown_cost_sum = plan.metrics.unknown_cost_sum;
+    stats.risk_cost_sum = plan.metrics.risk_cost_sum;
+    stats.max_path_risk = plan.metrics.max_path_risk;
+    stats.low_clearance_samples = plan.metrics.low_clearance_samples;
+    stats.start_snap_distance_m = start_snap_distance_m;
+    stats.goal_snap_distance_m = goal_snap_distance_m;
+    stats.map_resolution_m = snapshot_.resolution_m;
+    stats.robot_radius_m = 0.5 * get_parameter("robot_width_m").as_double();
+    return stats;
+  }
+
+  SurfacePlanResult planBetween(
+    const Point3 & start,
+    const Point3 & goal,
+    tgw_planner::msg::PlannerStats * stats_out,
+    double * search_time_ms_out)
+  {
+    SurfacePlanResult plan;
+    if (!has_snapshot_) {
+      plan.message = "experience snapshot is not available";
+      if (stats_out != nullptr) {
+        *stats_out = tgw_planner::msg::PlannerStats();
+        stats_out->success = false;
+        stats_out->failure_reason = plan.message;
+      }
+      if (search_time_ms_out != nullptr) {
+        *search_time_ms_out = 0.0;
+      }
+      return plan;
+    }
+
+    GridIndex start_cell;
+    GridIndex goal_cell;
+    double start_snap_distance = 0.0;
+    double goal_snap_distance = 0.0;
+    if (!nearestTraversableCell(start, &start_cell, &start_snap_distance)) {
+      plan.message = "start could not snap to traversable experience surface";
+      if (stats_out != nullptr) {
+        *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
+      }
+      if (search_time_ms_out != nullptr) {
+        *search_time_ms_out = 0.0;
+      }
+      return plan;
+    }
+    if (!nearestTraversableCell(goal, &goal_cell, &goal_snap_distance)) {
+      plan.message = "goal could not snap to traversable experience surface";
+      if (stats_out != nullptr) {
+        *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
+      }
+      if (search_time_ms_out != nullptr) {
+        *search_time_ms_out = 0.0;
+      }
+      return plan;
+    }
+
+    const auto t0 = std::chrono::steady_clock::now();
+    plan = SurfaceAstarPlanner(plannerOptions()).plan(snapshot_, start_cell, goal_cell);
+    const auto t1 = std::chrono::steady_clock::now();
+    const double search_time_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    if (stats_out != nullptr) {
+      *stats_out = makePlannerStats(
+        plan, search_time_ms, start_snap_distance, goal_snap_distance);
+    }
+    if (search_time_ms_out != nullptr) {
+      *search_time_ms_out = search_time_ms;
+    }
+    return plan;
+  }
+
+  void publishPlanDebug(const SurfacePlanResult & plan)
+  {
+    const rclcpp::Time stamp = now();
+    const std::string frame_id = snapshot_.map_frame.empty() ?
+      get_parameter("map_frame").as_string() : snapshot_.map_frame;
+    path_pub_->publish(makePathMsg(stamp, frame_id, plan.path));
+    raw_path_pub_->publish(makePathMsg(stamp, frame_id, plan.raw_path));
+  }
+
+  std::string markerFrameId() const
+  {
+    if (has_snapshot_ && !snapshot_.map_frame.empty()) {
+      return snapshot_.map_frame;
+    }
+    return get_parameter("map_frame").as_string();
+  }
+
+  Point3 snappedMarkerPoint(const Point3 & point, double * snap_distance_m) const
+  {
+    GridIndex snapped_cell;
+    double distance = 0.0;
+    if (nearestTraversableCell(point, &snapped_cell, &distance)) {
+      if (snap_distance_m != nullptr) {
+        *snap_distance_m = distance;
+      }
+      return cellCenter(snapped_cell, snapshot_.resolution_m);
+    }
+    if (snap_distance_m != nullptr) {
+      *snap_distance_m = -1.0;
+    }
+    return point;
+  }
+
+  void publishEndpointMarker(
+    const Point3 & point,
+    const bool is_start)
+  {
+    const rclcpp::Time stamp = now();
+    const std::string frame_id = markerFrameId();
+    double snap_distance_m = 0.0;
+    const Point3 marker_point = snappedMarkerPoint(point, &snap_distance_m);
+    const bool snapped = snap_distance_m >= 0.0;
+    const std::string label = is_start ? "START" : "GOAL";
+    const std::string text = snapped ?
+      (label + " snap " + std::to_string(snap_distance_m).substr(0, 4) + "m") :
+      (label + " unsnapped");
+    auto & pub = is_start ? start_marker_pub_ : goal_marker_pub_;
+    if (is_start) {
+      pub->publish(makeSphereMarker(
+        stamp, frame_id, "tgw_start", 0, marker_point, 0.45, 0.0F, 1.0F, 0.15F));
+      pub->publish(makeTextMarker(
+        stamp, frame_id, "tgw_start", 1, marker_point, text, 0.35, 0.0F, 1.0F, 0.15F));
+    } else {
+      pub->publish(makeSphereMarker(
+        stamp, frame_id, "tgw_goal", 0, marker_point, 0.45, 1.0F, 0.1F, 0.1F));
+      pub->publish(makeTextMarker(
+        stamp, frame_id, "tgw_goal", 1, marker_point, text, 0.35, 1.0F, 0.1F, 0.1F));
+    }
+  }
+
+  void publishPlanStatusMarker(const SurfacePlanResult & plan)
+  {
+    if (!has_clicked_start_ || !has_clicked_goal_) {
+      return;
+    }
+    const rclcpp::Time stamp = now();
+    const std::string frame_id = markerFrameId();
+    Point3 point{
+      0.5 * (clicked_start_.x + clicked_goal_.x),
+      0.5 * (clicked_start_.y + clicked_goal_.y),
+      0.5 * (clicked_start_.z + clicked_goal_.z) + 0.8};
+    if (!plan.path.empty()) {
+      point = plan.path[plan.path.size() / 2U];
+      point.z += 0.8;
+    }
+    const std::string text = plan.success ?
+      ("PLAN OK " + std::to_string(plan.path.size()) + " pts") :
+      ("PLAN FAIL: " + plan.message);
+    plan_status_marker_pub_->publish(makeTextMarker(
+      stamp,
+      frame_id,
+      "tgw_plan_status",
+      0,
+      point,
+      text,
+      0.35,
+      plan.success ? 0.2F : 1.0F,
+      plan.success ? 1.0F : 0.2F,
+      plan.success ? 0.2F : 0.2F));
+  }
+
+  visualization_msgs::msg::Marker makeDeleteAllMarker(const std::string & frame_id) const
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.stamp = now();
+    marker.header.frame_id = frame_id;
+    marker.action = visualization_msgs::msg::Marker::DELETEALL;
+    return marker;
+  }
+
+  void handlePlanPath(
+    const std::shared_ptr<tgw_planner::srv::PlanPath::Request> request,
+    std::shared_ptr<tgw_planner::srv::PlanPath::Response> response)
+  {
+    tgw_planner::msg::PlannerStats stats;
+    double search_time_ms = 0.0;
+    const SurfacePlanResult plan = planBetween(
+      posePoint(request->start), posePoint(request->goal), &stats, &search_time_ms);
+    response->success = plan.success;
+    response->message = plan.message;
+    response->stats = stats;
+    const std::string frame_id = snapshot_.map_frame.empty() ?
+      get_parameter("map_frame").as_string() : snapshot_.map_frame;
+    response->path = makePathMsg(now(), frame_id, plan.path);
+    publishPlanDebug(plan);
+    RCLCPP_INFO(
+      get_logger(),
+      "PlanPath success=%s waypoints=%zu raw_waypoints=%zu expanded=%u generated=%u search_ms=%.3f message=%s",
+      plan.success ? "true" : "false",
+      plan.path.size(),
+      plan.raw_path.size(),
+      plan.metrics.expanded_nodes,
+      plan.metrics.generated_nodes,
+      search_time_ms,
+      plan.message.c_str());
+  }
+
+  void handleClearPlan(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+  {
+    has_clicked_start_ = false;
+    has_clicked_goal_ = false;
+    clicked_start_ = {};
+    clicked_goal_ = {};
+
+    const rclcpp::Time stamp = now();
+    const std::string frame_id = markerFrameId();
+    path_pub_->publish(makePathMsg(stamp, frame_id, {}));
+    raw_path_pub_->publish(makePathMsg(stamp, frame_id, {}));
+    start_marker_pub_->publish(makeDeleteAllMarker(frame_id));
+    goal_marker_pub_->publish(makeDeleteAllMarker(frame_id));
+    plan_status_marker_pub_->publish(makeDeleteAllMarker(frame_id));
+
+    response->success = true;
+    response->message = "cleared TGW start, goal, and planned path";
+    RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
+  }
+
+  void onStartPoint(const geometry_msgs::msg::PointStamped::SharedPtr msg)
+  {
+    clicked_start_ = stampedPoint(*msg);
+    has_clicked_start_ = true;
+    publishEndpointMarker(clicked_start_, true);
+    maybePlanClickedPoints();
+  }
+
+  void onGoalPoint(const geometry_msgs::msg::PointStamped::SharedPtr msg)
+  {
+    clicked_goal_ = stampedPoint(*msg);
+    has_clicked_goal_ = true;
+    publishEndpointMarker(clicked_goal_, false);
+    maybePlanClickedPoints();
+  }
+
+  void onStartPose(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+  {
+    clicked_start_ = posePoint(*msg);
+    has_clicked_start_ = true;
+    publishEndpointMarker(clicked_start_, true);
+    maybePlanClickedPoints();
+  }
+
+  void onGoalPose(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+  {
+    clicked_goal_ = posePoint(*msg);
+    has_clicked_goal_ = true;
+    publishEndpointMarker(clicked_goal_, false);
+    maybePlanClickedPoints();
+  }
+
+  void maybePlanClickedPoints()
+  {
+    if (!has_clicked_start_ || !has_clicked_goal_) {
+      return;
+    }
+    tgw_planner::msg::PlannerStats stats;
+    double search_time_ms = 0.0;
+    const SurfacePlanResult plan = planBetween(
+      clicked_start_, clicked_goal_, &stats, &search_time_ms);
+    publishPlanDebug(plan);
+    publishPlanStatusMarker(plan);
+    RCLCPP_INFO(
+      get_logger(),
+      "clicked PlanPath success=%s waypoints=%zu raw_waypoints=%zu expanded=%u generated=%u search_ms=%.3f message=%s",
+      plan.success ? "true" : "false",
+      plan.path.size(),
+      plan.raw_path.size(),
+      plan.metrics.expanded_nodes,
+      plan.metrics.generated_nodes,
+      search_time_ms,
+      plan.message.c_str());
+  }
+
   void publishTrajectory(const N3NavResource & resource)
   {
     sensor_msgs::msg::PointCloud2 cloud;
@@ -509,9 +1114,9 @@ private:
       makePointCloud(stamp, frame_id, projected_support_points));
 
     std::vector<Point3> proven_reachable_points;
-    proven_reachable_points.reserve(projection.proven_seed_cells.size());
+    proven_reachable_points.reserve(projection.observed_seed_cells.size());
     const double resolution_m = projectorOptions().resolution_m;
-    for (const auto & cell : projection.proven_seed_cells) {
+    for (const auto & cell : projection.observed_seed_cells) {
       proven_reachable_points.push_back({
         (static_cast<double>(cell.x) + 0.5) * resolution_m,
         (static_cast<double>(cell.y) + 0.5) * resolution_m,
@@ -521,8 +1126,8 @@ private:
       makePointCloud(stamp, frame_id, proven_reachable_points));
 
     std::vector<Point3> trajectory_bridge_points;
-    trajectory_bridge_points.reserve(projection.bridged_seed_cells.size());
-    for (const auto & cell : projection.bridged_seed_cells) {
+    trajectory_bridge_points.reserve(projection.bridge_seed_cells.size());
+    for (const auto & cell : projection.bridge_seed_cells) {
       trajectory_bridge_points.push_back({
         (static_cast<double>(cell.x) + 0.5) * resolution_m,
         (static_cast<double>(cell.y) + 0.5) * resolution_m,
@@ -568,6 +1173,16 @@ private:
     }
     expanded_reachable_pub_->publish(makePointCloud(stamp, frame_id, expanded_points));
 
+    std::vector<Point3> support_candidate_points;
+    support_candidate_points.reserve(build.snapshot.surface.surface_cells.size());
+    for (const auto & entry : build.snapshot.surface.surface_cells) {
+      if (entry.second.label == tgw_planner::core::SurfaceLabel::TrajectoryBridge) {
+        continue;
+      }
+      support_candidate_points.push_back(cellCenter(entry.first, build.snapshot.resolution_m));
+    }
+    support_candidate_pub_->publish(makePointCloud(stamp, frame_id, support_candidate_points));
+
     std::vector<Point3> boundary_points;
     boundary_points.reserve(build.snapshot.surface.boundary_cells.size());
     for (const GridIndex & cell : build.snapshot.surface.boundary_cells) {
@@ -595,6 +1210,7 @@ private:
   N3MapReader reader_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr trajectory_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr keyframe_geometry_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr support_candidate_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr projected_support_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr trajectory_bridge_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr proven_reachable_pub_;
@@ -605,7 +1221,24 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr boundary_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr clearance_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr risk_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr raw_path_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr plan_status_marker_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr stats_json_pub_;
+  rclcpp::Service<tgw_planner::srv::PlanPath>::SharedPtr plan_path_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_plan_srv_;
+  rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr start_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr goal_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr start_pose_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pose_sub_;
+  tgw_planner::core::ExperienceSnapshot snapshot_;
+  bool has_snapshot_{false};
+  Point3 clicked_start_;
+  Point3 clicked_goal_;
+  bool has_clicked_start_{false};
+  bool has_clicked_goal_{false};
 };
 
 int main(int argc, char ** argv)

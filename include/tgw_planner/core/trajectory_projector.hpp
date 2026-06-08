@@ -52,8 +52,11 @@ struct RejectedProjectionSample
 
 struct TrajectoryProjectionResult
 {
+  std::unordered_set<GridIndex, GridIndexHash> observed_seed_cells;
+  std::unordered_set<GridIndex, GridIndexHash> bridge_seed_cells;
   std::unordered_set<GridIndex, GridIndexHash> proven_seed_cells;
   std::unordered_set<GridIndex, GridIndexHash> bridged_seed_cells;
+  std::vector<ProjectedSupportSample> accepted_projected_support_samples;
   std::vector<ProjectedSupportSample> projected_support_samples;
   std::vector<RejectedProjectionSample> rejected_samples;
   std::size_t footprint_rejected_samples{0};

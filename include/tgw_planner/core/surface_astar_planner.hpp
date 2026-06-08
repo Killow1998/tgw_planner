@@ -18,6 +18,7 @@ struct SurfacePlannerOptions
   double w_slope{0.3};
   double w_turn{0.1};
   double w_unknown{2.0};
+  double w_bridge{2.5};
   std::uint32_t max_iterations{250000};
   bool require_footprint_support{true};
   double max_step_height_m{0.30};

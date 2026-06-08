@@ -308,7 +308,8 @@ void testReachableExpansionHeightGate()
   options.max_expansion_step_height_m = 0.20;
   options.experience_anchor_height_tolerance_m = 2.0;
   ReachableExpander expander(options);
-  const auto expanded = expander.expand(seeds, geometry);
+  const std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> no_bridge_seeds;
+  const auto expanded = expander.expand(seeds, no_bridge_seeds, geometry);
 
   require(
     expanded.traversable_cells.find(low_neighbor.cell) != expanded.traversable_cells.end(),
@@ -352,7 +353,8 @@ void testReachableExpansionRejectsBodyObstruction()
   options.body_clearance_cells = 5;
   options.enable_hole_filling = false;
   ReachableExpander expander(options);
-  const auto expanded = expander.expand(seeds, geometry);
+  const std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> no_bridge_seeds;
+  const auto expanded = expander.expand(seeds, no_bridge_seeds, geometry);
 
   require(
     expanded.traversable_cells.find(floor_at_wall.cell) == expanded.traversable_cells.end(),
@@ -390,7 +392,8 @@ void testReachableExpansionFillsSmallHole()
   options.min_hole_fill_neighbors = 5;
   options.max_hole_fill_height_spread_m = 0.05;
   ReachableExpander expander(options);
-  const auto expanded = expander.expand(seeds, geometry);
+  const std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> no_bridge_seeds;
+  const auto expanded = expander.expand(seeds, no_bridge_seeds, geometry);
 
   const GridIndex hole{1, 1, 0};
   require(
@@ -425,7 +428,8 @@ void testReachableExpansionRejectsAnchorEnvelopeEscape()
   options.experience_anchor_height_tolerance_m = 0.20;
   options.enable_hole_filling = false;
   ReachableExpander expander(options);
-  const auto expanded = expander.expand(seeds, geometry);
+  const std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> no_bridge_seeds;
+  const auto expanded = expander.expand(seeds, no_bridge_seeds, geometry);
 
   require(
     expanded.traversable_cells.find(ceiling.cell) == expanded.traversable_cells.end(),
@@ -433,6 +437,46 @@ void testReachableExpansionRejectsAnchorEnvelopeEscape()
   require(
     expanded.anchor_envelope_rejected_count > 0U,
     "anchor envelope rejection should be counted");
+}
+
+void testBridgeSeedsDoNotAnchorExpansion()
+{
+  std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> observed;
+  observed.insert({0, 0, 0});
+  std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> bridge;
+  bridge.insert({3, 0, 0});
+
+  std::unordered_map<GridIndex, SurfaceCell, tgw_planner::core::GridIndexHash> geometry;
+  SurfaceCell observed_cell;
+  observed_cell.cell = {0, 0, 0};
+  observed_cell.height_m = 0.0;
+  geometry[observed_cell.cell] = observed_cell;
+
+  SurfaceCell bridge_neighbor;
+  bridge_neighbor.cell = {4, 0, 0};
+  bridge_neighbor.height_m = 0.0;
+  geometry[bridge_neighbor.cell] = bridge_neighbor;
+
+  ReachableExpanderOptions options;
+  options.resolution_m = 0.10;
+  options.expansion_radius_cells = 1;
+  options.max_expansion_steps = 10;
+  options.vertical_tolerance_cells = 0;
+  options.experience_anchor_radius_cells = 20;
+  options.experience_anchor_vertical_tolerance_cells = 0;
+  options.enable_hole_filling = false;
+  ReachableExpander expander(options);
+  const auto expanded = expander.expand(observed, bridge, geometry);
+
+  require(
+    expanded.traversable_cells.find({3, 0, 0}) != expanded.traversable_cells.end(),
+    "bridge corridor cell should be added to traversable output");
+  require(
+    expanded.traversable_cells.find(bridge_neighbor.cell) == expanded.traversable_cells.end(),
+    "bridge seed should not expand into neighboring geometry");
+  require(
+    expanded.bridge_used_as_expansion_anchor == 0U,
+    "bridge cells must never be counted as expansion anchors");
 }
 }  // namespace
 
@@ -445,6 +489,7 @@ int main()
   testReachableExpansionRejectsBodyObstruction();
   testReachableExpansionFillsSmallHole();
   testReachableExpansionRejectsAnchorEnvelopeEscape();
+  testBridgeSeedsDoNotAnchorExpansion();
   std::cout << "PASS experience_core_smoke" << std::endl;
   return 0;
 }

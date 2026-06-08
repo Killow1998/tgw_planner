@@ -12,6 +12,7 @@ enum class SurfaceLabel
 {
   Unknown,
   ReachableSeed,
+  TrajectoryBridge,
   GeometrySupport,
   Expanded
 };

@@ -15,6 +15,7 @@ struct RobotFootprintOptions
   double width_m{0.43};
   double height_m{0.50};
   double base_to_front_m{0.20};
+  double support_height_tolerance_m{0.20};
 };
 
 class RobotFootprint

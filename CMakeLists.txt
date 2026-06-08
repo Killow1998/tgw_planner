@@ -23,6 +23,7 @@ find_package(rviz_default_plugins REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -68,6 +69,7 @@ ament_target_dependencies(tgw_experience_planner_node
   rclcpp
   sensor_msgs
   std_msgs
+  std_srvs
   visualization_msgs
 )
 

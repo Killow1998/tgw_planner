@@ -40,12 +40,17 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & reso
     return result;
   }
 
-  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> geometry;
+  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> raw_geometry;
   for (const auto & keyframe : resource.keyframes) {
-    addKeyframeGeometry(keyframe, geometry);
+    addKeyframeGeometry(keyframe, raw_geometry);
   }
+  markBodyObstructions(raw_geometry);
+  result.raw_geometry_cell_count = raw_geometry.size();
+  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> geometry =
+    buildSupportCandidates(raw_geometry);
   markBodyObstructions(geometry);
   result.geometry_cell_count = geometry.size();
+  result.support_candidate_count = geometry.size();
   if (geometry.empty()) {
     result.error_code = "pbstream_no_keyframes";
     result.message = "keyframes are present but contain no usable geometry";
@@ -60,7 +65,8 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & reso
   }
 
   ReachableExpansionResult expanded =
-    ReachableExpander(options_.expander).expand(seeds.proven_seed_cells, geometry);
+    ReachableExpander(options_.expander).expand(
+      seeds.observed_seed_cells, seeds.bridge_seed_cells, geometry);
   if (expanded.traversable_cells.empty()) {
     result.error_code = "experience_surface_empty";
     result.message = "reachable surface builder produced no traversable cells";
@@ -78,6 +84,12 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & reso
   result.body_obstructed_rejected_count = expanded.body_obstructed_rejected_count;
   result.anchor_envelope_rejected_count = expanded.anchor_envelope_rejected_count;
   result.hole_filled_count = expanded.hole_filled_count;
+  result.bridge_seed_count = expanded.bridge_seed_count;
+  result.bridge_used_as_expansion_anchor = expanded.bridge_used_as_expansion_anchor;
+  result.hole_fill_from_bridge_rejected = expanded.hole_fill_from_bridge_rejected;
+  result.support_component_count = expanded.support_component_count;
+  result.anchored_support_component_count = expanded.anchored_support_component_count;
+  result.rejected_unanchored_component_cells = expanded.rejected_unanchored_component_cells;
 
   for (const auto & entry : result.snapshot.reachability) {
     if (entry.second == ReachabilityLabel::Forbidden) {
@@ -148,6 +160,61 @@ void ExperienceSurfaceBuilder::addKeyframeGeometry(
     surface_cell.height_m = world.z;
     surface_cell.confidence = std::max(surface_cell.confidence, 0.25);
   }
+}
+
+std::unordered_map<GridIndex, SurfaceCell, GridIndexHash>
+ExperienceSurfaceBuilder::buildSupportCandidates(
+  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & raw_geometry) const
+{
+  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> candidates;
+  constexpr int kNeighborRadius = 1;
+  constexpr int kMinLocalSupportCells = 3;
+  const double max_local_height_spread = std::max(0.12, options_.resolution_m * 1.5);
+
+  for (const auto & entry : raw_geometry) {
+    const GridIndex & cell = entry.first;
+    const SurfaceCell & raw_cell = entry.second;
+    if (raw_cell.body_obstructed) {
+      continue;
+    }
+
+    int support_neighbors = 0;
+    double min_height = raw_cell.height_m;
+    double max_height = raw_cell.height_m;
+    for (int dx = -kNeighborRadius; dx <= kNeighborRadius; ++dx) {
+      for (int dy = -kNeighborRadius; dy <= kNeighborRadius; ++dy) {
+        for (int dz = -1; dz <= 1; ++dz) {
+          const auto neighbor_it = raw_geometry.find({cell.x + dx, cell.y + dy, cell.z + dz});
+          if (neighbor_it == raw_geometry.end()) {
+            continue;
+          }
+          if (std::abs(neighbor_it->second.height_m - raw_cell.height_m) >
+            max_local_height_spread)
+          {
+            continue;
+          }
+          ++support_neighbors;
+          min_height = std::min(min_height, neighbor_it->second.height_m);
+          max_height = std::max(max_height, neighbor_it->second.height_m);
+        }
+      }
+    }
+
+    if (support_neighbors < kMinLocalSupportCells) {
+      continue;
+    }
+    if ((max_height - min_height) > max_local_height_spread) {
+      continue;
+    }
+
+    SurfaceCell candidate = raw_cell;
+    candidate.label = SurfaceLabel::GeometrySupport;
+    candidate.reachability = ReachabilityLabel::Unknown;
+    candidate.confidence = std::max(candidate.confidence, 0.35);
+    candidates[cell] = candidate;
+  }
+
+  return candidates;
 }
 
 void ExperienceSurfaceBuilder::markBodyObstructions(

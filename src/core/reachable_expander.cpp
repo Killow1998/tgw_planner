@@ -23,6 +23,7 @@ struct AnchorHeightRange
 };
 
 using AnchorColumns = std::unordered_map<GridIndex, AnchorHeightRange, GridIndexHash>;
+using ComponentMap = std::unordered_map<GridIndex, int, GridIndexHash>;
 
 double fallbackHeight(const GridIndex & cell, double resolution_m)
 {
@@ -157,6 +158,92 @@ bool isInsideAnchorEnvelope(
   }
   return false;
 }
+
+ComponentMap buildSupportComponents(
+  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & cells,
+  const ReachableExpanderOptions & options,
+  std::size_t * component_count)
+{
+  ComponentMap components;
+  int next_component = 0;
+  std::queue<GridIndex> queue;
+  for (const auto & entry : cells) {
+    if (components.find(entry.first) != components.end()) {
+      continue;
+    }
+    const int component_id = next_component++;
+    components[entry.first] = component_id;
+    queue.push(entry.first);
+    while (!queue.empty()) {
+      const GridIndex current = queue.front();
+      queue.pop();
+      const double current_height = cellHeight(cells, current, options.resolution_m);
+      for (int dx = -1; dx <= 1; ++dx) {
+        for (int dy = -1; dy <= 1; ++dy) {
+          for (int dz = -options.vertical_tolerance_cells; dz <= options.vertical_tolerance_cells;
+            ++dz)
+          {
+            if (dx == 0 && dy == 0 && dz == 0) {
+              continue;
+            }
+            const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
+            if (components.find(neighbor) != components.end()) {
+              continue;
+            }
+            const auto it = cells.find(neighbor);
+            if (it == cells.end()) {
+              continue;
+            }
+            if (std::abs(it->second.height_m - current_height) >
+              options.max_expansion_step_height_m)
+            {
+              continue;
+            }
+            components[neighbor] = component_id;
+            queue.push(neighbor);
+          }
+        }
+      }
+    }
+  }
+  *component_count = static_cast<std::size_t>(next_component);
+  return components;
+}
+
+std::unordered_set<int> anchoredComponents(
+  const ComponentMap & components,
+  const std::unordered_set<GridIndex, GridIndexHash> & observed_seed_cells,
+  const ReachableExpanderOptions & options)
+{
+  std::unordered_set<int> anchored;
+  for (const GridIndex & seed : observed_seed_cells) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dz = -options.vertical_tolerance_cells; dz <= options.vertical_tolerance_cells;
+          ++dz)
+        {
+          const auto it = components.find({seed.x + dx, seed.y + dy, seed.z + dz});
+          if (it != components.end()) {
+            anchored.insert(it->second);
+          }
+        }
+      }
+    }
+  }
+  return anchored;
+}
+
+bool isAnchoredComponent(
+  const ComponentMap & components,
+  const std::unordered_set<int> & anchored_components,
+  const GridIndex & cell)
+{
+  const auto it = components.find(cell);
+  if (it == components.end()) {
+    return false;
+  }
+  return anchored_components.find(it->second) != anchored_components.end();
+}
 }  // namespace
 
 ReachableExpander::ReachableExpander(ReachableExpanderOptions options)
@@ -185,14 +272,20 @@ ReachableExpander::ReachableExpander(ReachableExpanderOptions options)
 }
 
 ReachableExpansionResult ReachableExpander::expand(
-  const std::unordered_set<GridIndex, GridIndexHash> & proven_seed_cells,
+  const std::unordered_set<GridIndex, GridIndexHash> & observed_seed_cells,
+  const std::unordered_set<GridIndex, GridIndexHash> & bridge_seed_cells,
   const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry_cells) const
 {
   ReachableExpansionResult result;
   result.surface_cells = geometry_cells;
+  const ComponentMap components = buildSupportComponents(
+    geometry_cells, options_, &result.support_component_count);
+  const std::unordered_set<int> anchored_components = anchoredComponents(
+    components, observed_seed_cells, options_);
+  result.anchored_support_component_count = anchored_components.size();
 
   std::queue<QueueItem> queue;
-  for (const GridIndex & seed : proven_seed_cells) {
+  for (const GridIndex & seed : observed_seed_cells) {
     SurfaceCell & cell = result.surface_cells[seed];
     cell.cell = seed;
     cell.support = {seed.x, seed.y, seed.z - 1};
@@ -229,6 +322,10 @@ ReachableExpansionResult ReachableExpander::expand(
             current.cell.x + dx, current.cell.y + dy, current.cell.z + dz};
           const auto geometry_it = geometry_cells.find(neighbor);
           if (geometry_it == geometry_cells.end()) {
+            continue;
+          }
+          if (!isAnchoredComponent(components, anchored_components, neighbor)) {
+            ++result.rejected_unanchored_component_cells;
             continue;
           }
           if (!isInsideAnchorEnvelope(
@@ -308,6 +405,10 @@ ReachableExpansionResult ReachableExpander::expand(
 
             const auto geometry_it = geometry_cells.find(candidate);
             if (geometry_it != geometry_cells.end()) {
+              if (!isAnchoredComponent(components, anchored_components, candidate)) {
+                ++result.rejected_unanchored_component_cells;
+                continue;
+              }
               if (!isBodyClear(
                   result.surface_cells, geometry_it->second, options_.body_clearance_cells))
               {
@@ -351,6 +452,22 @@ ReachableExpansionResult ReachableExpander::expand(
         ++result.hole_filled_count;
       }
     }
+  }
+
+  for (const GridIndex & seed : bridge_seed_cells) {
+    if (result.traversable_cells.find(seed) != result.traversable_cells.end()) {
+      continue;
+    }
+    SurfaceCell & cell = result.surface_cells[seed];
+    cell.cell = seed;
+    cell.support = {seed.x, seed.y, seed.z - 1};
+    cell.label = SurfaceLabel::TrajectoryBridge;
+    cell.reachability = ReachabilityLabel::LowConfidenceReachable;
+    cell.height_m = fallbackHeight(seed, options_.resolution_m);
+    cell.confidence = std::max(cell.confidence, 0.30);
+    result.traversable_cells.insert(seed);
+    result.reachability[seed] = ReachabilityLabel::LowConfidenceReachable;
+    ++result.bridge_seed_count;
   }
 
   return result;

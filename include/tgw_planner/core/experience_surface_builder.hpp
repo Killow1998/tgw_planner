@@ -24,13 +24,21 @@ struct ExperienceBuildResult
   std::string error_code;
   std::string message;
   ExperienceSnapshot snapshot;
+  std::size_t raw_geometry_cell_count{0};
   std::size_t geometry_cell_count{0};
+  std::size_t support_candidate_count{0};
   std::size_t proven_seed_count{0};
   std::size_t inferred_cell_count{0};
   std::size_t rejected_expansion_count{0};
   std::size_t body_obstructed_rejected_count{0};
   std::size_t anchor_envelope_rejected_count{0};
   std::size_t hole_filled_count{0};
+  std::size_t bridge_seed_count{0};
+  std::size_t bridge_used_as_expansion_anchor{0};
+  std::size_t hole_fill_from_bridge_rejected{0};
+  std::size_t support_component_count{0};
+  std::size_t anchored_support_component_count{0};
+  std::size_t rejected_unanchored_component_cells{0};
   double build_time_ms{0.0};
 };
 
@@ -56,6 +64,8 @@ private:
   void addKeyframeGeometry(
     const N3KeyframeLite & keyframe,
     std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry) const;
+  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> buildSupportCandidates(
+    const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & raw_geometry) const;
   void markBodyObstructions(
     std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry) const;
 

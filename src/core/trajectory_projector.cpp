@@ -214,13 +214,13 @@ void addTrajectoryBridgeSeeds(
   TrajectoryProjectionResult & result,
   const TrajectoryProjectorOptions & options)
 {
-  if (result.projected_support_samples.size() < 2U) {
+  if (result.accepted_projected_support_samples.size() < 2U) {
     return;
   }
   const double step_m = std::max(0.05, options.trajectory_bridge_sample_step_m);
-  for (std::size_t i = 1U; i < result.projected_support_samples.size(); ++i) {
-    const ProjectedSupportSample & previous = result.projected_support_samples[i - 1U];
-    const ProjectedSupportSample & current = result.projected_support_samples[i];
+  for (std::size_t i = 1U; i < result.accepted_projected_support_samples.size(); ++i) {
+    const ProjectedSupportSample & previous = result.accepted_projected_support_samples[i - 1U];
+    const ProjectedSupportSample & current = result.accepted_projected_support_samples[i];
     const double gap_m = distance3d(previous.support_position, current.support_position);
     const double height_delta_m = std::abs(
       current.support_position.z - previous.support_position.z);
@@ -254,7 +254,9 @@ void addTrajectoryBridgeSeeds(
         (current.support_position.z - previous.support_position.z)};
       const auto footprint_cells = sweepBridgeFootprintCells(bridge, yaw, options);
       for (const GridIndex & cell : footprint_cells) {
-        if (result.proven_seed_cells.insert(cell).second) {
+        if (result.observed_seed_cells.find(cell) == result.observed_seed_cells.end() &&
+          result.bridge_seed_cells.insert(cell).second)
+        {
           result.bridged_seed_cells.insert(cell);
           ++result.trajectory_bridge_seed_count;
         }
@@ -367,7 +369,9 @@ TrajectoryProjectionResult TrajectoryProjector::project(const N3NavResource & re
     if (footprint_cells.empty()) {
       ++result.footprint_rejected_samples;
     } else {
+      result.observed_seed_cells.insert(footprint_cells.begin(), footprint_cells.end());
       result.proven_seed_cells.insert(footprint_cells.begin(), footprint_cells.end());
+      result.accepted_projected_support_samples.push_back(sample);
     }
     result.projected_support_samples.push_back(sample);
     previous_support_z = support_z;
