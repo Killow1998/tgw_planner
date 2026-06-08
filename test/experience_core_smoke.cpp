@@ -8,6 +8,7 @@
 #include "tgw_planner/core/experience_surface_builder.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
 #include "tgw_planner/core/path_validator.hpp"
+#include "tgw_planner/core/planner_connectivity_layer.hpp"
 #include "tgw_planner/core/reachable_expander.hpp"
 #include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/trajectory_projector.hpp"
@@ -25,6 +26,7 @@ using tgw_planner::core::N3NavResource;
 using tgw_planner::core::N3TrajectoryPose;
 using tgw_planner::core::PathValidationOptions;
 using tgw_planner::core::PathValidator;
+using tgw_planner::core::PlannerConnectivityLayer;
 using tgw_planner::core::Point3;
 using tgw_planner::core::PointXYZI;
 using tgw_planner::core::Pose3;
@@ -33,11 +35,13 @@ using tgw_planner::core::ReachableExpander;
 using tgw_planner::core::ReachableExpanderOptions;
 using tgw_planner::core::RiskField;
 using tgw_planner::core::RobotFootprint;
+using tgw_planner::core::RobotFootprintOptions;
 using tgw_planner::core::SurfaceAstarPlanner;
 using tgw_planner::core::SurfaceCell;
 using tgw_planner::core::SurfaceLabel;
 using tgw_planner::core::SurfaceMap;
 using tgw_planner::core::SurfacePlannerOptions;
+using tgw_planner::core::SurfaceTransitionValidator;
 using tgw_planner::core::TrajectoryProjector;
 using tgw_planner::core::TrajectoryProjectorOptions;
 
@@ -119,6 +123,62 @@ void testFootprintPlannerAndValidator()
   const auto report = validator.validate(snapshot, plan.path);
   require(report.valid, "planner path should pass explicit path validator");
   require(report.min_clearance_m > 0.0, "validated path should have positive clearance");
+}
+
+void testFootprintSupportRatio()
+{
+  ExperienceSnapshot snapshot;
+  snapshot.map_frame = "map";
+  snapshot.resolution_m = 0.50;
+  for (int x = -1; x <= 1; ++x) {
+    for (int y = -1; y <= 1; ++y) {
+      if (x == 0 && y == 0) {
+        continue;
+      }
+      const GridIndex cell{x, y, 0};
+      SurfaceCell surface_cell;
+      surface_cell.cell = cell;
+      surface_cell.label = SurfaceLabel::Expanded;
+      surface_cell.reachability = ReachabilityLabel::InferredReachable;
+      snapshot.surface.surface_cells[cell] = surface_cell;
+      snapshot.surface.traversable_cells.insert(cell);
+    }
+  }
+
+  RobotFootprintOptions options;
+  options.length_m = 0.60;
+  options.width_m = 0.40;
+  options.min_support_ratio = 0.75;
+  RobotFootprint footprint(options);
+  const auto report = footprint.supportReport(snapshot.surface, {0.0, 0.0, 0.25}, 0.0, 0.50);
+  require(report.total_samples > report.supported_samples, "one missing footprint sample should be counted");
+  require(report.support_ratio >= 0.75, "support ratio should tolerate a small sparse hole");
+  require(
+    footprint.isSupported(snapshot.surface, {0.0, 0.0, 0.25}, 0.0, 0.50),
+    "footprint ratio check should accept sparse but mostly supported footprint");
+}
+
+void testPlannerConnectivityLayer()
+{
+  ExperienceSnapshot snapshot = makeFlatSnapshot();
+  SurfacePlannerOptions planner_options;
+  planner_options.require_footprint_support = true;
+  SurfaceTransitionValidator validator(planner_options);
+  PlannerConnectivityLayer connectivity;
+  connectivity.build(snapshot, validator);
+  require(connectivity.componentCount() >= 1U, "planner connectivity should find a component");
+  require(
+    connectivity.sameComponent({1, 0, 0}, {5, 0, 0}),
+    "flat corridor endpoints should be in the same planner component");
+
+  for (int y = -1; y <= 1; ++y) {
+    snapshot.surface.traversable_cells.erase({3, y, 0});
+    snapshot.surface.surface_cells.erase({3, y, 0});
+  }
+  connectivity.build(snapshot, validator);
+  require(
+    !connectivity.sameComponent({1, 0, 0}, {5, 0, 0}),
+    "planner connectivity should reflect transition-level disconnection");
 }
 
 void testExperienceBuilderSkeleton()
@@ -484,6 +544,8 @@ int main()
 {
   testClearanceAndRisk();
   testFootprintPlannerAndValidator();
+  testFootprintSupportRatio();
+  testPlannerConnectivityLayer();
   testExperienceBuilderSkeleton();
   testReachableExpansionHeightGate();
   testReachableExpansionRejectsBodyObstruction();

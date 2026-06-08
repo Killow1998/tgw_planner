@@ -31,6 +31,12 @@ struct SurfacePlannerOptions
   RobotFootprintOptions footprint;
 };
 
+struct TransitionReport
+{
+  bool allowed{false};
+  std::string reason;
+};
+
 struct SurfacePlanMetrics
 {
   bool success{false};
@@ -66,6 +72,34 @@ struct SurfacePlanResult
   SurfacePlanMetrics metrics;
 };
 
+class SurfaceTransitionValidator
+{
+public:
+  explicit SurfaceTransitionValidator(SurfacePlannerOptions options = {});
+
+  TransitionReport validate(
+    const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
+  std::vector<GridIndex> validNeighbors(
+    const NavigationSnapshot & snapshot, const GridIndex & cell) const;
+  bool isCellTraversable(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
+  bool isEndpointCell(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
+
+private:
+  bool isFootprintSupported(
+    const NavigationSnapshot & snapshot, const Point3 & point, double yaw_rad) const;
+  bool isDirectSurfaceNeighbor(
+    const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
+  bool isDiagonalCornerSupported(
+    const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
+  bool hasTraversableCellAtXY(
+    const NavigationSnapshot & snapshot, int x, int y, int min_z, int max_z) const;
+  Point3 cellCenter(const GridIndex & cell, double resolution_m) const;
+  GridIndex worldToGrid(const Point3 & point, double resolution_m) const;
+
+  SurfacePlannerOptions options_;
+  RobotFootprint footprint_;
+};
+
 class SurfaceAstarPlanner
 {
 public:
@@ -78,17 +112,6 @@ private:
   double transitionCost(
     const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to,
     const GridIndex * previous) const;
-  bool isCellTraversable(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
-  bool isFootprintSupported(
-    const NavigationSnapshot & snapshot, const Point3 & point, double yaw_rad) const;
-  bool isTransitionAllowed(
-    const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
-  bool isDirectSurfaceNeighbor(
-    const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
-  bool isDiagonalCornerSupported(
-    const NavigationSnapshot & snapshot, const GridIndex & from, const GridIndex & to) const;
-  bool hasTraversableCellAtXY(
-    const NavigationSnapshot & snapshot, int x, int y, int min_z, int max_z) const;
   double unknownPenalty(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
   Point3 cellCenter(const GridIndex & cell, double resolution_m) const;
   GridIndex worldToGrid(const Point3 & point, double resolution_m) const;
@@ -110,7 +133,7 @@ private:
   void fillMetrics(const NavigationSnapshot & snapshot, SurfacePlanResult & result) const;
 
   SurfacePlannerOptions options_;
-  RobotFootprint footprint_;
+  SurfaceTransitionValidator transition_validator_;
 };
 
 }  // namespace tgw_planner::core

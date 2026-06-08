@@ -24,6 +24,7 @@
 #include "tgw_planner/core/experience_surface_builder.hpp"
 #include "tgw_planner/core/grid_index.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
+#include "tgw_planner/core/planner_connectivity_layer.hpp"
 #include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/trajectory_projector.hpp"
 #include "tgw_planner/msg/planner_stats.hpp"
@@ -41,9 +42,11 @@ using tgw_planner::core::ExperienceBuildResult;
 using tgw_planner::core::ExperienceSurfaceBuilder;
 using tgw_planner::core::ExperienceSurfaceBuilderOptions;
 using tgw_planner::core::GridIndex;
+using tgw_planner::core::PlannerConnectivityLayer;
 using tgw_planner::core::SurfaceAstarPlanner;
 using tgw_planner::core::SurfacePlanResult;
 using tgw_planner::core::SurfacePlannerOptions;
+using tgw_planner::core::SurfaceTransitionValidator;
 using tgw_planner::core::TrajectoryProjectionResult;
 using tgw_planner::core::TrajectoryProjector;
 using tgw_planner::core::TrajectoryProjectorOptions;
@@ -86,7 +89,9 @@ std::string toStatsJson(
   const N3MapReadResult & result,
   const std::string & pbstream_path,
   const TrajectoryProjectionResult * projection,
-  const ExperienceBuildResult * build)
+  const ExperienceBuildResult * build,
+  const PlannerConnectivityLayer * planner_connectivity,
+  double planner_multifloor_z_range_m)
 {
   const N3NavResource & resource = result.resource;
   std::ostringstream json;
@@ -178,6 +183,13 @@ std::string toStatsJson(
     (build && build->success ? build->snapshot.clearance.distances().size() : 0U);
   json << ",\"risk_count\":" <<
     (build && build->success ? build->snapshot.risk.risks().size() : 0U);
+  json << ",\"planner_component_count\":" <<
+    (planner_connectivity ? planner_connectivity->componentCount() : 0U);
+  json << ",\"largest_planner_component_cells\":" <<
+    (planner_connectivity ? planner_connectivity->largestComponentSize() : 0U);
+  json << ",\"planner_multifloor_component_count\":" <<
+    (planner_connectivity ?
+    planner_connectivity->multifloorComponentCount(planner_multifloor_z_range_m) : 0U);
   json << "}";
   return json.str();
 }
@@ -387,6 +399,8 @@ public:
     declare_parameter<double>("plan_max_step_height_m", 0.35);
     declare_parameter<int>("plan_max_iterations", 250000);
     declare_parameter<double>("plan_bridge_cost", 2.5);
+    declare_parameter<double>("planner_footprint_min_support_ratio", 0.80);
+    declare_parameter<double>("planner_multifloor_z_range_m", 1.50);
     declare_parameter<int>("max_trajectory_points", 200000);
     declare_parameter<int>("max_geometry_debug_points", 400000);
 
@@ -417,6 +431,8 @@ public:
       "/tgw_experience/clearance_cloud", latched_qos);
     risk_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/tgw_experience/risk_cloud", latched_qos);
+    planner_component_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/tgw_experience/planner_component_cloud", latched_qos);
     path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_experience/path", latched_qos);
     raw_path_pub_ = create_publisher<nav_msgs::msg::Path>(
       "/tgw_experience/raw_path", latched_qos);
@@ -483,11 +499,14 @@ private:
     if (build.success) {
       snapshot_ = build.snapshot;
       has_snapshot_ = true;
+      planner_connectivity_.build(snapshot_, SurfaceTransitionValidator(plannerOptions()));
+      has_planner_connectivity_ = true;
     }
     publishKeyframeGeometry(result.resource);
     publishTrajectory(result.resource);
     publishProjectionDebug(result.resource, projection);
     publishExpansionDebug(result.resource, build);
+    publishPlannerConnectivityDebug(result.resource);
     publishStats(result, pbstream_path, &projection, &build);
     std::unordered_map<std::string, std::size_t> rejected_counts;
     for (const RejectedProjectionSample & sample : projection.rejected_samples) {
@@ -495,7 +514,7 @@ private:
     }
     RCLCPP_INFO(
       get_logger(),
-      "loaded n3map experience resource: keyframes=%zu dense_trajectory=%zu raw_geometry=%zu support_candidates=%zu projected_support=%zu observed_seed=%zu bridge_seed=%zu expanded_reachable=%zu rejected_projection=%zu no_support=%zu ambiguous_multifloor=%zu reanchored_support=%zu retry_support=%zu bridge_used_as_expansion_anchor=%zu support_components=%zu anchored_components=%zu rejected_unanchored_component=%zu footprint_rejected=%zu body_obstructed_rejected=%zu anchor_envelope_rejected=%zu hole_filled=%zu frame=%s body=%s",
+      "loaded n3map experience resource: keyframes=%zu dense_trajectory=%zu raw_geometry=%zu support_candidates=%zu projected_support=%zu observed_seed=%zu bridge_seed=%zu expanded_reachable=%zu planner_components=%zu largest_planner_component=%zu planner_multifloor_components=%zu rejected_projection=%zu no_support=%zu ambiguous_multifloor=%zu reanchored_support=%zu retry_support=%zu bridge_used_as_expansion_anchor=%zu support_components=%zu anchored_components=%zu rejected_unanchored_component=%zu footprint_rejected=%zu body_obstructed_rejected=%zu anchor_envelope_rejected=%zu hole_filled=%zu frame=%s body=%s",
       result.resource.keyframes.size(),
       result.resource.dense_trajectory.size(),
       build.success ? build.raw_geometry_cell_count : 0U,
@@ -504,6 +523,11 @@ private:
       projection.observed_seed_cells.size(),
       projection.bridge_seed_cells.size(),
       build.success ? build.snapshot.surface.traversable_cells.size() : 0U,
+      has_planner_connectivity_ ? planner_connectivity_.componentCount() : 0U,
+      has_planner_connectivity_ ? planner_connectivity_.largestComponentSize() : 0U,
+      has_planner_connectivity_ ?
+        planner_connectivity_.multifloorComponentCount(
+          get_parameter("planner_multifloor_z_range_m").as_double()) : 0U,
       projection.rejected_samples.size(),
       rejected_counts["support_projection_failed"],
       rejected_counts["support_projection_ambiguous_multifloor"],
@@ -628,7 +652,10 @@ private:
     const ExperienceBuildResult * build)
   {
     std_msgs::msg::String msg;
-    msg.data = toStatsJson(result, pbstream_path, projection, build);
+    msg.data = toStatsJson(
+      result, pbstream_path, projection, build,
+      has_planner_connectivity_ ? &planner_connectivity_ : nullptr,
+      get_parameter("planner_multifloor_z_range_m").as_double());
     stats_json_pub_->publish(msg);
   }
 
@@ -645,15 +672,18 @@ private:
     options.footprint.height_m = get_parameter("body_clearance_height_m").as_double();
     options.footprint.support_height_tolerance_m =
       get_parameter("footprint_support_height_tolerance_m").as_double();
+    options.footprint.min_support_ratio =
+      get_parameter("planner_footprint_min_support_ratio").as_double();
     options.require_footprint_support = true;
     options.enable_shortcut = true;
     return options;
   }
 
   bool nearestTraversableCell(
-    const Point3 & point, GridIndex * nearest_cell, double * nearest_distance_m) const
+    const Point3 & point, GridIndex * nearest_cell, double * nearest_distance_m,
+    int * component_id = nullptr) const
   {
-    if (!has_snapshot_) {
+    if (!has_snapshot_ || !has_planner_connectivity_) {
       return false;
     }
     const double layer_tolerance_m = 0.75 * snapshot_.resolution_m;
@@ -662,17 +692,13 @@ private:
     double target_layer_z = -std::numeric_limits<double>::infinity();
     bool found_layer = false;
 
-    for (const GridIndex & cell : snapshot_.surface.traversable_cells) {
+    for (const auto & entry : planner_connectivity_.componentIds()) {
+      const GridIndex & cell = entry.first;
       const Point3 center = cellCenter(cell, snapshot_.resolution_m);
       const double dx = point.x - center.x;
       const double dy = point.y - center.y;
       const double xy_distance = std::sqrt(dx * dx + dy * dy);
       if (center.z > z_ceiling) {
-        continue;
-      }
-      if (snapshot_.surface.blocked_cells.find(cell) != snapshot_.surface.blocked_cells.end() ||
-        snapshot_.surface.forbidden_cells.find(cell) != snapshot_.surface.forbidden_cells.end())
-      {
         continue;
       }
       if (xy_distance > nearest_xy_distance + snapshot_.resolution_m) {
@@ -706,7 +732,10 @@ private:
     bool found_safe = false;
     bool found_fallback = false;
 
-    for (const GridIndex & cell : snapshot_.surface.traversable_cells) {
+    int best_safe_component = -1;
+    int best_fallback_component = -1;
+    for (const auto & entry : planner_connectivity_.componentIds()) {
+      const GridIndex & cell = entry.first;
       const Point3 center = cellCenter(cell, snapshot_.resolution_m);
       if (std::abs(center.z - target_layer_z) > layer_tolerance_m) {
         continue;
@@ -714,11 +743,6 @@ private:
       const double dx = point.x - center.x;
       const double dy = point.y - center.y;
       const double xy_distance = std::sqrt(dx * dx + dy * dy);
-      if (snapshot_.surface.blocked_cells.find(cell) != snapshot_.surface.blocked_cells.end() ||
-        snapshot_.surface.forbidden_cells.find(cell) != snapshot_.surface.forbidden_cells.end())
-      {
-        continue;
-      }
 
       const double clearance = snapshot_.clearance.clearanceDistance(cell);
       if (clearance >= required_clearance_m) {
@@ -727,6 +751,7 @@ private:
           best_safe_score = score;
           best_distance = tgw_planner::core::distance3d(point, center);
           best_safe_cell = cell;
+          best_safe_component = entry.second;
           found_safe = true;
         }
       }
@@ -736,6 +761,7 @@ private:
         best_fallback_score = fallback_score;
         best_fallback_distance = tgw_planner::core::distance3d(point, center);
         best_fallback_cell = cell;
+        best_fallback_component = entry.second;
         found_fallback = true;
       }
     }
@@ -743,11 +769,17 @@ private:
     if (found_safe) {
       *nearest_cell = best_safe_cell;
       *nearest_distance_m = best_distance;
+      if (component_id != nullptr) {
+        *component_id = best_safe_component;
+      }
       return true;
     }
     if (found_fallback) {
       *nearest_cell = best_fallback_cell;
       *nearest_distance_m = best_fallback_distance;
+      if (component_id != nullptr) {
+        *component_id = best_fallback_component;
+      }
       return true;
     }
     *nearest_distance_m = 0.0;
@@ -824,7 +856,9 @@ private:
     GridIndex goal_cell;
     double start_snap_distance = 0.0;
     double goal_snap_distance = 0.0;
-    if (!nearestTraversableCell(start, &start_cell, &start_snap_distance)) {
+    int start_component_id = -1;
+    int goal_component_id = -1;
+    if (!nearestTraversableCell(start, &start_cell, &start_snap_distance, &start_component_id)) {
       plan.message = "start could not snap to traversable experience surface";
       if (stats_out != nullptr) {
         *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
@@ -834,8 +868,18 @@ private:
       }
       return plan;
     }
-    if (!nearestTraversableCell(goal, &goal_cell, &goal_snap_distance)) {
+    if (!nearestTraversableCell(goal, &goal_cell, &goal_snap_distance, &goal_component_id)) {
       plan.message = "goal could not snap to traversable experience surface";
+      if (stats_out != nullptr) {
+        *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
+      }
+      if (search_time_ms_out != nullptr) {
+        *search_time_ms_out = 0.0;
+      }
+      return plan;
+    }
+    if (start_component_id < 0 || start_component_id != goal_component_id) {
+      plan.message = "no_path_on_experience_surface_different_planner_components";
       if (stats_out != nullptr) {
         *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
       }
@@ -1207,6 +1251,23 @@ private:
     risk_pub_->publish(makeIntensityCloud(stamp, frame_id, risk_points));
   }
 
+  void publishPlannerConnectivityDebug(const N3NavResource & resource)
+  {
+    if (!has_snapshot_ || !has_planner_connectivity_) {
+      return;
+    }
+    const rclcpp::Time stamp = now();
+    const std::string frame_id = resource.map_frame.empty() ?
+      get_parameter("map_frame").as_string() : resource.map_frame;
+    std::vector<IntensityPoint> component_points;
+    component_points.reserve(planner_connectivity_.componentIds().size());
+    for (const auto & entry : planner_connectivity_.componentIds()) {
+      component_points.push_back(
+        {cellCenter(entry.first, snapshot_.resolution_m), static_cast<double>(entry.second)});
+    }
+    planner_component_pub_->publish(makeIntensityCloud(stamp, frame_id, component_points));
+  }
+
   N3MapReader reader_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr trajectory_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr keyframe_geometry_pub_;
@@ -1221,6 +1282,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr boundary_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr clearance_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr risk_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr planner_component_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr raw_path_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
@@ -1234,7 +1296,9 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr start_pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pose_sub_;
   tgw_planner::core::ExperienceSnapshot snapshot_;
+  PlannerConnectivityLayer planner_connectivity_;
   bool has_snapshot_{false};
+  bool has_planner_connectivity_{false};
   Point3 clicked_start_;
   Point3 clicked_goal_;
   bool has_clicked_start_{false};

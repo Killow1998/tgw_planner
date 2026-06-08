@@ -357,6 +357,29 @@ Visualization Manager:
             Value: /tgw_experience/risk_cloud
           Use Fixed Frame: true
           Value: false
+        - Alpha: 0.85
+          Autocompute Intensity Bounds: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color Transformer: Intensity
+          Decay Time: 0
+          Enabled: false
+          Name: Planner Components
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.08
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/planner_component_cloud
+          Use Fixed Frame: true
+          Value: false
         - Class: rviz_default_plugins/Marker
           Enabled: true
           Topic:

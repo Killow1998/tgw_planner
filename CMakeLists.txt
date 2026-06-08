@@ -42,6 +42,7 @@ add_library(tgw_planner_core SHARED
   src/core/experience_surface_builder.cpp
   src/core/n3map_reader.cpp
   src/core/path_validator.cpp
+  src/core/planner_connectivity_layer.cpp
   src/core/reachable_expander.cpp
   src/core/risk_field.cpp
   src/core/robot_footprint.cpp

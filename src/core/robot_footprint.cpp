@@ -13,6 +13,7 @@ RobotFootprint::RobotFootprint(RobotFootprintOptions options)
   options_.width_m = std::max(0.10, options_.width_m);
   options_.height_m = std::max(0.10, options_.height_m);
   options_.support_height_tolerance_m = std::max(0.0, options_.support_height_tolerance_m);
+  options_.min_support_ratio = std::clamp(options_.min_support_ratio, 0.0, 1.0);
   options_.base_to_front_m =
     std::clamp(options_.base_to_front_m, 0.01, options_.length_m - 0.01);
 }
@@ -53,30 +54,48 @@ bool RobotFootprint::containsBodyPoint(const Point3 & point_base) const
 bool RobotFootprint::isSupported(
   const SurfaceMap & surface, const Point3 & center, double yaw_rad, double resolution_m) const
 {
+  const FootprintSupportReport report = supportReport(surface, center, yaw_rad, resolution_m);
+  return report.reason.empty() && report.support_ratio >= options_.min_support_ratio;
+}
+
+FootprintSupportReport RobotFootprint::supportReport(
+  const SurfaceMap & surface, const Point3 & center, double yaw_rad, double resolution_m) const
+{
+  FootprintSupportReport report;
   const int vertical_tolerance_cells = std::max(
     0, static_cast<int>(std::ceil(options_.support_height_tolerance_m / resolution_m)));
   for (const Point3 & sample : sampleFootprint(center, yaw_rad, resolution_m)) {
+    ++report.total_samples;
     const GridIndex cell = worldToGrid(sample, resolution_m);
     bool supported = false;
     for (int dz = -vertical_tolerance_cells; dz <= vertical_tolerance_cells; ++dz) {
       const GridIndex candidate{cell.x, cell.y, cell.z + dz};
-      if (surface.traversable_cells.find(candidate) == surface.traversable_cells.end()) {
-        continue;
-      }
       if (surface.forbidden_cells.find(candidate) != surface.forbidden_cells.end()) {
-        continue;
+        report.reason = "footprint overlaps forbidden cell";
+        return report;
       }
       if (surface.blocked_cells.find(candidate) != surface.blocked_cells.end()) {
+        report.reason = "footprint overlaps blocked cell";
+        return report;
+      }
+      if (surface.traversable_cells.find(candidate) == surface.traversable_cells.end()) {
         continue;
       }
       supported = true;
       break;
     }
-    if (!supported) {
-      return false;
+    if (supported) {
+      ++report.supported_samples;
     }
   }
-  return true;
+  if (report.total_samples > 0) {
+    report.support_ratio =
+      static_cast<double>(report.supported_samples) / static_cast<double>(report.total_samples);
+  }
+  if (report.support_ratio < options_.min_support_ratio) {
+    report.reason = "footprint support ratio below minimum";
+  }
+  return report;
 }
 
 const RobotFootprintOptions & RobotFootprint::options() const

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <string>
 
 #include "tgw_planner/core/grid_index.hpp"
 #include "tgw_planner/core/planning_types.hpp"
@@ -16,6 +17,15 @@ struct RobotFootprintOptions
   double height_m{0.50};
   double base_to_front_m{0.20};
   double support_height_tolerance_m{0.20};
+  double min_support_ratio{0.80};
+};
+
+struct FootprintSupportReport
+{
+  int total_samples{0};
+  int supported_samples{0};
+  double support_ratio{0.0};
+  std::string reason;
 };
 
 class RobotFootprint
@@ -29,6 +39,10 @@ public:
   bool containsBodyPoint(const Point3 & point_base) const;
 
   bool isSupported(
+    const SurfaceMap & surface, const Point3 & center, double yaw_rad,
+    double resolution_m) const;
+
+  FootprintSupportReport supportReport(
     const SurfaceMap & surface, const Point3 & center, double yaw_rad,
     double resolution_m) const;
 

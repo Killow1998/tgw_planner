@@ -21,6 +21,8 @@ tgw_experience_planner_node:
     base_to_front_m: 0.20
     min_footprint_support_ratio: 0.50
     footprint_support_height_tolerance_m: 0.20
+    planner_footprint_min_support_ratio: 0.80
+    planner_multifloor_z_range_m: 1.50
     expansion_radius_cells: 2
     max_expansion_steps: 12
     vertical_tolerance_cells: 3
