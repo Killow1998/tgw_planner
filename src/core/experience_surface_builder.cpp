@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <algorithm>
 #include <utility>
 
 namespace tgw_planner::core
@@ -14,12 +15,18 @@ ExperienceSurfaceBuilder::ExperienceSurfaceBuilder(ExperienceSurfaceBuilderOptio
     TrajectoryProjectorOptions projector = options_.projector;
     projector.resolution_m = options_.resolution_m;
     return projector;
-  }()),
-  expander_(options_.expander)
+  }())
 {
   if (options_.resolution_m <= 0.0) {
     options_.resolution_m = 0.10;
   }
+  if (options_.body_clearance_height_m < 0.0) {
+    options_.body_clearance_height_m = 0.0;
+  }
+  options_.expander.resolution_m = options_.resolution_m;
+  options_.expander.body_clearance_cells = std::max(
+    options_.expander.body_clearance_cells,
+    static_cast<int>(std::ceil(options_.body_clearance_height_m / options_.resolution_m)));
 }
 
 ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & resource) const
@@ -37,6 +44,7 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & reso
   for (const auto & keyframe : resource.keyframes) {
     addKeyframeGeometry(keyframe, geometry);
   }
+  markBodyObstructions(geometry);
   result.geometry_cell_count = geometry.size();
   if (geometry.empty()) {
     result.error_code = "pbstream_no_keyframes";
@@ -46,12 +54,13 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & reso
 
   const TrajectoryProjectionResult seeds = projector_.project(resource);
   if (seeds.proven_seed_cells.empty()) {
-    result.error_code = "pbstream_missing_dense_trajectory";
-    result.message = "dense trajectory did not produce any proven reachable seeds";
+    result.error_code = "support_projection_failed";
+    result.message = "dense trajectory did not project to any support cells";
     return result;
   }
 
-  ReachableExpansionResult expanded = expander_.expand(seeds.proven_seed_cells, geometry);
+  ReachableExpansionResult expanded =
+    ReachableExpander(options_.expander).expand(seeds.proven_seed_cells, geometry);
   if (expanded.traversable_cells.empty()) {
     result.error_code = "experience_surface_empty";
     result.message = "reachable surface builder produced no traversable cells";
@@ -65,6 +74,10 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & reso
   result.snapshot.reachability = std::move(expanded.reachability);
   result.proven_seed_count = expanded.proven_seed_count;
   result.inferred_cell_count = expanded.inferred_cell_count;
+  result.rejected_expansion_count = expanded.rejected_expansion_count;
+  result.body_obstructed_rejected_count = expanded.body_obstructed_rejected_count;
+  result.anchor_envelope_rejected_count = expanded.anchor_envelope_rejected_count;
+  result.hole_filled_count = expanded.hole_filled_count;
 
   for (const auto & entry : result.snapshot.reachability) {
     if (entry.second == ReachabilityLabel::Forbidden) {
@@ -134,6 +147,26 @@ void ExperienceSurfaceBuilder::addKeyframeGeometry(
     surface_cell.reachability = ReachabilityLabel::Unknown;
     surface_cell.height_m = world.z;
     surface_cell.confidence = std::max(surface_cell.confidence, 0.25);
+  }
+}
+
+void ExperienceSurfaceBuilder::markBodyObstructions(
+  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry) const
+{
+  const int body_clearance_cells = std::max(
+    0, static_cast<int>(std::ceil(options_.body_clearance_height_m / options_.resolution_m)));
+  if (body_clearance_cells == 0) {
+    return;
+  }
+
+  for (auto & entry : geometry) {
+    const GridIndex cell = entry.first;
+    for (int dz = 1; dz <= body_clearance_cells; ++dz) {
+      if (geometry.find({cell.x, cell.y, cell.z + dz}) != geometry.end()) {
+        entry.second.body_obstructed = true;
+        break;
+      }
+    }
   }
 }
 

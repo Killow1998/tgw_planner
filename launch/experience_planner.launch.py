@@ -10,7 +10,9 @@ def generate_launch_description():
     package_share = FindPackageShare("tgw_planner")
     params_file = LaunchConfiguration("params_file")
     pbstream_path = LaunchConfiguration("pbstream_path")
+    rviz_config = LaunchConfiguration("rviz_config")
     use_clicked_point_router = LaunchConfiguration("use_clicked_point_router")
+    use_rviz = LaunchConfiguration("use_rviz")
 
     return LaunchDescription(
         [
@@ -22,6 +24,13 @@ def generate_launch_description():
                 ),
             ),
             DeclareLaunchArgument("use_clicked_point_router", default_value="true"),
+            DeclareLaunchArgument("use_rviz", default_value="true"),
+            DeclareLaunchArgument(
+                "rviz_config",
+                default_value=PathJoinSubstitution(
+                    [package_share, "rviz", "experience_debug.rviz"]
+                ),
+            ),
             Node(
                 package="tgw_planner",
                 executable="tgw_experience_planner_node",
@@ -35,6 +44,14 @@ def generate_launch_description():
                 name="tgw_clicked_point_router_node",
                 output="screen",
                 condition=IfCondition(use_clicked_point_router),
+            ),
+            Node(
+                package="rviz2",
+                executable="rviz2",
+                name="rviz2",
+                output="screen",
+                arguments=["-d", rviz_config],
+                condition=IfCondition(use_rviz),
             ),
         ]
     )

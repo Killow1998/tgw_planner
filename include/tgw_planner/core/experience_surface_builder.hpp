@@ -13,6 +13,7 @@ namespace tgw_planner::core
 struct ExperienceSurfaceBuilderOptions
 {
   double resolution_m{0.10};
+  double body_clearance_height_m{0.65};
   TrajectoryProjectorOptions projector;
   ReachableExpanderOptions expander;
 };
@@ -26,6 +27,10 @@ struct ExperienceBuildResult
   std::size_t geometry_cell_count{0};
   std::size_t proven_seed_count{0};
   std::size_t inferred_cell_count{0};
+  std::size_t rejected_expansion_count{0};
+  std::size_t body_obstructed_rejected_count{0};
+  std::size_t anchor_envelope_rejected_count{0};
+  std::size_t hole_filled_count{0};
   double build_time_ms{0.0};
 };
 
@@ -51,11 +56,12 @@ private:
   void addKeyframeGeometry(
     const N3KeyframeLite & keyframe,
     std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry) const;
+  void markBodyObstructions(
+    std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry) const;
 
   ExperienceSurfaceBuilderOptions options_;
   N3MapReader validator_;
   TrajectoryProjector projector_;
-  ReachableExpander expander_;
 };
 
 }  // namespace tgw_planner::core

@@ -34,6 +34,8 @@ struct SurfaceCell
   double height_m{0.0};
   double slope_m{0.0};
   double confidence{0.0};
+  bool body_obstructed{false};
+  bool hole_filled{false};
 };
 
 struct SurfaceMap

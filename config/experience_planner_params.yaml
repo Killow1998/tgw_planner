@@ -2,4 +2,35 @@ tgw_experience_planner_node:
   ros__parameters:
     pbstream_path: ""
     map_frame: "map"
+    nav_resolution_m: 0.10
+    raw_resolution_m: 0.05
+    lidar_to_footprint_x_m: 0.0
+    lidar_to_footprint_y_m: 0.0
+    support_search_below_min_m: 0.10
+    support_search_below_max_m: 1.00
+    support_max_jump_m: 0.35
+    allow_support_reanchor_on_jump: true
+    support_xy_search_radius_cells: 2
+    support_xy_retry_radius_cells: 8
+    max_trajectory_bridge_gap_m: 2.00
+    max_trajectory_bridge_height_delta_m: 0.80
+    trajectory_bridge_sample_step_m: 0.10
+    robot_length_m: 0.70
+    robot_width_m: 0.43
+    body_clearance_height_m: 0.65
+    base_to_front_m: 0.20
+    min_footprint_support_ratio: 0.50
+    footprint_support_height_tolerance_m: 0.20
+    expansion_radius_cells: 2
+    max_expansion_steps: 12
+    vertical_tolerance_cells: 3
+    max_expansion_step_height_m: 0.28
+    experience_anchor_radius_cells: 24
+    experience_anchor_height_tolerance_m: 0.35
+    experience_anchor_vertical_tolerance_cells: 3
+    enable_hole_filling: true
+    hole_fill_iterations: 2
+    min_hole_fill_neighbors: 5
+    max_hole_fill_height_spread_m: 0.12
     max_trajectory_points: 200000
+    max_geometry_debug_points: 400000

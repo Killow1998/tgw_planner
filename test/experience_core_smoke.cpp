@@ -8,7 +8,9 @@
 #include "tgw_planner/core/experience_surface_builder.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
 #include "tgw_planner/core/path_validator.hpp"
+#include "tgw_planner/core/reachable_expander.hpp"
 #include "tgw_planner/core/surface_astar_planner.hpp"
+#include "tgw_planner/core/trajectory_projector.hpp"
 
 namespace
 {
@@ -27,6 +29,8 @@ using tgw_planner::core::Point3;
 using tgw_planner::core::PointXYZI;
 using tgw_planner::core::Pose3;
 using tgw_planner::core::ReachabilityLabel;
+using tgw_planner::core::ReachableExpander;
+using tgw_planner::core::ReachableExpanderOptions;
 using tgw_planner::core::RiskField;
 using tgw_planner::core::RobotFootprint;
 using tgw_planner::core::SurfaceAstarPlanner;
@@ -34,6 +38,8 @@ using tgw_planner::core::SurfaceCell;
 using tgw_planner::core::SurfaceLabel;
 using tgw_planner::core::SurfaceMap;
 using tgw_planner::core::SurfacePlannerOptions;
+using tgw_planner::core::TrajectoryProjector;
+using tgw_planner::core::TrajectoryProjectorOptions;
 
 void require(bool condition, const std::string & message)
 {
@@ -135,7 +141,7 @@ void testExperienceBuilderSkeleton()
     N3TrajectoryPose pose;
     pose.seq = static_cast<std::uint64_t>(i);
     pose.timestamp = static_cast<double>(i);
-    pose.pose_world_lidar.translation = {0.5 * static_cast<double>(i), 0.0, 0.0};
+    pose.pose_world_lidar.translation = {0.5 * static_cast<double>(i), 0.0, 0.5};
     resource.dense_trajectory.push_back(pose);
   }
 
@@ -183,8 +189,82 @@ void testExperienceBuilderSkeleton()
     empty_cloud_result.error_code == "pbstream_missing_keyframe_clouds",
     "empty keyframe cloud should use stable error code");
 
+  TrajectoryProjectorOptions projector_options;
+  projector_options.resolution_m = 0.50;
+  projector_options.raw_resolution_m = 0.50;
+  projector_options.search_below_min_m = 0.10;
+  projector_options.search_below_max_m = 1.00;
+  projector_options.max_support_jump_m = 0.30;
+  projector_options.footprint_length_m = 0.10;
+  projector_options.footprint_width_m = 0.10;
+  projector_options.footprint_base_to_front_m = 0.05;
+  projector_options.min_footprint_support_ratio = 0.50;
+  projector_options.max_trajectory_bridge_gap_m = 1.00;
+  projector_options.max_trajectory_bridge_height_delta_m = 0.50;
+  TrajectoryProjector projector(projector_options);
+  const auto projection = projector.project(resource);
+  require(
+    projection.projected_support_samples.size() == resource.dense_trajectory.size(),
+    "trajectory samples should project onto support in the toy scene");
+  require(projection.rejected_samples.empty(), "toy support projection should not reject samples");
+  require(!projection.proven_seed_cells.empty(), "support projection should emit proven cells");
+
+  N3NavResource too_high = resource;
+  too_high.dense_trajectory.front().pose_world_lidar.translation.z = 2.0;
+  const auto rejected_projection = projector.project(too_high);
+  require(
+    !rejected_projection.rejected_samples.empty(),
+    "support outside the vertical band should be rejected");
+
+  N3NavResource step_resource = resource;
+  step_resource.dense_trajectory.clear();
+  N3TrajectoryPose lower_pose;
+  lower_pose.seq = 1;
+  lower_pose.timestamp = 1.0;
+  lower_pose.pose_world_lidar.translation = {0.0, 0.0, 0.5};
+  step_resource.dense_trajectory.push_back(lower_pose);
+  N3TrajectoryPose upper_pose;
+  upper_pose.seq = 2;
+  upper_pose.timestamp = 2.0;
+  upper_pose.pose_world_lidar.translation = {4.0, 0.0, 1.0};
+  step_resource.dense_trajectory.push_back(upper_pose);
+  N3KeyframeLite upper_keyframe;
+  upper_keyframe.id = 2;
+  upper_keyframe.timestamp = 1.0;
+  upper_keyframe.pose_optimized.translation = {0.0, 0.0, 0.0};
+  upper_keyframe.cloud_body = {PointXYZI{4.0, 0.0, 0.5, 1.0}};
+  step_resource.keyframes.push_back(upper_keyframe);
+  const auto reanchored_projection = projector.project(step_resource);
+  require(
+    reanchored_projection.reanchored_support_samples == 1U,
+    "support projection should reanchor when the previous support layer disappears");
+  require(
+    reanchored_projection.rejected_samples.empty(),
+    "support reanchor should avoid a false multifloor rejection");
+
+  N3NavResource bridge_resource = resource;
+  bridge_resource.dense_trajectory.clear();
+  N3TrajectoryPose bridge_start;
+  bridge_start.seq = 1;
+  bridge_start.timestamp = 1.0;
+  bridge_start.pose_world_lidar.translation = {0.0, 0.0, 0.5};
+  bridge_resource.dense_trajectory.push_back(bridge_start);
+  N3TrajectoryPose bridge_end;
+  bridge_end.seq = 2;
+  bridge_end.timestamp = 2.0;
+  bridge_end.pose_world_lidar.translation = {0.8, 0.0, 0.5};
+  bridge_resource.dense_trajectory.push_back(bridge_end);
+  const auto bridged_projection = projector.project(bridge_resource);
+  require(
+    bridged_projection.trajectory_bridge_seed_count > 0U,
+    "short support gaps between walked trajectory samples should emit bridge seeds");
+
   ExperienceSurfaceBuilderOptions options;
   options.resolution_m = 0.50;
+  options.projector.raw_resolution_m = 0.50;
+  options.projector.footprint_length_m = 0.10;
+  options.projector.footprint_width_m = 0.10;
+  options.projector.footprint_base_to_front_m = 0.05;
   options.expander.expansion_radius_cells = 1;
   options.expander.max_expansion_steps = 1;
   options.expander.vertical_tolerance_cells = 0;
@@ -199,6 +279,161 @@ void testExperienceBuilderSkeleton()
     !build_result.snapshot.surface.traversable_cells.empty(),
     "experience builder should emit traversable cells");
 }
+
+void testReachableExpansionHeightGate()
+{
+  std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> seeds;
+  seeds.insert({0, 0, 0});
+
+  std::unordered_map<GridIndex, SurfaceCell, tgw_planner::core::GridIndexHash> geometry;
+  SurfaceCell seed;
+  seed.cell = {0, 0, 0};
+  seed.height_m = 0.0;
+  geometry[seed.cell] = seed;
+
+  SurfaceCell low_neighbor;
+  low_neighbor.cell = {1, 0, 0};
+  low_neighbor.height_m = 0.10;
+  geometry[low_neighbor.cell] = low_neighbor;
+
+  SurfaceCell high_neighbor;
+  high_neighbor.cell = {0, 1, 0};
+  high_neighbor.height_m = 1.00;
+  geometry[high_neighbor.cell] = high_neighbor;
+
+  ReachableExpanderOptions options;
+  options.expansion_radius_cells = 1;
+  options.max_expansion_steps = 1;
+  options.vertical_tolerance_cells = 0;
+  options.max_expansion_step_height_m = 0.20;
+  options.experience_anchor_height_tolerance_m = 2.0;
+  ReachableExpander expander(options);
+  const auto expanded = expander.expand(seeds, geometry);
+
+  require(
+    expanded.traversable_cells.find(low_neighbor.cell) != expanded.traversable_cells.end(),
+    "low height neighbor should pass conservative expansion");
+  require(
+    expanded.traversable_cells.find(high_neighbor.cell) == expanded.traversable_cells.end(),
+    "high step neighbor should be rejected by expansion height gate");
+  require(
+    expanded.rejected_expansion_count > 0U,
+    "height-gated expansion should report rejected candidates");
+}
+
+void testReachableExpansionRejectsBodyObstruction()
+{
+  std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> seeds;
+  seeds.insert({0, 0, 0});
+
+  std::unordered_map<GridIndex, SurfaceCell, tgw_planner::core::GridIndexHash> geometry;
+  SurfaceCell seed;
+  seed.cell = {0, 0, 0};
+  seed.height_m = 0.0;
+  geometry[seed.cell] = seed;
+
+  SurfaceCell floor_at_wall;
+  floor_at_wall.cell = {1, 0, 0};
+  floor_at_wall.height_m = 0.0;
+  geometry[floor_at_wall.cell] = floor_at_wall;
+  for (int z = 1; z <= 5; ++z) {
+    SurfaceCell wall;
+    wall.cell = {1, 0, z};
+    wall.height_m = 0.1 * static_cast<double>(z);
+    geometry[wall.cell] = wall;
+  }
+
+  ReachableExpanderOptions options;
+  options.resolution_m = 0.10;
+  options.expansion_radius_cells = 1;
+  options.max_expansion_steps = 1;
+  options.vertical_tolerance_cells = 0;
+  options.max_expansion_step_height_m = 0.20;
+  options.body_clearance_cells = 5;
+  options.enable_hole_filling = false;
+  ReachableExpander expander(options);
+  const auto expanded = expander.expand(seeds, geometry);
+
+  require(
+    expanded.traversable_cells.find(floor_at_wall.cell) == expanded.traversable_cells.end(),
+    "floor cell with body-height wall occupancy above should not be expanded");
+  require(
+    expanded.body_obstructed_rejected_count > 0U,
+    "body obstruction rejection should be counted");
+}
+
+void testReachableExpansionFillsSmallHole()
+{
+  std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> seeds;
+  std::unordered_map<GridIndex, SurfaceCell, tgw_planner::core::GridIndexHash> geometry;
+  for (int x = 0; x <= 2; ++x) {
+    for (int y = 0; y <= 2; ++y) {
+      if (x == 1 && y == 1) {
+        continue;
+      }
+      const GridIndex cell{x, y, 0};
+      seeds.insert(cell);
+      SurfaceCell surface_cell;
+      surface_cell.cell = cell;
+      surface_cell.height_m = 0.0;
+      geometry[cell] = surface_cell;
+    }
+  }
+
+  ReachableExpanderOptions options;
+  options.resolution_m = 0.10;
+  options.expansion_radius_cells = 0;
+  options.max_expansion_steps = 0;
+  options.vertical_tolerance_cells = 0;
+  options.enable_hole_filling = true;
+  options.hole_fill_iterations = 1;
+  options.min_hole_fill_neighbors = 5;
+  options.max_hole_fill_height_spread_m = 0.05;
+  ReachableExpander expander(options);
+  const auto expanded = expander.expand(seeds, geometry);
+
+  const GridIndex hole{1, 1, 0};
+  require(
+    expanded.traversable_cells.find(hole) != expanded.traversable_cells.end(),
+    "small surrounded floor hole should be filled");
+  require(expanded.hole_filled_count == 1U, "hole fill should report one added cell");
+}
+
+void testReachableExpansionRejectsAnchorEnvelopeEscape()
+{
+  std::unordered_set<GridIndex, tgw_planner::core::GridIndexHash> seeds;
+  seeds.insert({0, 0, 0});
+
+  std::unordered_map<GridIndex, SurfaceCell, tgw_planner::core::GridIndexHash> geometry;
+  SurfaceCell seed;
+  seed.cell = {0, 0, 0};
+  seed.height_m = 0.0;
+  geometry[seed.cell] = seed;
+
+  SurfaceCell ceiling;
+  ceiling.cell = {1, 0, 10};
+  ceiling.height_m = 1.0;
+  geometry[ceiling.cell] = ceiling;
+
+  ReachableExpanderOptions options;
+  options.resolution_m = 0.10;
+  options.expansion_radius_cells = 1;
+  options.max_expansion_steps = 1;
+  options.vertical_tolerance_cells = 10;
+  options.max_expansion_step_height_m = 2.0;
+  options.experience_anchor_radius_cells = 2;
+  options.experience_anchor_height_tolerance_m = 0.20;
+  options.enable_hole_filling = false;
+  ReachableExpander expander(options);
+  const auto expanded = expander.expand(seeds, geometry);
+
+  require(
+    expanded.traversable_cells.find(ceiling.cell) == expanded.traversable_cells.end(),
+    "expansion should not escape the trajectory height envelope onto a ceiling");
+  require(
+    expanded.anchor_envelope_rejected_count > 0U,
+    "anchor envelope rejection should be counted");
+}
 }  // namespace
 
 int main()
@@ -206,6 +441,10 @@ int main()
   testClearanceAndRisk();
   testFootprintPlannerAndValidator();
   testExperienceBuilderSkeleton();
+  testReachableExpansionHeightGate();
+  testReachableExpansionRejectsBodyObstruction();
+  testReachableExpansionFillsSmallHole();
+  testReachableExpansionRejectsAnchorEnvelopeEscape();
   std::cout << "PASS experience_core_smoke" << std::endl;
   return 0;
 }

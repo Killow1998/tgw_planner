@@ -10,9 +10,19 @@ namespace tgw_planner::core
 
 struct ReachableExpanderOptions
 {
+  double resolution_m{0.10};
   int expansion_radius_cells{1};
   int max_expansion_steps{1};
   int vertical_tolerance_cells{1};
+  double max_expansion_step_height_m{0.20};
+  int body_clearance_cells{7};
+  int experience_anchor_radius_cells{24};
+  double experience_anchor_height_tolerance_m{0.60};
+  int experience_anchor_vertical_tolerance_cells{3};
+  bool enable_hole_filling{true};
+  int hole_fill_iterations{2};
+  int min_hole_fill_neighbors{5};
+  double max_hole_fill_height_spread_m{0.12};
 };
 
 struct ReachableExpansionResult
@@ -22,6 +32,10 @@ struct ReachableExpansionResult
   std::unordered_map<GridIndex, ReachabilityLabel, GridIndexHash> reachability;
   std::size_t proven_seed_count{0};
   std::size_t inferred_cell_count{0};
+  std::size_t rejected_expansion_count{0};
+  std::size_t body_obstructed_rejected_count{0};
+  std::size_t anchor_envelope_rejected_count{0};
+  std::size_t hole_filled_count{0};
 };
 
 class ReachableExpander
