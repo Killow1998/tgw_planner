@@ -66,6 +66,17 @@ struct SurfacePlanMetrics
   std::uint32_t start_portal_candidates{0};
   std::uint32_t goal_portal_candidates{0};
   std::uint32_t evaluated_portal_pairs{0};
+  std::uint32_t hybrid_nodes{0};
+  std::uint32_t hybrid_surface_edges{0};
+  std::uint32_t hybrid_backbone_edges{0};
+  std::uint32_t hybrid_portal_edges{0};
+  std::uint32_t hybrid_expanded_nodes{0};
+  std::uint32_t used_backbone_edges{0};
+  std::uint32_t used_portal_edges{0};
+  std::uint32_t used_surface_edges{0};
+  double backbone_path_length_m{0.0};
+  double surface_path_length_m{0.0};
+  std::uint32_t portal_switch_count{0};
   std::uint32_t selected_start_portal_id{std::numeric_limits<std::uint32_t>::max()};
   std::uint32_t selected_goal_portal_id{std::numeric_limits<std::uint32_t>::max()};
   std::uint32_t selected_start_backbone_node{std::numeric_limits<std::uint32_t>::max()};

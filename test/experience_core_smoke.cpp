@@ -590,8 +590,10 @@ void testHybridPlannerUsesDenseTrajectoryBackboneAcrossIslands()
     surface_graph, backbone, start, goal);
   require(plan.success, "hybrid planner should cross disconnected surface islands through backbone");
   require(
-    plan.message == "path found via dense trajectory backbone",
-    "hybrid planner should report dense trajectory backbone usage");
+    plan.message == "path found on hybrid experience graph",
+    "hybrid planner should report unified hybrid graph usage");
+  require(plan.metrics.used_backbone_edges > 0U, "hybrid planner should use backbone edges");
+  require(plan.metrics.used_portal_edges >= 2U, "hybrid planner should enter and leave portals");
   require(plan.path.size() > 4U, "hybrid path should include surface and backbone waypoints");
 }
 
@@ -681,19 +683,18 @@ void testHybridPlannerOptimizesPortalPairCost()
   require(backbone.portals().size() >= 4U, "portal pair test should expose multiple portals");
 
   HybridExperiencePlannerOptions hybrid_options;
-  hybrid_options.max_portal_candidates_per_side = 64;
   const auto plan = HybridExperiencePlanner(planner_options, hybrid_options).plan(
     surface_graph, backbone, start, goal);
   require(plan.success, "hybrid planner should find a route through candidate portal pairs");
   require(
-    plan.metrics.evaluated_portal_pairs >= 4U,
-    "hybrid planner should evaluate multiple portal pairs");
+    plan.metrics.used_portal_edges >= 2U,
+    "hybrid graph search should use portal edges to change graph layers");
   require(
     plan.metrics.selected_backbone_index_delta <= 2U,
-    "hybrid planner should choose the short backbone interval, not the locally nearest endpoints");
+    "hybrid graph search should choose the short backbone interval, not the locally nearest endpoints");
   require(
     plan.metrics.selected_backbone_length_m < 10.0,
-    "selected backbone leg should be the short optimized pair");
+    "selected backbone leg should be the short unified-graph route");
 }
 
 void testExperienceBuilderSkeleton()

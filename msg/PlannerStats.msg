@@ -50,6 +50,17 @@ float64 goal_snap_distance_m
 uint32 start_portal_candidates
 uint32 goal_portal_candidates
 uint32 evaluated_portal_pairs
+uint32 hybrid_nodes
+uint32 hybrid_surface_edges
+uint32 hybrid_backbone_edges
+uint32 hybrid_portal_edges
+uint32 hybrid_expanded_nodes
+uint32 used_backbone_edges
+uint32 used_portal_edges
+uint32 used_surface_edges
+float64 backbone_path_length_m
+float64 surface_path_length_m
+uint32 portal_switch_count
 uint32 selected_start_portal_id
 uint32 selected_goal_portal_id
 uint32 selected_start_backbone_node

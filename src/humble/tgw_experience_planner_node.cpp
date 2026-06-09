@@ -358,6 +358,17 @@ std::string toPlanRouteStatsJson(
   json << ",\"start_portal_candidates\":" << plan.metrics.start_portal_candidates;
   json << ",\"goal_portal_candidates\":" << plan.metrics.goal_portal_candidates;
   json << ",\"evaluated_portal_pairs\":" << plan.metrics.evaluated_portal_pairs;
+  json << ",\"hybrid_nodes\":" << plan.metrics.hybrid_nodes;
+  json << ",\"hybrid_surface_edges\":" << plan.metrics.hybrid_surface_edges;
+  json << ",\"hybrid_backbone_edges\":" << plan.metrics.hybrid_backbone_edges;
+  json << ",\"hybrid_portal_edges\":" << plan.metrics.hybrid_portal_edges;
+  json << ",\"hybrid_expanded_nodes\":" << plan.metrics.hybrid_expanded_nodes;
+  json << ",\"used_backbone_edges\":" << plan.metrics.used_backbone_edges;
+  json << ",\"used_portal_edges\":" << plan.metrics.used_portal_edges;
+  json << ",\"used_surface_edges\":" << plan.metrics.used_surface_edges;
+  json << ",\"backbone_path_length_m\":" << plan.metrics.backbone_path_length_m;
+  json << ",\"surface_path_length_m\":" << plan.metrics.surface_path_length_m;
+  json << ",\"portal_switch_count\":" << plan.metrics.portal_switch_count;
   json << ",\"selected_start_portal_id\":" << plan.metrics.selected_start_portal_id;
   json << ",\"selected_goal_portal_id\":" << plan.metrics.selected_goal_portal_id;
   json << ",\"selected_start_backbone_node\":" <<
@@ -591,7 +602,10 @@ public:
     declare_parameter<double>("backbone_max_portal_xy_distance_m", 1.20);
     declare_parameter<double>("backbone_max_portal_height_error_m", 0.45);
     declare_parameter<double>("backbone_min_portal_clearance_m", 0.0);
-    declare_parameter<int>("hybrid_max_portal_candidates_per_side", 64);
+    declare_parameter<double>("hybrid_backbone_cost_scale", 1.2);
+    declare_parameter<double>("hybrid_portal_switch_cost", 0.5);
+    declare_parameter<double>("hybrid_portal_height_error_weight", 0.25);
+    declare_parameter<double>("hybrid_backbone_low_confidence_penalty", 0.5);
     declare_parameter<double>("planner_multifloor_z_range_m", 1.50);
     declare_parameter<int>("max_trajectory_points", 200000);
     declare_parameter<int>("max_geometry_debug_points", 400000);
@@ -646,6 +660,12 @@ public:
     selected_backbone_segment_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/tgw_experience/selected_backbone_segment", latched_qos);
     path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_experience/path", latched_qos);
+    hybrid_path_pub_ = create_publisher<nav_msgs::msg::Path>(
+      "/tgw_experience/hybrid_path", latched_qos);
+    used_backbone_segment_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/tgw_experience/used_backbone_segment", latched_qos);
+    used_portals_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/tgw_experience/used_portals", latched_qos);
     raw_path_pub_ = create_publisher<nav_msgs::msg::Path>(
       "/tgw_experience/raw_path", latched_qos);
     start_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
@@ -1095,6 +1115,17 @@ private:
     stats.start_portal_candidates = plan.metrics.start_portal_candidates;
     stats.goal_portal_candidates = plan.metrics.goal_portal_candidates;
     stats.evaluated_portal_pairs = plan.metrics.evaluated_portal_pairs;
+    stats.hybrid_nodes = plan.metrics.hybrid_nodes;
+    stats.hybrid_surface_edges = plan.metrics.hybrid_surface_edges;
+    stats.hybrid_backbone_edges = plan.metrics.hybrid_backbone_edges;
+    stats.hybrid_portal_edges = plan.metrics.hybrid_portal_edges;
+    stats.hybrid_expanded_nodes = plan.metrics.hybrid_expanded_nodes;
+    stats.used_backbone_edges = plan.metrics.used_backbone_edges;
+    stats.used_portal_edges = plan.metrics.used_portal_edges;
+    stats.used_surface_edges = plan.metrics.used_surface_edges;
+    stats.backbone_path_length_m = plan.metrics.backbone_path_length_m;
+    stats.surface_path_length_m = plan.metrics.surface_path_length_m;
+    stats.portal_switch_count = plan.metrics.portal_switch_count;
     stats.selected_start_portal_id = plan.metrics.selected_start_portal_id;
     stats.selected_goal_portal_id = plan.metrics.selected_goal_portal_id;
     stats.selected_start_backbone_node = plan.metrics.selected_start_backbone_node;
@@ -1246,8 +1277,12 @@ private:
 
     const auto t0 = std::chrono::steady_clock::now();
     HybridExperiencePlannerOptions hybrid_options;
-    hybrid_options.max_portal_candidates_per_side = static_cast<std::size_t>(
-      std::max<std::int64_t>(1, get_parameter("hybrid_max_portal_candidates_per_side").as_int()));
+    hybrid_options.backbone_cost_scale = get_parameter("hybrid_backbone_cost_scale").as_double();
+    hybrid_options.portal_switch_cost = get_parameter("hybrid_portal_switch_cost").as_double();
+    hybrid_options.portal_height_error_weight =
+      get_parameter("hybrid_portal_height_error_weight").as_double();
+    hybrid_options.backbone_low_confidence_penalty =
+      get_parameter("hybrid_backbone_low_confidence_penalty").as_double();
     plan = HybridExperiencePlanner(plannerOptions(), hybrid_options).plan(
       surface_graph_, backbone_graph_, start_node, goal_node);
     const auto t1 = std::chrono::steady_clock::now();
@@ -1268,6 +1303,7 @@ private:
     const std::string frame_id = snapshot_.map_frame.empty() ?
       get_parameter("map_frame").as_string() : snapshot_.map_frame;
     path_pub_->publish(makePathMsg(stamp, frame_id, plan.path));
+    hybrid_path_pub_->publish(makePathMsg(stamp, frame_id, plan.path));
     raw_path_pub_->publish(makePathMsg(stamp, frame_id, plan.raw_path));
     start_portal_candidates_pub_->publish(
       makePointCloud(stamp, frame_id, plan.debug_start_portal_candidates));
@@ -1279,6 +1315,14 @@ private:
       makePointCloud(stamp, frame_id, plan.debug_selected_goal_portal));
     selected_backbone_segment_pub_->publish(
       makePointCloud(stamp, frame_id, plan.debug_selected_backbone_segment));
+    used_backbone_segment_pub_->publish(
+      makePointCloud(stamp, frame_id, plan.debug_selected_backbone_segment));
+    std::vector<Point3> used_portals = plan.debug_selected_start_portal;
+    used_portals.insert(
+      used_portals.end(),
+      plan.debug_selected_goal_portal.begin(),
+      plan.debug_selected_goal_portal.end());
+    used_portals_pub_->publish(makePointCloud(stamp, frame_id, used_portals));
   }
 
   void publishPlanRouteStatsJson(
@@ -1430,12 +1474,15 @@ private:
     const rclcpp::Time stamp = now();
     const std::string frame_id = markerFrameId();
     path_pub_->publish(makePathMsg(stamp, frame_id, {}));
+    hybrid_path_pub_->publish(makePathMsg(stamp, frame_id, {}));
     raw_path_pub_->publish(makePathMsg(stamp, frame_id, {}));
     start_portal_candidates_pub_->publish(makePointCloud(stamp, frame_id, {}));
     goal_portal_candidates_pub_->publish(makePointCloud(stamp, frame_id, {}));
     selected_start_portal_pub_->publish(makePointCloud(stamp, frame_id, {}));
     selected_goal_portal_pub_->publish(makePointCloud(stamp, frame_id, {}));
     selected_backbone_segment_pub_->publish(makePointCloud(stamp, frame_id, {}));
+    used_backbone_segment_pub_->publish(makePointCloud(stamp, frame_id, {}));
+    used_portals_pub_->publish(makePointCloud(stamp, frame_id, {}));
     start_marker_pub_->publish(makeDeleteAllMarker(frame_id));
     goal_marker_pub_->publish(makeDeleteAllMarker(frame_id));
     plan_status_marker_pub_->publish(makeDeleteAllMarker(frame_id));
@@ -1724,6 +1771,9 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr selected_goal_portal_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr selected_backbone_segment_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr hybrid_path_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr used_backbone_segment_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr used_portals_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr raw_path_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_marker_pub_;

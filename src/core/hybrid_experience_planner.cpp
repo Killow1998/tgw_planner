@@ -9,11 +9,52 @@ namespace tgw_planner::core
 {
 namespace
 {
-constexpr std::uint32_t kInvalidNodeId = std::numeric_limits<std::uint32_t>::max();
+constexpr std::uint32_t kInvalidHybridNode = std::numeric_limits<std::uint32_t>::max();
+
+enum class HybridNodeKind
+{
+  Surface,
+  Backbone
+};
+
+enum class HybridEdgeKind
+{
+  Surface,
+  Backbone,
+  Portal
+};
+
+struct HybridNode
+{
+  HybridNodeKind kind{HybridNodeKind::Surface};
+  SurfaceNodeId surface_id{kInvalidHybridNode};
+  BackboneNodeId backbone_id{kInvalidHybridNode};
+  Point3 point;
+};
+
+struct HybridEdge
+{
+  std::uint32_t to{kInvalidHybridNode};
+  HybridEdgeKind kind{HybridEdgeKind::Surface};
+  double cost{0.0};
+  double length_xy_m{0.0};
+  double dz_m{0.0};
+  ExperiencePortalId portal_id{kInvalidHybridNode};
+};
+
+struct HybridGraph
+{
+  std::vector<HybridNode> nodes;
+  std::vector<std::vector<HybridEdge>> adjacency;
+  std::uint32_t backbone_offset{0};
+  std::uint32_t surface_edge_count{0};
+  std::uint32_t backbone_edge_count{0};
+  std::uint32_t portal_edge_count{0};
+};
 
 struct QueueNode
 {
-  SurfaceNodeId node;
+  std::uint32_t node{kInvalidHybridNode};
   double cost{0.0};
 };
 
@@ -23,13 +64,6 @@ struct QueueCompare
   {
     return lhs.cost > rhs.cost;
   }
-};
-
-struct SurfaceDistanceTree
-{
-  SurfaceNodeId source{kInvalidNodeId};
-  std::vector<double> cost;
-  std::vector<SurfaceNodeId> previous;
 };
 
 double xyDistance(const Point3 & a, const Point3 & b)
@@ -49,99 +83,157 @@ Point3 surfacePoint(const ExperienceSurfaceGraph & graph, SurfaceNodeId node_id)
     node->z};
 }
 
-SurfaceDistanceTree buildSurfaceDistanceTree(
-  const ExperienceSurfaceGraph & graph, SurfaceNodeId source)
-{
-  SurfaceDistanceTree tree;
-  tree.source = source;
-  tree.cost.assign(graph.nodes().size(), std::numeric_limits<double>::infinity());
-  tree.previous.assign(graph.nodes().size(), {kInvalidNodeId});
-  if (!graph.isValid(source)) {
-    return tree;
-  }
-
-  std::priority_queue<QueueNode, std::vector<QueueNode>, QueueCompare> open;
-  tree.cost[source.id] = 0.0;
-  open.push({source, 0.0});
-  while (!open.empty()) {
-    const QueueNode current = open.top();
-    open.pop();
-    if (!graph.isValid(current.node) ||
-      current.cost > tree.cost[current.node.id] + 1.0e-9)
-    {
-      continue;
-    }
-    for (const SurfaceEdge & edge : graph.adjacency()[current.node.id]) {
-      if (!graph.isValid(edge.to)) {
-        continue;
-      }
-      const double edge_cost = edge.cost > 0.0 ? edge.cost : edge.length_xy_m;
-      const double next_cost = current.cost + edge_cost;
-      if (next_cost >= tree.cost[edge.to.id]) {
-        continue;
-      }
-      tree.cost[edge.to.id] = next_cost;
-      tree.previous[edge.to.id] = current.node;
-      open.push({edge.to, next_cost});
-    }
-  }
-  return tree;
-}
-
-std::vector<SurfaceNodeId> reconstructSurfacePath(
-  const ExperienceSurfaceGraph & graph,
-  const SurfaceDistanceTree & tree,
-  SurfaceNodeId target)
-{
-  std::vector<SurfaceNodeId> out;
-  if (!graph.isValid(tree.source) || !graph.isValid(target) ||
-    target.id >= tree.cost.size() || !std::isfinite(tree.cost[target.id]))
-  {
-    return out;
-  }
-  SurfaceNodeId current = target;
-  out.push_back(current);
-  while (current != tree.source) {
-    if (current.id >= tree.previous.size() || !graph.isValid(tree.previous[current.id])) {
-      out.clear();
-      return out;
-    }
-    current = tree.previous[current.id];
-    out.push_back(current);
-  }
-  std::reverse(out.begin(), out.end());
-  return out;
-}
-
-std::vector<Point3> nodesToPoints(
-  const ExperienceSurfaceGraph & graph, const std::vector<SurfaceNodeId> & nodes)
-{
-  std::vector<Point3> out;
-  out.reserve(nodes.size());
-  for (const SurfaceNodeId node_id : nodes) {
-    out.push_back(surfacePoint(graph, node_id));
-  }
-  return out;
-}
-
-std::vector<GridIndex> nodesToCells(
-  const ExperienceSurfaceGraph & graph, const std::vector<SurfaceNodeId> & nodes)
-{
-  std::vector<GridIndex> out;
-  out.reserve(nodes.size());
-  for (const SurfaceNodeId node_id : nodes) {
-    const SurfaceNode * node = graph.node(node_id);
-    if (node != nullptr) {
-      out.push_back(node->cell);
-    }
-  }
-  return out;
-}
-
 std::uint32_t saturatedSize(std::size_t value)
 {
   return static_cast<std::uint32_t>(
     std::min<std::size_t>(value, std::numeric_limits<std::uint32_t>::max()));
+}
+
+bool validHybridId(const HybridGraph & graph, std::uint32_t id)
+{
+  return id < graph.nodes.size();
+}
+
+std::vector<std::uint32_t> reconstructHybridPath(
+  const std::vector<std::uint32_t> & previous,
+  std::uint32_t start,
+  std::uint32_t goal)
+{
+  std::vector<std::uint32_t> path;
+  if (start == kInvalidHybridNode || goal == kInvalidHybridNode ||
+    goal >= previous.size())
+  {
+    return path;
+  }
+  std::uint32_t current = goal;
+  path.push_back(current);
+  while (current != start) {
+    if (current >= previous.size() || previous[current] == kInvalidHybridNode) {
+      path.clear();
+      return path;
+    }
+    current = previous[current];
+    path.push_back(current);
+  }
+  std::reverse(path.begin(), path.end());
+  return path;
+}
+
+const HybridEdge * findEdge(
+  const HybridGraph & graph, std::uint32_t from, std::uint32_t to)
+{
+  if (!validHybridId(graph, from)) {
+    return nullptr;
+  }
+  for (const HybridEdge & edge : graph.adjacency[from]) {
+    if (edge.to == to) {
+      return &edge;
+    }
+  }
+  return nullptr;
+}
+
+HybridGraph buildHybridGraph(
+  const ExperienceSurfaceGraph & surface_graph,
+  const ExperienceBackboneGraph & backbone_graph,
+  const SurfacePlannerOptions & surface_options,
+  const HybridExperiencePlannerOptions & hybrid_options)
+{
+  HybridGraph graph;
+  graph.backbone_offset = saturatedSize(surface_graph.nodes().size());
+  graph.nodes.reserve(surface_graph.nodes().size() + backbone_graph.nodes().size());
+
+  for (const SurfaceNode & surface_node : surface_graph.nodes()) {
+    HybridNode node;
+    node.kind = HybridNodeKind::Surface;
+    node.surface_id = surface_node.id;
+    node.point = surfacePoint(surface_graph, surface_node.id);
+    graph.nodes.push_back(node);
+  }
+  for (const BackboneNode & backbone_node : backbone_graph.nodes()) {
+    HybridNode node;
+    node.kind = HybridNodeKind::Backbone;
+    node.backbone_id = backbone_node.id;
+    node.point = backbone_node.path_position;
+    graph.nodes.push_back(node);
+  }
+
+  graph.adjacency.resize(graph.nodes.size());
+  for (const SurfaceNode & surface_node : surface_graph.nodes()) {
+    for (const SurfaceEdge & surface_edge : surface_graph.adjacency()[surface_node.id.id]) {
+      if (!surface_graph.isValid(surface_edge.to)) {
+        continue;
+      }
+      HybridEdge edge;
+      edge.to = surface_edge.to.id;
+      edge.kind = HybridEdgeKind::Surface;
+      edge.cost = surface_edge.cost > 0.0 ? surface_edge.cost : surface_edge.length_xy_m;
+      edge.length_xy_m = surface_edge.length_xy_m;
+      edge.dz_m = surface_edge.dz_m;
+      graph.adjacency[surface_node.id.id].push_back(edge);
+      ++graph.surface_edge_count;
+    }
+  }
+
+  for (const BackboneEdge & backbone_edge : backbone_graph.edges()) {
+    const std::uint32_t from = graph.backbone_offset + backbone_edge.from.id;
+    const std::uint32_t to = graph.backbone_offset + backbone_edge.to.id;
+    if (!validHybridId(graph, from) || !validHybridId(graph, to)) {
+      continue;
+    }
+    const double low_confidence_penalty =
+      (1.0 - std::clamp(backbone_edge.confidence, 0.0, 1.0)) *
+      hybrid_options.backbone_low_confidence_penalty;
+    const double edge_cost =
+      backbone_edge.length_xy_m * hybrid_options.backbone_cost_scale +
+      surface_options.w_slope * std::abs(backbone_edge.dz_m) +
+      low_confidence_penalty;
+    HybridEdge forward;
+    forward.to = to;
+    forward.kind = HybridEdgeKind::Backbone;
+    forward.cost = edge_cost;
+    forward.length_xy_m = backbone_edge.length_xy_m;
+    forward.dz_m = backbone_edge.dz_m;
+    HybridEdge reverse = forward;
+    reverse.to = from;
+    reverse.dz_m = -backbone_edge.dz_m;
+    graph.adjacency[from].push_back(forward);
+    graph.adjacency[to].push_back(reverse);
+    graph.backbone_edge_count += 2U;
+  }
+
+  for (const ExperiencePortal & portal : backbone_graph.portals()) {
+    if (!surface_graph.isValid(portal.surface_node) ||
+      !backbone_graph.isValid(portal.backbone_node))
+    {
+      continue;
+    }
+    const std::uint32_t surface_id = portal.surface_node.id;
+    const std::uint32_t backbone_id = graph.backbone_offset + portal.backbone_node.id;
+    if (!validHybridId(graph, surface_id) || !validHybridId(graph, backbone_id)) {
+      continue;
+    }
+    const double portal_cost =
+      portal.distance_xy_m +
+      hybrid_options.portal_height_error_weight * portal.height_error_m +
+      hybrid_options.portal_switch_cost;
+    HybridEdge surface_to_backbone;
+    surface_to_backbone.to = backbone_id;
+    surface_to_backbone.kind = HybridEdgeKind::Portal;
+    surface_to_backbone.cost = portal_cost;
+    surface_to_backbone.length_xy_m = portal.distance_xy_m;
+    surface_to_backbone.dz_m =
+      graph.nodes[backbone_id].point.z - graph.nodes[surface_id].point.z;
+    surface_to_backbone.portal_id = portal.id;
+    HybridEdge backbone_to_surface = surface_to_backbone;
+    backbone_to_surface.to = surface_id;
+    backbone_to_surface.dz_m = -surface_to_backbone.dz_m;
+    graph.adjacency[surface_id].push_back(surface_to_backbone);
+    graph.adjacency[backbone_id].push_back(backbone_to_surface);
+    graph.portal_edge_count += 2U;
+  }
+
+  return graph;
 }
 }  // namespace
 
@@ -150,8 +242,8 @@ HybridExperiencePlanner::HybridExperiencePlanner(
   HybridExperiencePlannerOptions hybrid_options)
 : surface_options_(surface_options), hybrid_options_(hybrid_options)
 {
-  hybrid_options_.max_portal_candidates_per_side =
-    std::max<std::size_t>(1U, hybrid_options_.max_portal_candidates_per_side);
+  hybrid_options_.backbone_cost_scale = std::max(0.1, hybrid_options_.backbone_cost_scale);
+  hybrid_options_.portal_switch_cost = std::max(0.0, hybrid_options_.portal_switch_cost);
 }
 
 SurfacePlanResult HybridExperiencePlanner::plan(
@@ -172,9 +264,8 @@ SurfacePlanResult HybridExperiencePlanner::plan(
     return result;
   }
 
-  SurfaceAstarPlanner surface_planner(surface_options_);
   if (surface_graph.sameComponent(start, goal)) {
-    return surface_planner.plan(surface_graph, start, goal);
+    return SurfaceAstarPlanner(surface_options_).plan(surface_graph, start, goal);
   }
   if (backbone_graph.empty() || backbone_graph.portals().empty()) {
     result.message = "no_backbone_portal_for_start_or_goal";
@@ -182,179 +273,157 @@ SurfacePlanResult HybridExperiencePlanner::plan(
     return result;
   }
 
-  const int start_component = surface_graph.componentId(start);
-  const int goal_component = surface_graph.componentId(goal);
-  const std::vector<ExperiencePortalId> start_portals =
-    sortedPortalCandidates(surface_graph, backbone_graph, start_component, start);
-  const std::vector<ExperiencePortalId> goal_portals =
-    sortedPortalCandidates(surface_graph, backbone_graph, goal_component, goal);
-  if (start_portals.empty() || goal_portals.empty()) {
-    result.message = "no_backbone_portal_for_start_or_goal";
+  const HybridGraph graph = buildHybridGraph(
+    surface_graph, backbone_graph, surface_options_, hybrid_options_);
+  const std::uint32_t start_id = start.id;
+  const std::uint32_t goal_id = goal.id;
+  if (!validHybridId(graph, start_id) || !validHybridId(graph, goal_id)) {
+    result.message = "start or goal is not in the hybrid graph";
     result.metrics.failure_reason = result.message;
     return result;
   }
-  result.metrics.start_portal_candidates = saturatedSize(start_portals.size());
-  result.metrics.goal_portal_candidates = saturatedSize(goal_portals.size());
-  for (const ExperiencePortalId portal_id : start_portals) {
+
+  result.metrics.hybrid_nodes = saturatedSize(graph.nodes.size());
+  result.metrics.hybrid_surface_edges = graph.surface_edge_count;
+  result.metrics.hybrid_backbone_edges = graph.backbone_edge_count;
+  result.metrics.hybrid_portal_edges = graph.portal_edge_count;
+  result.metrics.start_portal_candidates =
+    saturatedSize(backbone_graph.portalsForSurfaceComponent(surface_graph.componentId(start)).size());
+  result.metrics.goal_portal_candidates =
+    saturatedSize(backbone_graph.portalsForSurfaceComponent(surface_graph.componentId(goal)).size());
+  for (const ExperiencePortalId portal_id :
+    backbone_graph.portalsForSurfaceComponent(surface_graph.componentId(start)))
+  {
     const ExperiencePortal * portal = backbone_graph.portal(portal_id);
     if (portal != nullptr) {
       result.debug_start_portal_candidates.push_back(surfacePoint(surface_graph, portal->surface_node));
     }
   }
-  for (const ExperiencePortalId portal_id : goal_portals) {
+  for (const ExperiencePortalId portal_id :
+    backbone_graph.portalsForSurfaceComponent(surface_graph.componentId(goal)))
+  {
     const ExperiencePortal * portal = backbone_graph.portal(portal_id);
     if (portal != nullptr) {
       result.debug_goal_portal_candidates.push_back(surfacePoint(surface_graph, portal->surface_node));
     }
   }
 
-  const SurfaceDistanceTree start_tree = buildSurfaceDistanceTree(surface_graph, start);
-  const SurfaceDistanceTree goal_tree = buildSurfaceDistanceTree(surface_graph, goal);
-
+  std::vector<double> cost(graph.nodes.size(), std::numeric_limits<double>::infinity());
+  std::vector<std::uint32_t> previous(graph.nodes.size(), kInvalidHybridNode);
+  std::priority_queue<QueueNode, std::vector<QueueNode>, QueueCompare> open;
+  cost[start_id] = 0.0;
+  open.push({start_id, 0.0});
   bool found = false;
-  double best_cost = std::numeric_limits<double>::infinity();
-  ExperiencePortalId best_start_portal_id{kInvalidNodeId};
-  ExperiencePortalId best_goal_portal_id{kInvalidNodeId};
-  double best_start_surface_cost = 0.0;
-  double best_goal_surface_cost = 0.0;
-  double best_backbone_cost = 0.0;
-  for (const ExperiencePortalId start_portal_id : start_portals) {
-    const ExperiencePortal * start_portal = backbone_graph.portal(start_portal_id);
-    if (start_portal == nullptr) {
-      continue;
-    }
-    if (start_portal->surface_node.id >= start_tree.cost.size() ||
-      !std::isfinite(start_tree.cost[start_portal->surface_node.id]))
+  while (!open.empty() && result.metrics.hybrid_expanded_nodes < surface_options_.max_iterations) {
+    const QueueNode current = open.top();
+    open.pop();
+    if (!validHybridId(graph, current.node) ||
+      current.cost > cost[current.node] + 1.0e-9)
     {
       continue;
     }
-    for (const ExperiencePortalId goal_portal_id : goal_portals) {
-      ++result.metrics.evaluated_portal_pairs;
-      const ExperiencePortal * goal_portal = backbone_graph.portal(goal_portal_id);
-      if (goal_portal == nullptr) {
-        continue;
-      }
-      if (goal_portal->surface_node.id >= goal_tree.cost.size() ||
-        !std::isfinite(goal_tree.cost[goal_portal->surface_node.id]))
-      {
-        continue;
-      }
-      const double start_surface_cost = start_tree.cost[start_portal->surface_node.id];
-      const double goal_surface_cost = goal_tree.cost[goal_portal->surface_node.id];
-      const double backbone_cost = backbone_graph.pathLengthBetween(
-        start_portal->backbone_node, goal_portal->backbone_node);
-      const double cost = start_surface_cost + backbone_cost + goal_surface_cost +
-        start_portal->distance_xy_m + goal_portal->distance_xy_m +
-        0.25 * (start_portal->height_error_m + goal_portal->height_error_m);
-      if (cost >= best_cost) {
-        continue;
-      }
-      best_cost = cost;
-      best_start_portal_id = start_portal_id;
-      best_goal_portal_id = goal_portal_id;
-      best_start_surface_cost = start_surface_cost;
-      best_goal_surface_cost = goal_surface_cost;
-      best_backbone_cost = backbone_cost;
+    if (current.node == goal_id) {
       found = true;
+      break;
+    }
+    ++result.metrics.hybrid_expanded_nodes;
+    for (const HybridEdge & edge : graph.adjacency[current.node]) {
+      if (!validHybridId(graph, edge.to)) {
+        continue;
+      }
+      const double next_cost = current.cost + edge.cost;
+      if (next_cost >= cost[edge.to]) {
+        continue;
+      }
+      cost[edge.to] = next_cost;
+      previous[edge.to] = current.node;
+      open.push({edge.to, next_cost});
+      ++result.metrics.generated_nodes;
     }
   }
 
   if (!found) {
-    result.message = "no_surface_path_to_backbone_portal";
+    result.message = result.metrics.hybrid_expanded_nodes >= surface_options_.max_iterations ?
+      "hybrid graph search reached max_iterations" : "hybrid graph search failed to find a path";
     result.metrics.failure_reason = result.message;
     return result;
   }
 
-  const ExperiencePortal * best_start_portal = backbone_graph.portal(best_start_portal_id);
-  const ExperiencePortal * best_goal_portal = backbone_graph.portal(best_goal_portal_id);
-  if (best_start_portal == nullptr || best_goal_portal == nullptr) {
-    result.message = "no_surface_path_to_backbone_portal";
-    result.metrics.failure_reason = result.message;
-    return result;
-  }
-  std::vector<SurfaceNodeId> start_leg_nodes = reconstructSurfacePath(
-    surface_graph, start_tree, best_start_portal->surface_node);
-  std::vector<SurfaceNodeId> goal_to_portal_nodes = reconstructSurfacePath(
-    surface_graph, goal_tree, best_goal_portal->surface_node);
-  if (start_leg_nodes.empty() || goal_to_portal_nodes.empty()) {
-    result.message = "no_surface_path_to_backbone_portal";
-    result.metrics.failure_reason = result.message;
-    return result;
-  }
-  std::reverse(goal_to_portal_nodes.begin(), goal_to_portal_nodes.end());
-
-  const std::vector<Point3> start_leg_path = nodesToPoints(surface_graph, start_leg_nodes);
-  const std::vector<Point3> backbone_path = backbone_graph.pathPositionsBetween(
-    best_start_portal->backbone_node, best_goal_portal->backbone_node);
-  const std::vector<Point3> goal_leg_path = nodesToPoints(surface_graph, goal_to_portal_nodes);
-  if (backbone_path.empty()) {
-    result.message = "no_surface_path_to_backbone_portal";
+  const std::vector<std::uint32_t> hybrid_path =
+    reconstructHybridPath(previous, start_id, goal_id);
+  if (hybrid_path.empty()) {
+    result.message = "hybrid graph parent chain is incomplete";
     result.metrics.failure_reason = result.message;
     return result;
   }
 
   result.success = true;
-  result.message = "path found via dense trajectory backbone";
+  result.message = "path found on hybrid experience graph";
   result.metrics.success = true;
   result.metrics.final_path_validated = true;
-  result.cells = nodesToCells(surface_graph, start_leg_nodes);
-  const std::vector<GridIndex> goal_cells = nodesToCells(surface_graph, goal_to_portal_nodes);
-  result.cells.insert(result.cells.end(), goal_cells.begin(), goal_cells.end());
-  appendPath(result.path, start_leg_path);
-  appendPath(result.path, backbone_path);
-  appendPath(result.path, goal_leg_path);
-  result.raw_cells = result.cells;
-  result.raw_path = result.path;
-  result.debug_selected_start_portal.push_back(surfacePoint(surface_graph, best_start_portal->surface_node));
-  result.debug_selected_goal_portal.push_back(surfacePoint(surface_graph, best_goal_portal->surface_node));
-  result.debug_selected_backbone_segment = backbone_path;
-  result.metrics.selected_start_portal_id = best_start_portal_id.id;
-  result.metrics.selected_goal_portal_id = best_goal_portal_id.id;
-  result.metrics.selected_start_backbone_node = best_start_portal->backbone_node.id;
-  result.metrics.selected_goal_backbone_node = best_goal_portal->backbone_node.id;
-  result.metrics.selected_backbone_index_delta =
-    best_start_portal->backbone_node.id > best_goal_portal->backbone_node.id ?
-    best_start_portal->backbone_node.id - best_goal_portal->backbone_node.id :
-    best_goal_portal->backbone_node.id - best_start_portal->backbone_node.id;
-  result.metrics.selected_backbone_length_m = best_backbone_cost;
-  result.metrics.selected_start_surface_leg_m = best_start_surface_cost;
-  result.metrics.selected_goal_surface_leg_m = best_goal_surface_cost;
-  result.metrics.selected_total_hybrid_cost = best_cost;
+  result.metrics.selected_total_hybrid_cost = cost[goal_id];
+  result.raw_path.reserve(hybrid_path.size());
+  result.path.reserve(hybrid_path.size());
+  for (const std::uint32_t node_id : hybrid_path) {
+    const HybridNode & node = graph.nodes[node_id];
+    appendPoint(result.path, node.point);
+    appendPoint(result.raw_path, node.point);
+    if (node.kind == HybridNodeKind::Surface) {
+      const SurfaceNode * surface_node = surface_graph.node(node.surface_id);
+      if (surface_node != nullptr) {
+        result.cells.push_back(surface_node->cell);
+        result.raw_cells.push_back(surface_node->cell);
+      }
+    }
+  }
+
+  for (std::size_t i = 1U; i < hybrid_path.size(); ++i) {
+    const HybridEdge * edge = findEdge(graph, hybrid_path[i - 1U], hybrid_path[i]);
+    if (edge == nullptr) {
+      continue;
+    }
+    if (edge->kind == HybridEdgeKind::Surface) {
+      ++result.metrics.used_surface_edges;
+      result.metrics.surface_path_length_m += edge->length_xy_m;
+    } else if (edge->kind == HybridEdgeKind::Backbone) {
+      ++result.metrics.used_backbone_edges;
+      result.metrics.backbone_path_length_m += edge->length_xy_m;
+      appendPoint(result.debug_selected_backbone_segment, graph.nodes[hybrid_path[i - 1U]].point);
+      appendPoint(result.debug_selected_backbone_segment, graph.nodes[hybrid_path[i]].point);
+    } else {
+      ++result.metrics.used_portal_edges;
+      ++result.metrics.portal_switch_count;
+      const Point3 portal_point = graph.nodes[hybrid_path[i - 1U]].kind == HybridNodeKind::Surface ?
+        graph.nodes[hybrid_path[i - 1U]].point : graph.nodes[hybrid_path[i]].point;
+      if (result.debug_selected_start_portal.empty()) {
+        result.debug_selected_start_portal.push_back(portal_point);
+        result.metrics.selected_start_portal_id = edge->portal_id.id;
+        const HybridNode & backbone_node = graph.nodes[hybrid_path[i - 1U]].kind == HybridNodeKind::Backbone ?
+          graph.nodes[hybrid_path[i - 1U]] : graph.nodes[hybrid_path[i]];
+        result.metrics.selected_start_backbone_node = backbone_node.backbone_id.id;
+      } else {
+        result.debug_selected_goal_portal.clear();
+        result.debug_selected_goal_portal.push_back(portal_point);
+        result.metrics.selected_goal_portal_id = edge->portal_id.id;
+        const HybridNode & backbone_node = graph.nodes[hybrid_path[i - 1U]].kind == HybridNodeKind::Backbone ?
+          graph.nodes[hybrid_path[i - 1U]] : graph.nodes[hybrid_path[i]];
+        result.metrics.selected_goal_backbone_node = backbone_node.backbone_id.id;
+      }
+    }
+  }
+  if (result.metrics.selected_start_backbone_node != kInvalidHybridNode &&
+    result.metrics.selected_goal_backbone_node != kInvalidHybridNode)
+  {
+    result.metrics.selected_backbone_index_delta =
+      result.metrics.selected_start_backbone_node > result.metrics.selected_goal_backbone_node ?
+      result.metrics.selected_start_backbone_node - result.metrics.selected_goal_backbone_node :
+      result.metrics.selected_goal_backbone_node - result.metrics.selected_start_backbone_node;
+  }
+  result.metrics.selected_backbone_length_m = result.metrics.backbone_path_length_m;
+  result.metrics.selected_start_surface_leg_m = result.metrics.surface_path_length_m;
+  result.metrics.selected_total_hybrid_cost = cost[goal_id];
   fillPathMetrics(result);
   return result;
-}
-
-std::vector<ExperiencePortalId> HybridExperiencePlanner::sortedPortalCandidates(
-  const ExperienceSurfaceGraph & surface_graph,
-  const ExperienceBackboneGraph & backbone_graph,
-  int surface_component_id,
-  SurfaceNodeId query_node) const
-{
-  std::vector<ExperiencePortalId> candidates =
-    backbone_graph.portalsForSurfaceComponent(surface_component_id);
-  if (candidates.empty() || !surface_graph.isValid(query_node)) {
-    return {};
-  }
-
-  const Point3 query = surfacePoint(surface_graph, query_node);
-  std::sort(
-    candidates.begin(), candidates.end(),
-    [&](ExperiencePortalId lhs, ExperiencePortalId rhs) {
-      const ExperiencePortal * left = backbone_graph.portal(lhs);
-      const ExperiencePortal * right = backbone_graph.portal(rhs);
-      if (left == nullptr || right == nullptr) {
-        return right != nullptr;
-      }
-      const Point3 left_point = surfacePoint(surface_graph, left->surface_node);
-      const Point3 right_point = surfacePoint(surface_graph, right->surface_node);
-      const double left_score = xyDistance(query, left_point) + 0.25 * left->distance_xy_m;
-      const double right_score = xyDistance(query, right_point) + 0.25 * right->distance_xy_m;
-      return left_score < right_score;
-    });
-  if (candidates.size() > hybrid_options_.max_portal_candidates_per_side) {
-    candidates.resize(hybrid_options_.max_portal_candidates_per_side);
-  }
-  return candidates;
 }
 
 Point3 HybridExperiencePlanner::surfacePoint(
@@ -370,17 +439,14 @@ Point3 HybridExperiencePlanner::surfacePoint(
     node->z};
 }
 
-void HybridExperiencePlanner::appendPath(
-  std::vector<Point3> & out, const std::vector<Point3> & in) const
+void HybridExperiencePlanner::appendPoint(std::vector<Point3> & out, const Point3 & point) const
 {
-  for (const Point3 & point : in) {
-    if (!out.empty() && xyDistance(out.back(), point) < 1.0e-6 &&
-      std::abs(out.back().z - point.z) < 1.0e-6)
-    {
-      continue;
-    }
-    out.push_back(point);
+  if (!out.empty() && xyDistance(out.back(), point) < 1.0e-6 &&
+    std::abs(out.back().z - point.z) < 1.0e-6)
+  {
+    return;
   }
+  out.push_back(point);
 }
 
 double HybridExperiencePlanner::pathLength(const std::vector<Point3> & path) const

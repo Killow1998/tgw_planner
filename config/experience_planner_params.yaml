@@ -32,7 +32,10 @@ tgw_experience_planner_node:
     backbone_max_portal_xy_distance_m: 1.20
     backbone_max_portal_height_error_m: 0.45
     backbone_min_portal_clearance_m: 0.0
-    hybrid_max_portal_candidates_per_side: 64
+    hybrid_backbone_cost_scale: 1.2
+    hybrid_portal_switch_cost: 0.5
+    hybrid_portal_height_error_weight: 0.25
+    hybrid_backbone_low_confidence_penalty: 0.5
     expansion_radius_cells: 2
     max_expansion_steps: 12
     vertical_tolerance_cells: 3

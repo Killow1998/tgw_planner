@@ -11,7 +11,10 @@ namespace tgw_planner::core
 
 struct HybridExperiencePlannerOptions
 {
-  std::size_t max_portal_candidates_per_side{64};
+  double backbone_cost_scale{1.2};
+  double portal_switch_cost{0.5};
+  double portal_height_error_weight{0.25};
+  double backbone_low_confidence_penalty{0.5};
 };
 
 class HybridExperiencePlanner
@@ -28,13 +31,8 @@ public:
     SurfaceNodeId goal) const;
 
 private:
-  std::vector<ExperiencePortalId> sortedPortalCandidates(
-    const ExperienceSurfaceGraph & surface_graph,
-    const ExperienceBackboneGraph & backbone_graph,
-    int surface_component_id,
-    SurfaceNodeId query_node) const;
   Point3 surfacePoint(const ExperienceSurfaceGraph & graph, SurfaceNodeId node_id) const;
-  void appendPath(std::vector<Point3> & out, const std::vector<Point3> & in) const;
+  void appendPoint(std::vector<Point3> & out, const Point3 & point) const;
   double pathLength(const std::vector<Point3> & path) const;
   void fillPathMetrics(SurfacePlanResult & result) const;
 
