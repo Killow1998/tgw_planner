@@ -484,10 +484,9 @@ bool SurfaceAstarPlanner::validateGraphPath(
       return false;
     }
     if (path_edge->kind == SurfaceEdgeKind::NormalSurface) {
-      if (from_node->support_component_id < 0 ||
-        from_node->support_component_id != to_node->support_component_id)
+      if (from_node->support_component_id < 0 || to_node->support_component_id < 0)
       {
-        failure_reason = "path_validation_failed_cross_component_edge";
+        failure_reason = "path_validation_failed_missing_support_component";
         return false;
       }
     }

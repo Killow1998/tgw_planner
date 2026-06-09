@@ -377,8 +377,51 @@ void testLowConfidenceIsNotBridge()
   require(!graph.node(a_node)->bridge, "low confidence node should not become a bridge");
   require(!graph.node(b_node)->bridge, "low confidence node should not become a bridge");
   require(
-    !graph.sameComponent(a_node, b_node),
-    "low confidence cells should not bypass support component edge constraints");
+    graph.sameComponent(a_node, b_node),
+    "layer-safe normal edges should allow valid transitions across support lineage ids");
+}
+
+void testSurfaceGraphRejectsMissingSupportLineage()
+{
+  ExperienceSnapshot snapshot;
+  snapshot.map_frame = "map";
+  snapshot.resolution_m = 0.50;
+
+  SurfaceCell anchored;
+  anchored.cell = {0, 0, 0};
+  anchored.label = SurfaceLabel::Expanded;
+  anchored.reachability = ReachabilityLabel::InferredReachable;
+  anchored.support_component_id = 1;
+  anchored.height_m = 0.0;
+  anchored.confidence = 1.0;
+  snapshot.surface.surface_cells[anchored.cell] = anchored;
+  snapshot.surface.traversable_cells.insert(anchored.cell);
+  snapshot.reachability[anchored.cell] = anchored.reachability;
+
+  SurfaceCell unanchored = anchored;
+  unanchored.cell = {1, 0, 0};
+  unanchored.support_component_id = -1;
+  snapshot.surface.surface_cells[unanchored.cell] = unanchored;
+  snapshot.surface.traversable_cells.insert(unanchored.cell);
+  snapshot.reachability[unanchored.cell] = unanchored.reachability;
+
+  snapshot.clearance.compute(
+    snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, snapshot.resolution_m);
+  snapshot.risk.compute(snapshot.surface, snapshot.clearance);
+
+  SurfacePlannerOptions planner_options;
+  planner_options.require_footprint_support = false;
+  SurfaceTransitionValidator validator(planner_options);
+  ExperienceSurfaceGraph graph;
+  graph.build(snapshot, validator);
+
+  const SurfaceNodeId anchored_node = graph.nodeIdForCell(anchored.cell);
+  const SurfaceNodeId unanchored_node = graph.nodeIdForCell(unanchored.cell);
+  require(graph.isValid(anchored_node), "anchored support lineage node should exist");
+  require(graph.isValid(unanchored_node), "unanchored support lineage node should exist");
+  require(
+    !graph.sameComponent(anchored_node, unanchored_node),
+    "normal graph edges should reject cells without anchored support lineage");
 }
 
 void testBridgeEndpointAttachesOnlyToIntendedComponent()
@@ -824,6 +867,7 @@ int main()
   testSurfaceGraphRejectsLayerJump();
   testSurfaceGraphBridgeHeightPolicy();
   testLowConfidenceIsNotBridge();
+  testSurfaceGraphRejectsMissingSupportLineage();
   testBridgeEndpointAttachesOnlyToIntendedComponent();
   testExperienceBuilderSkeleton();
   testReachableExpansionHeightGate();

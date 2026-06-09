@@ -401,8 +401,7 @@ bool ExperienceSurfaceGraph::isValidBridgeTransition(
 bool ExperienceSurfaceGraph::isValidNormalTransition(
   const SurfaceNode & from, const SurfaceNode & to) const
 {
-  return from.support_component_id >= 0 &&
-         from.support_component_id == to.support_component_id;
+  return from.support_component_id >= 0 && to.support_component_id >= 0;
 }
 
 void ExperienceSurfaceGraph::computeComponents()
