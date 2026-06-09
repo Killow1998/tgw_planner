@@ -46,6 +46,7 @@ using tgw_planner::core::SurfaceMap;
 using tgw_planner::core::SurfaceNodeId;
 using tgw_planner::core::SurfacePlannerOptions;
 using tgw_planner::core::SurfaceTransitionValidator;
+using tgw_planner::core::TrajectoryBridgeSegment;
 using tgw_planner::core::TrajectoryProjector;
 using tgw_planner::core::TrajectoryProjectorOptions;
 
@@ -378,6 +379,80 @@ void testLowConfidenceIsNotBridge()
   require(
     !graph.sameComponent(a_node, b_node),
     "low confidence cells should not bypass support component edge constraints");
+}
+
+void testBridgeEndpointAttachesOnlyToIntendedComponent()
+{
+  ExperienceSnapshot snapshot;
+  snapshot.map_frame = "map";
+  snapshot.resolution_m = 0.50;
+
+  auto add_normal_cell = [&](const GridIndex & cell, int component_id) {
+    SurfaceCell surface_cell;
+    surface_cell.cell = cell;
+    surface_cell.label = SurfaceLabel::Expanded;
+    surface_cell.reachability = ReachabilityLabel::InferredReachable;
+    surface_cell.support_component_id = component_id;
+    surface_cell.height_m = 0.0;
+    surface_cell.confidence = 1.0;
+    snapshot.surface.surface_cells[cell] = surface_cell;
+    snapshot.surface.traversable_cells.insert(cell);
+    snapshot.reachability[cell] = surface_cell.reachability;
+  };
+  auto add_bridge_cell = [&](const GridIndex & cell, int order, bool endpoint) {
+    SurfaceCell surface_cell;
+    surface_cell.cell = cell;
+    surface_cell.label = SurfaceLabel::TrajectoryBridge;
+    surface_cell.reachability = ReachabilityLabel::LowConfidenceReachable;
+    surface_cell.bridge_id = 11;
+    surface_cell.bridge_order = order;
+    surface_cell.bridge_endpoint = endpoint;
+    surface_cell.height_m = 0.0;
+    surface_cell.confidence = 0.30;
+    snapshot.surface.surface_cells[cell] = surface_cell;
+    snapshot.surface.traversable_cells.insert(cell);
+    snapshot.reachability[cell] = surface_cell.reachability;
+  };
+
+  add_normal_cell({-1, 0, 0}, 101);
+  add_normal_cell({2, 0, 0}, 202);
+  add_normal_cell({0, 1, 0}, 303);
+  add_bridge_cell({0, 0, 0}, 1, true);
+  add_bridge_cell({1, 0, 0}, 2, true);
+
+  TrajectoryBridgeSegment segment;
+  segment.bridge_id = 11;
+  segment.entry_support_cell = {-1, 0, 0};
+  segment.exit_support_cell = {2, 0, 0};
+  segment.footprint_cells_ordered = {{0, 0, 0}, {1, 0, 0}};
+  segment.cell_order[{0, 0, 0}] = 1;
+  segment.cell_order[{1, 0, 0}] = 2;
+  segment.gap_length_m = 1.0;
+  segment.height_delta_m = 0.0;
+  snapshot.bridge_segments.push_back(segment);
+
+  snapshot.clearance.compute(
+    snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, snapshot.resolution_m);
+  snapshot.risk.compute(snapshot.surface, snapshot.clearance);
+
+  SurfacePlannerOptions planner_options;
+  planner_options.require_footprint_support = false;
+  SurfaceTransitionValidator validator(planner_options);
+  ExperienceSurfaceGraph graph;
+  graph.build(snapshot, validator);
+
+  const SurfaceNodeId entry = graph.nodeIdForCell({-1, 0, 0});
+  const SurfaceNodeId bridge = graph.nodeIdForCell({0, 0, 0});
+  const SurfaceNodeId wrong = graph.nodeIdForCell({0, 1, 0});
+  require(graph.isValid(entry), "bridge attach test entry node should exist");
+  require(graph.isValid(bridge), "bridge attach test bridge node should exist");
+  require(graph.isValid(wrong), "bridge attach test wrong normal node should exist");
+  require(
+    graph.sameComponent(entry, bridge),
+    "bridge endpoint should attach to its intended entry support component");
+  require(
+    !graph.sameComponent(wrong, bridge),
+    "bridge endpoint should not attach to an unrelated adjacent support component");
 }
 
 void testExperienceBuilderSkeleton()
@@ -749,6 +824,7 @@ int main()
   testSurfaceGraphRejectsLayerJump();
   testSurfaceGraphBridgeHeightPolicy();
   testLowConfidenceIsNotBridge();
+  testBridgeEndpointAttachesOnlyToIntendedComponent();
   testExperienceBuilderSkeleton();
   testReachableExpansionHeightGate();
   testReachableExpansionRejectsBodyObstruction();

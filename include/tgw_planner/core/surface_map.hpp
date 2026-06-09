@@ -2,6 +2,7 @@
 
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "tgw_planner/core/grid_index.hpp"
 
@@ -50,6 +51,17 @@ struct BridgeCellMetadata
   bool bridge_endpoint{false};
   double height_m{0.0};
   double confidence{0.30};
+};
+
+struct TrajectoryBridgeSegment
+{
+  int bridge_id{-1};
+  GridIndex entry_support_cell;
+  GridIndex exit_support_cell;
+  std::vector<GridIndex> footprint_cells_ordered;
+  std::unordered_map<GridIndex, int, GridIndexHash> cell_order;
+  double gap_length_m{0.0};
+  double height_delta_m{0.0};
 };
 
 struct SurfaceMap

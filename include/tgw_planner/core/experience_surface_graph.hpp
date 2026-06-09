@@ -80,7 +80,9 @@ struct SurfaceGraphBuildOptions
 {
   double max_edge_height_delta_m{0.30};
   double max_bridge_edge_height_delta_m{0.80};
+  double max_bridge_attach_height_delta_m{0.35};
   double max_edge_slope{std::numeric_limits<double>::infinity()};
+  double max_bridge_edge_slope{std::numeric_limits<double>::infinity()};
 };
 
 struct SurfaceGraphBuildMetrics
@@ -125,7 +127,18 @@ public:
   const SurfaceGraphBuildMetrics & metrics() const;
 
 private:
+  struct BridgeAttachment
+  {
+    int entry_support_component_id{-1};
+    int exit_support_component_id{-1};
+    int entry_order{-1};
+    int exit_order{-1};
+  };
+
   Point3 cellCenter(const GridIndex & cell, double resolution_m) const;
+  void buildBridgeAttachments(const NavigationSnapshot & snapshot);
+  int supportComponentNearCell(
+    const NavigationSnapshot & snapshot, const GridIndex & cell) const;
   bool isBridgeCell(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
   bool isSurfaceGraphNode(
     const NavigationSnapshot & snapshot,
@@ -147,6 +160,7 @@ private:
   std::vector<std::vector<SurfaceEdge>> adjacency_;
   std::unordered_map<GridIndex, std::vector<SurfaceNodeId>, GridIndexHash> xy_to_nodes_;
   std::unordered_map<GridIndex, SurfaceNodeId, GridIndexHash> cell_to_node_;
+  std::unordered_map<int, BridgeAttachment> bridge_attachments_;
   std::vector<int> component_id_;
   std::vector<SurfaceGraphComponentInfo> components_;
   SurfaceGraphBuildMetrics metrics_;

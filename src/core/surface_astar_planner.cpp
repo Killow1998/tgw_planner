@@ -477,12 +477,41 @@ bool SurfaceAstarPlanner::validateGraphPath(
       failure_reason = "path_validation_failed_layer_jump_edge";
       return false;
     }
-    if (path_edge->kind == SurfaceEdgeKind::TrajectoryBridge) {
-      const SurfaceNode * from_node = graph.node(from);
-      const SurfaceNode * to_node = graph.node(to);
-      if (from_node == nullptr || to_node == nullptr ||
-        (!from_node->bridge && !to_node->bridge))
+    const SurfaceNode * from_node = graph.node(from);
+    const SurfaceNode * to_node = graph.node(to);
+    if (from_node == nullptr || to_node == nullptr) {
+      failure_reason = "path_validation_failed_invalid_graph_node";
+      return false;
+    }
+    if (path_edge->kind == SurfaceEdgeKind::NormalSurface) {
+      if (from_node->support_component_id < 0 ||
+        from_node->support_component_id != to_node->support_component_id)
       {
+        failure_reason = "path_validation_failed_cross_component_edge";
+        return false;
+      }
+    }
+    if (path_edge->kind == SurfaceEdgeKind::TrajectoryBridge) {
+      if (!from_node->bridge && !to_node->bridge) {
+        failure_reason = "path_validation_failed_invalid_bridge_edge";
+        return false;
+      }
+      if (from_node->bridge && to_node->bridge) {
+        if (from_node->bridge_id < 0 || from_node->bridge_id != to_node->bridge_id ||
+          std::abs(from_node->bridge_order - to_node->bridge_order) > 1)
+        {
+          failure_reason = "path_validation_failed_invalid_bridge_edge";
+          return false;
+        }
+      } else {
+        const SurfaceNode * bridge_node = from_node->bridge ? from_node : to_node;
+        const SurfaceNode * normal_node = from_node->bridge ? to_node : from_node;
+        if (!bridge_node->bridge_endpoint || normal_node->support_component_id < 0) {
+          failure_reason = "path_validation_failed_invalid_bridge_edge";
+          return false;
+        }
+      }
+      if (abs_dz > 0.0 && !std::isfinite(abs_dz)) {
         failure_reason = "path_validation_failed_invalid_bridge_edge";
         return false;
       }

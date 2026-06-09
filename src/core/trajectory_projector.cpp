@@ -5,6 +5,7 @@
 #include <limits>
 #include <unordered_set>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace tgw_planner::core
@@ -234,6 +235,12 @@ void addTrajectoryBridgeSeeds(
 
     const int samples = std::max(1, static_cast<int>(std::ceil(gap_m / step_m)));
     const double yaw = yawBetween(previous.support_position, current.support_position);
+    TrajectoryBridgeSegment segment;
+    segment.bridge_id = bridge_id;
+    segment.entry_support_cell = previous.support_cell;
+    segment.exit_support_cell = current.support_cell;
+    segment.gap_length_m = gap_m;
+    segment.height_delta_m = height_delta_m;
     for (int sample_index = 1; sample_index < samples; ++sample_index) {
       const double t = static_cast<double>(sample_index) / static_cast<double>(samples);
       ProjectedSupportSample bridge;
@@ -263,6 +270,11 @@ void addTrajectoryBridgeSeeds(
           ++result.trajectory_bridge_seed_count;
         }
         result.bridged_seed_cells.insert(cell);
+        segment.footprint_cells_ordered.push_back(cell);
+        const auto order_it = segment.cell_order.find(cell);
+        if (order_it == segment.cell_order.end() || sample_index < order_it->second) {
+          segment.cell_order[cell] = sample_index;
+        }
         BridgeCellMetadata & metadata = result.bridge_cell_metadata[cell];
         if (metadata.bridge_id < 0 || bridge_endpoint) {
           metadata.bridge_id = bridge_id;
@@ -272,6 +284,9 @@ void addTrajectoryBridgeSeeds(
           metadata.confidence = 0.30;
         }
       }
+    }
+    if (!segment.footprint_cells_ordered.empty()) {
+      result.bridge_segments.push_back(std::move(segment));
     }
   }
 }

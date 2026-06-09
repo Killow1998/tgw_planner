@@ -27,10 +27,12 @@ void ExperienceSurfaceGraph::build(
   adjacency_.clear();
   xy_to_nodes_.clear();
   cell_to_node_.clear();
+  bridge_attachments_.clear();
   component_id_.clear();
   components_.clear();
   metrics_ = {};
   resolution_m_ = snapshot.resolution_m;
+  buildBridgeAttachments(snapshot);
 
   nodes_.reserve(snapshot.surface.traversable_cells.size());
   for (const GridIndex & cell : snapshot.surface.traversable_cells) {
@@ -221,6 +223,55 @@ Point3 ExperienceSurfaceGraph::cellCenter(const GridIndex & cell, double resolut
     (static_cast<double>(cell.z) + 0.5) * resolution_m};
 }
 
+void ExperienceSurfaceGraph::buildBridgeAttachments(const NavigationSnapshot & snapshot)
+{
+  bridge_attachments_.clear();
+  for (const TrajectoryBridgeSegment & segment : snapshot.bridge_segments) {
+    if (segment.bridge_id < 0) {
+      continue;
+    }
+    BridgeAttachment attachment;
+    attachment.entry_support_component_id =
+      supportComponentNearCell(snapshot, segment.entry_support_cell);
+    attachment.exit_support_component_id =
+      supportComponentNearCell(snapshot, segment.exit_support_cell);
+    for (const auto & entry : segment.cell_order) {
+      if (attachment.entry_order < 0 || entry.second < attachment.entry_order) {
+        attachment.entry_order = entry.second;
+      }
+      if (attachment.exit_order < 0 || entry.second > attachment.exit_order) {
+        attachment.exit_order = entry.second;
+      }
+    }
+    bridge_attachments_[segment.bridge_id] = attachment;
+  }
+}
+
+int ExperienceSurfaceGraph::supportComponentNearCell(
+  const NavigationSnapshot & snapshot, const GridIndex & cell) const
+{
+  const auto exact_it = snapshot.surface.surface_cells.find(cell);
+  if (exact_it != snapshot.surface.surface_cells.end() &&
+    exact_it->second.support_component_id >= 0)
+  {
+    return exact_it->second.support_component_id;
+  }
+  for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      for (int dz = -1; dz <= 1; ++dz) {
+        const auto it = snapshot.surface.surface_cells.find(
+          {cell.x + dx, cell.y + dy, cell.z + dz});
+        if (it != snapshot.surface.surface_cells.end() &&
+          it->second.support_component_id >= 0)
+        {
+          return it->second.support_component_id;
+        }
+      }
+    }
+  }
+  return -1;
+}
+
 bool ExperienceSurfaceGraph::isBridgeCell(
   const NavigationSnapshot & snapshot, const GridIndex & cell) const
 {
@@ -265,15 +316,19 @@ std::optional<SurfaceEdge> ExperienceSurfaceGraph::makeContinuousSurfaceEdge(
   const double dz = to.z - from.z;
   const double abs_dz = std::abs(dz);
   const bool bridge_edge = from.bridge || to.bridge;
+  const bool bridge_attach_edge = bridge_edge && !(from.bridge && to.bridge);
   const double max_height_delta = bridge_edge ?
-    options.max_bridge_edge_height_delta_m : options.max_edge_height_delta_m;
+    (bridge_attach_edge ?
+      options.max_bridge_attach_height_delta_m : options.max_bridge_edge_height_delta_m) :
+    options.max_edge_height_delta_m;
   if (abs_dz > max_height_delta) {
     ++metrics_.graph_rejected_large_dz_edges;
     return std::nullopt;
   }
 
   const double slope = abs_dz / length_xy;
-  if (slope > options.max_edge_slope) {
+  const double max_slope = bridge_edge ? options.max_bridge_edge_slope : options.max_edge_slope;
+  if (slope > max_slope) {
     ++metrics_.graph_rejected_large_slope_edges;
     return std::nullopt;
   }
@@ -324,7 +379,23 @@ bool ExperienceSurfaceGraph::isValidBridgeTransition(
   }
   const SurfaceNode & bridge_node = from.bridge ? from : to;
   const SurfaceNode & normal_node = from.bridge ? to : from;
-  return bridge_node.bridge_endpoint && normal_node.support_component_id >= 0;
+  if (!bridge_node.bridge_endpoint || normal_node.support_component_id < 0) {
+    return false;
+  }
+  const auto attachment_it = bridge_attachments_.find(bridge_node.bridge_id);
+  if (attachment_it == bridge_attachments_.end()) {
+    return false;
+  }
+  const BridgeAttachment & attachment = attachment_it->second;
+  const bool entry_match =
+    attachment.entry_support_component_id >= 0 &&
+    normal_node.support_component_id == attachment.entry_support_component_id &&
+    bridge_node.bridge_order == attachment.entry_order;
+  const bool exit_match =
+    attachment.exit_support_component_id >= 0 &&
+    normal_node.support_component_id == attachment.exit_support_component_id &&
+    bridge_node.bridge_order == attachment.exit_order;
+  return entry_match || exit_match;
 }
 
 bool ExperienceSurfaceGraph::isValidNormalTransition(

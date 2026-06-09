@@ -78,6 +78,7 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & reso
   result.snapshot.surface.surface_cells = std::move(expanded.surface_cells);
   result.snapshot.surface.traversable_cells = std::move(expanded.traversable_cells);
   result.snapshot.reachability = std::move(expanded.reachability);
+  result.snapshot.bridge_segments = seeds.bridge_segments;
   result.proven_seed_count = expanded.proven_seed_count;
   result.inferred_cell_count = expanded.inferred_cell_count;
   result.rejected_expansion_count = expanded.rejected_expansion_count;

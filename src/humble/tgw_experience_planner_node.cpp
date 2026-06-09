@@ -135,6 +135,8 @@ std::string toStatsJson(
     (projection ? projection->observed_seed_cells.size() : 0U);
   json << ",\"bridge_seed_cells\":" <<
     (projection ? projection->bridge_seed_cells.size() : 0U);
+  json << ",\"bridge_segments\":" <<
+    (projection ? projection->bridge_segments.size() : 0U);
   json << ",\"rejected_projection_count\":" <<
     (projection ? projection->rejected_samples.size() : 0U);
   if (projection) {
@@ -428,6 +430,11 @@ public:
     declare_parameter<double>("plan_max_step_height_m", 0.35);
     declare_parameter<int>("plan_max_iterations", 250000);
     declare_parameter<double>("plan_bridge_cost", 2.5);
+    declare_parameter<double>("max_start_snap_distance_m", 1.50);
+    declare_parameter<double>("max_goal_snap_distance_m", 1.50);
+    declare_parameter<double>("graph_max_normal_edge_slope", 3.0);
+    declare_parameter<double>("graph_max_bridge_edge_slope", 8.0);
+    declare_parameter<double>("graph_bridge_attach_max_dz_m", 0.35);
     declare_parameter<double>("planner_footprint_min_support_ratio", 0.80);
     declare_parameter<double>("planner_multifloor_z_range_m", 1.50);
     declare_parameter<int>("max_trajectory_points", 200000);
@@ -533,6 +540,11 @@ private:
       graph_options.max_edge_height_delta_m = planner_options.max_step_height_m;
       graph_options.max_bridge_edge_height_delta_m =
         get_parameter("max_trajectory_bridge_height_delta_m").as_double();
+      graph_options.max_bridge_attach_height_delta_m =
+        get_parameter("graph_bridge_attach_max_dz_m").as_double();
+      graph_options.max_edge_slope = get_parameter("graph_max_normal_edge_slope").as_double();
+      graph_options.max_bridge_edge_slope =
+        get_parameter("graph_max_bridge_edge_slope").as_double();
       surface_graph_.build(snapshot_, SurfaceTransitionValidator(planner_options), graph_options);
       has_surface_graph_ = true;
     }
@@ -899,7 +911,19 @@ private:
     int start_component_id = -1;
     int goal_component_id = -1;
     if (!nearestSurfaceGraphNode(start, &start_node, &start_snap_distance, &start_component_id)) {
-      plan.message = "start could not snap to traversable experience surface";
+      plan.message = "start_not_on_reachable_surface";
+      if (stats_out != nullptr) {
+        *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
+      }
+      if (search_time_ms_out != nullptr) {
+        *search_time_ms_out = 0.0;
+      }
+      return plan;
+    }
+    const double max_start_snap_distance_m =
+      get_parameter("max_start_snap_distance_m").as_double();
+    if (start_snap_distance > max_start_snap_distance_m) {
+      plan.message = "start_not_on_reachable_surface";
       if (stats_out != nullptr) {
         *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
       }
@@ -909,7 +933,19 @@ private:
       return plan;
     }
     if (!nearestSurfaceGraphNode(goal, &goal_node, &goal_snap_distance, &goal_component_id)) {
-      plan.message = "goal could not snap to traversable experience surface";
+      plan.message = "goal_unreachable_outside_experience_surface";
+      if (stats_out != nullptr) {
+        *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
+      }
+      if (search_time_ms_out != nullptr) {
+        *search_time_ms_out = 0.0;
+      }
+      return plan;
+    }
+    const double max_goal_snap_distance_m =
+      get_parameter("max_goal_snap_distance_m").as_double();
+    if (goal_snap_distance > max_goal_snap_distance_m) {
+      plan.message = "goal_unreachable_outside_experience_surface";
       if (stats_out != nullptr) {
         *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
       }

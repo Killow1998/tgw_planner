@@ -23,6 +23,11 @@ tgw_experience_planner_node:
     footprint_support_height_tolerance_m: 0.20
     planner_footprint_min_support_ratio: 0.80
     planner_multifloor_z_range_m: 1.50
+    max_start_snap_distance_m: 1.50
+    max_goal_snap_distance_m: 1.50
+    graph_max_normal_edge_slope: 3.0
+    graph_max_bridge_edge_slope: 8.0
+    graph_bridge_attach_max_dz_m: 0.35
     expansion_radius_cells: 2
     max_expansion_steps: 12
     vertical_tolerance_cells: 3
