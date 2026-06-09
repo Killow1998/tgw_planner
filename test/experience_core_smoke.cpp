@@ -6,7 +6,9 @@
 #include <vector>
 
 #include "tgw_planner/core/experience_surface_builder.hpp"
+#include "tgw_planner/core/experience_backbone_graph.hpp"
 #include "tgw_planner/core/experience_surface_graph.hpp"
+#include "tgw_planner/core/hybrid_experience_planner.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
 #include "tgw_planner/core/path_validator.hpp"
 #include "tgw_planner/core/planner_connectivity_layer.hpp"
@@ -18,10 +20,13 @@ namespace
 {
 using tgw_planner::core::ClearanceField;
 using tgw_planner::core::ExperienceSnapshot;
+using tgw_planner::core::ExperienceBackboneGraph;
+using tgw_planner::core::ExperienceBackboneOptions;
 using tgw_planner::core::ExperienceSurfaceGraph;
 using tgw_planner::core::ExperienceSurfaceBuilder;
 using tgw_planner::core::ExperienceSurfaceBuilderOptions;
 using tgw_planner::core::GridIndex;
+using tgw_planner::core::HybridExperiencePlanner;
 using tgw_planner::core::N3KeyframeLite;
 using tgw_planner::core::N3MapReader;
 using tgw_planner::core::N3NavResource;
@@ -32,6 +37,7 @@ using tgw_planner::core::PlannerConnectivityLayer;
 using tgw_planner::core::Point3;
 using tgw_planner::core::PointXYZI;
 using tgw_planner::core::Pose3;
+using tgw_planner::core::ProjectedSupportSample;
 using tgw_planner::core::ReachabilityLabel;
 using tgw_planner::core::ReachableExpander;
 using tgw_planner::core::ReachableExpanderOptions;
@@ -47,6 +53,7 @@ using tgw_planner::core::SurfaceNodeId;
 using tgw_planner::core::SurfacePlannerOptions;
 using tgw_planner::core::SurfaceTransitionValidator;
 using tgw_planner::core::TrajectoryBridgeSegment;
+using tgw_planner::core::TrajectoryProjectionResult;
 using tgw_planner::core::TrajectoryProjector;
 using tgw_planner::core::TrajectoryProjectorOptions;
 
@@ -498,6 +505,95 @@ void testBridgeEndpointAttachesOnlyToIntendedComponent()
     "bridge endpoint should not attach to an unrelated adjacent support component");
 }
 
+void testHybridPlannerUsesDenseTrajectoryBackboneAcrossIslands()
+{
+  ExperienceSnapshot snapshot;
+  snapshot.map_frame = "map";
+  snapshot.resolution_m = 0.50;
+
+  auto add_surface_cell = [&](const GridIndex & cell, double height_m, int support_component_id) {
+    SurfaceCell surface_cell;
+    surface_cell.cell = cell;
+    surface_cell.label = SurfaceLabel::Expanded;
+    surface_cell.reachability = ReachabilityLabel::InferredReachable;
+    surface_cell.support_component_id = support_component_id;
+    surface_cell.height_m = height_m;
+    surface_cell.confidence = 1.0;
+    snapshot.surface.surface_cells[cell] = surface_cell;
+    snapshot.surface.traversable_cells.insert(cell);
+    snapshot.reachability[cell] = surface_cell.reachability;
+  };
+
+  for (int x = 0; x <= 2; ++x) {
+    add_surface_cell({x, 0, 0}, 0.0, 1);
+  }
+  for (int x = 8; x <= 10; ++x) {
+    add_surface_cell({x, 0, 4}, 2.0, 2);
+  }
+
+  snapshot.clearance.compute(
+    snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, snapshot.resolution_m);
+  snapshot.risk.compute(snapshot.surface, snapshot.clearance);
+
+  SurfacePlannerOptions planner_options;
+  planner_options.require_footprint_support = false;
+  SurfaceTransitionValidator validator(planner_options);
+  ExperienceSurfaceGraph surface_graph;
+  surface_graph.build(snapshot, validator);
+
+  const SurfaceNodeId start = surface_graph.nodeIdForCell({0, 0, 0});
+  const SurfaceNodeId goal = surface_graph.nodeIdForCell({10, 0, 4});
+  require(surface_graph.isValid(start), "hybrid test start surface node should exist");
+  require(surface_graph.isValid(goal), "hybrid test goal surface node should exist");
+  require(
+    !surface_graph.sameComponent(start, goal),
+    "surface islands should remain disconnected without dense trajectory topology");
+
+  N3NavResource resource;
+  resource.map_frame = "map";
+  resource.body_frame = "base";
+  resource.has_native_dense_trajectory = true;
+  resource.dense_trajectory_source = "native";
+
+  TrajectoryProjectionResult projection;
+  for (int i = 0; i <= 10; ++i) {
+    const double t = static_cast<double>(i) / 10.0;
+    const Point3 support{
+      0.25 + 5.0 * t,
+      0.25,
+      2.0 * t};
+    N3TrajectoryPose pose;
+    pose.seq = static_cast<std::uint64_t>(i);
+    pose.timestamp = static_cast<double>(i);
+    pose.pose_world_lidar.translation = {support.x, support.y, support.z + 0.50};
+    resource.dense_trajectory.push_back(pose);
+
+    ProjectedSupportSample sample;
+    sample.seq = pose.seq;
+    sample.timestamp = pose.timestamp;
+    sample.trajectory_position = pose.pose_world_lidar.translation;
+    sample.support_position = support;
+    projection.accepted_projected_support_samples.push_back(sample);
+  }
+
+  ExperienceBackboneOptions backbone_options;
+  backbone_options.min_node_spacing_m = 0.10;
+  backbone_options.max_portal_xy_distance_m = 0.60;
+  backbone_options.max_portal_height_error_m = 0.30;
+  ExperienceBackboneGraph backbone;
+  backbone.build(resource, projection, surface_graph, backbone_options);
+  require(backbone.nodes().size() >= 2U, "dense trajectory should create backbone nodes");
+  require(backbone.portals().size() >= 2U, "surface islands should attach to backbone portals");
+
+  const auto plan = HybridExperiencePlanner(planner_options).plan(
+    surface_graph, backbone, start, goal);
+  require(plan.success, "hybrid planner should cross disconnected surface islands through backbone");
+  require(
+    plan.message == "path found via dense trajectory backbone",
+    "hybrid planner should report dense trajectory backbone usage");
+  require(plan.path.size() > 4U, "hybrid path should include surface and backbone waypoints");
+}
+
 void testExperienceBuilderSkeleton()
 {
   N3MapReader reader;
@@ -869,6 +965,7 @@ int main()
   testLowConfidenceIsNotBridge();
   testSurfaceGraphRejectsMissingSupportLineage();
   testBridgeEndpointAttachesOnlyToIntendedComponent();
+  testHybridPlannerUsesDenseTrajectoryBackboneAcrossIslands();
   testExperienceBuilderSkeleton();
   testReachableExpansionHeightGate();
   testReachableExpansionRejectsBodyObstruction();

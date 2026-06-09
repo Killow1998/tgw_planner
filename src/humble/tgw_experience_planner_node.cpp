@@ -27,6 +27,8 @@
 #include "tgw_planner/core/experience_surface_builder.hpp"
 #include "tgw_planner/core/experience_surface_graph.hpp"
 #include "tgw_planner/core/grid_index.hpp"
+#include "tgw_planner/core/experience_backbone_graph.hpp"
+#include "tgw_planner/core/hybrid_experience_planner.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
 #include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/trajectory_projector.hpp"
@@ -38,6 +40,8 @@ namespace
 namespace fs = std::filesystem;
 
 using tgw_planner::core::N3MapReadResult;
+using tgw_planner::core::ExperienceBackboneGraph;
+using tgw_planner::core::ExperienceBackboneOptions;
 using tgw_planner::core::N3MapReader;
 using tgw_planner::core::N3NavResource;
 using tgw_planner::core::Point3;
@@ -55,6 +59,8 @@ using tgw_planner::core::SurfaceAstarPlanner;
 using tgw_planner::core::SurfacePlanResult;
 using tgw_planner::core::SurfacePlannerOptions;
 using tgw_planner::core::SurfaceTransitionValidator;
+using tgw_planner::core::HybridExperiencePlanner;
+using tgw_planner::core::HybridExperiencePlannerOptions;
 using tgw_planner::core::TrajectoryProjectionResult;
 using tgw_planner::core::TrajectoryProjector;
 using tgw_planner::core::TrajectoryProjectorOptions;
@@ -176,6 +182,7 @@ std::string toStatsJson(
   const TrajectoryProjectionResult * projection,
   const ExperienceBuildResult * build,
   const ExperienceSurfaceGraph * surface_graph,
+  const ExperienceBackboneGraph * backbone_graph,
   double planner_multifloor_z_range_m)
 {
   const N3NavResource & resource = result.resource;
@@ -302,6 +309,30 @@ std::string toStatsJson(
     json << ",\"graph_rejected_invalid_bridge_edges\":0";
     json << ",\"max_graph_edge_dz_m\":0";
     json << ",\"max_graph_edge_slope\":0";
+  }
+  if (backbone_graph) {
+    const auto & backbone_metrics = backbone_graph->metrics();
+    json << ",\"backbone_nodes\":" << backbone_metrics.backbone_nodes;
+    json << ",\"backbone_edges\":" << backbone_metrics.backbone_edges;
+    json << ",\"backbone_z_range\":" <<
+      (backbone_metrics.backbone_z_max - backbone_metrics.backbone_z_min);
+    json << ",\"backbone_z_min\":" << backbone_metrics.backbone_z_min;
+    json << ",\"backbone_z_max\":" << backbone_metrics.backbone_z_max;
+    json << ",\"backbone_portals\":" << backbone_metrics.portals;
+    json << ",\"max_backbone_edge_dz_m\":" << backbone_metrics.max_backbone_edge_dz_m;
+    json << ",\"max_backbone_edge_slope\":" << backbone_metrics.max_backbone_edge_slope;
+    json << ",\"backbone_body_to_support_z_m\":" <<
+      backbone_metrics.inferred_body_to_support_z_m;
+  } else {
+    json << ",\"backbone_nodes\":0";
+    json << ",\"backbone_edges\":0";
+    json << ",\"backbone_z_range\":0";
+    json << ",\"backbone_z_min\":0";
+    json << ",\"backbone_z_max\":0";
+    json << ",\"backbone_portals\":0";
+    json << ",\"max_backbone_edge_dz_m\":0";
+    json << ",\"max_backbone_edge_slope\":0";
+    json << ",\"backbone_body_to_support_z_m\":0";
   }
   json << "}";
   return json.str();
@@ -518,6 +549,11 @@ public:
     declare_parameter<double>("graph_max_bridge_edge_slope", 8.0);
     declare_parameter<double>("graph_bridge_attach_max_dz_m", 0.35);
     declare_parameter<double>("planner_footprint_min_support_ratio", 0.80);
+    declare_parameter<double>("backbone_min_node_spacing_m", 0.20);
+    declare_parameter<double>("backbone_max_portal_xy_distance_m", 1.20);
+    declare_parameter<double>("backbone_max_portal_height_error_m", 0.45);
+    declare_parameter<double>("backbone_min_portal_clearance_m", 0.0);
+    declare_parameter<int>("hybrid_max_portal_candidates_per_side", 1);
     declare_parameter<double>("planner_multifloor_z_range_m", 1.50);
     declare_parameter<int>("max_trajectory_points", 200000);
     declare_parameter<int>("max_geometry_debug_points", 400000);
@@ -557,6 +593,10 @@ public:
       "/tgw_experience/risk_cloud", latched_qos);
     planner_component_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/tgw_experience/planner_component_cloud", latched_qos);
+    backbone_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/tgw_experience/backbone_cloud", latched_qos);
+    portal_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/tgw_experience/portal_cloud", latched_qos);
     path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_experience/path", latched_qos);
     raw_path_pub_ = create_publisher<nav_msgs::msg::Path>(
       "/tgw_experience/raw_path", latched_qos);
@@ -633,12 +673,15 @@ private:
         get_parameter("graph_max_bridge_edge_slope").as_double();
       surface_graph_.build(snapshot_, SurfaceTransitionValidator(planner_options), graph_options);
       has_surface_graph_ = true;
+      backbone_graph_.build(result.resource, projection, surface_graph_, backboneOptions());
+      has_backbone_graph_ = true;
     }
     publishKeyframeGeometry(result.resource);
     publishTrajectory(result.resource);
     publishProjectionDebug(result.resource, projection);
     publishExpansionDebug(result.resource, build);
     publishPlannerConnectivityDebug(result.resource);
+    publishBackboneDebug(result.resource);
     publishStats(result, pbstream_path, &projection, &build);
     std::unordered_map<std::string, std::size_t> rejected_counts;
     for (const RejectedProjectionSample & sample : projection.rejected_samples) {
@@ -662,6 +705,9 @@ private:
       (has_surface_graph_ ?
       surface_graph_.multifloorComponentCount(
         get_parameter("planner_multifloor_z_range_m").as_double()) : 0U)
+      << " backbone_nodes=" << (has_backbone_graph_ ? backbone_graph_.nodes().size() : 0U)
+      << " backbone_edges=" << (has_backbone_graph_ ? backbone_graph_.edges().size() : 0U)
+      << " backbone_portals=" << (has_backbone_graph_ ? backbone_graph_.portals().size() : 0U)
       << " rejected_projection=" << projection.rejected_samples.size()
       << " no_support=" << rejected_counts["support_projection_failed"]
       << " ambiguous_multifloor=" <<
@@ -687,6 +733,19 @@ private:
       LOG(WARNING) << "experience expansion failed: [" << build.error_code << "] " <<
         build.message;
     }
+  }
+
+  ExperienceBackboneOptions backboneOptions() const
+  {
+    ExperienceBackboneOptions options;
+    options.min_node_spacing_m = get_parameter("backbone_min_node_spacing_m").as_double();
+    options.max_portal_xy_distance_m =
+      get_parameter("backbone_max_portal_xy_distance_m").as_double();
+    options.max_portal_height_error_m =
+      get_parameter("backbone_max_portal_height_error_m").as_double();
+    options.min_portal_clearance_m =
+      get_parameter("backbone_min_portal_clearance_m").as_double();
+    return options;
   }
 
   TrajectoryProjectorOptions projectorOptions() const
@@ -794,6 +853,7 @@ private:
     msg.data = toStatsJson(
       result, pbstream_path, projection, build,
       has_surface_graph_ ? &surface_graph_ : nullptr,
+      has_backbone_graph_ ? &backbone_graph_ : nullptr,
       get_parameter("planner_multifloor_z_range_m").as_double());
     stats_json_pub_->publish(msg);
   }
@@ -1105,38 +1165,10 @@ private:
       }
       return plan;
     }
-    if (start_component_id < 0 || start_component_id != goal_component_id) {
-      plan.message = "no_path_on_experience_surface_different_planner_components";
-      const Point3 snapped_start = surfaceNodePoint(start_node);
-      const Point3 snapped_goal = surfaceNodePoint(goal_node);
-      LOG(WARNING)
-        << "PlanPath rejected before search"
-        << " reason=" << plan.message
-        << " clicked_start=(" << start.x << ", " << start.y << ", " << start.z << ")"
-        << " snapped_start=(" <<
-        snapped_start.x << ", " << snapped_start.y << ", " << snapped_start.z << ")"
-        << " start_node=" << start_node.id
-        << " clicked_goal=(" << goal.x << ", " << goal.y << ", " << goal.z << ")"
-        << " snapped_goal=(" <<
-        snapped_goal.x << ", " << snapped_goal.y << ", " << snapped_goal.z << ")"
-        << " goal_node=" << goal_node.id
-        << " start_component=" << start_component_id
-        << " goal_component=" << goal_component_id
-        << " start_snap_xy_m=" << start_snap_distance
-        << " goal_snap_xy_m=" << goal_snap_distance;
-      if (stats_out != nullptr) {
-        *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
-      }
-      if (search_time_ms_out != nullptr) {
-        *search_time_ms_out = 0.0;
-      }
-      return plan;
-    }
-
     const Point3 snapped_start = surfaceNodePoint(start_node);
     const Point3 snapped_goal = surfaceNodePoint(goal_node);
     LOG(INFO)
-      << "PlanPath accepted for graph search"
+      << "PlanPath accepted for hybrid graph search"
       << " clicked_start=(" << start.x << ", " << start.y << ", " << start.z << ")"
       << " snapped_start=(" <<
       snapped_start.x << ", " << snapped_start.y << ", " << snapped_start.z << ")"
@@ -1145,12 +1177,19 @@ private:
       << " snapped_goal=(" <<
       snapped_goal.x << ", " << snapped_goal.y << ", " << snapped_goal.z << ")"
       << " goal_node=" << goal_node.id
-      << " component=" << start_component_id
+      << " start_component=" << start_component_id
+      << " goal_component=" << goal_component_id
       << " start_snap_xy_m=" << start_snap_distance
-      << " goal_snap_xy_m=" << goal_snap_distance;
+      << " goal_snap_xy_m=" << goal_snap_distance
+      << " backbone_nodes=" << (has_backbone_graph_ ? backbone_graph_.nodes().size() : 0U)
+      << " backbone_portals=" << (has_backbone_graph_ ? backbone_graph_.portals().size() : 0U);
 
     const auto t0 = std::chrono::steady_clock::now();
-    plan = SurfaceAstarPlanner(plannerOptions()).plan(surface_graph_, start_node, goal_node);
+    HybridExperiencePlannerOptions hybrid_options;
+    hybrid_options.max_portal_candidates_per_side = static_cast<std::size_t>(
+      std::max<std::int64_t>(1, get_parameter("hybrid_max_portal_candidates_per_side").as_int()));
+    plan = HybridExperiencePlanner(plannerOptions(), hybrid_options).plan(
+      surface_graph_, backbone_graph_, start_node, goal_node);
     const auto t1 = std::chrono::steady_clock::now();
     const double search_time_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     if (stats_out != nullptr) {
@@ -1536,6 +1575,41 @@ private:
     planner_component_pub_->publish(makeIntensityCloud(stamp, frame_id, component_points));
   }
 
+  void publishBackboneDebug(const N3NavResource & resource)
+  {
+    if (!has_backbone_graph_) {
+      return;
+    }
+    const rclcpp::Time stamp = now();
+    const std::string frame_id = resource.map_frame.empty() ?
+      get_parameter("map_frame").as_string() : resource.map_frame;
+
+    std::vector<IntensityPoint> backbone_points;
+    backbone_points.reserve(backbone_graph_.nodes().size());
+    for (const auto & node : backbone_graph_.nodes()) {
+      backbone_points.push_back({
+        node.path_position,
+        node.has_surface_portal ? static_cast<double>(node.nearest_surface_component_id) : -1.0});
+    }
+    backbone_pub_->publish(makeIntensityCloud(stamp, frame_id, backbone_points));
+
+    std::vector<IntensityPoint> portal_points;
+    portal_points.reserve(backbone_graph_.portals().size());
+    for (const auto & portal : backbone_graph_.portals()) {
+      const auto * surface_node = surface_graph_.node(portal.surface_node);
+      if (surface_node == nullptr) {
+        continue;
+      }
+      portal_points.push_back({
+        {
+          (static_cast<double>(surface_node->x) + 0.5) * surface_graph_.resolution(),
+          (static_cast<double>(surface_node->y) + 0.5) * surface_graph_.resolution(),
+          surface_node->z + 0.10},
+        static_cast<double>(portal.surface_component_id)});
+    }
+    portal_pub_->publish(makeIntensityCloud(stamp, frame_id, portal_points));
+  }
+
   N3MapReader reader_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr trajectory_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr keyframe_geometry_pub_;
@@ -1551,6 +1625,8 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr clearance_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr risk_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr planner_component_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr backbone_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr portal_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr raw_path_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
@@ -1565,8 +1641,10 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pose_sub_;
   tgw_planner::core::ExperienceSnapshot snapshot_;
   ExperienceSurfaceGraph surface_graph_;
+  ExperienceBackboneGraph backbone_graph_;
   bool has_snapshot_{false};
   bool has_surface_graph_{false};
+  bool has_backbone_graph_{false};
   Point3 clicked_start_;
   Point3 clicked_goal_;
   bool has_clicked_start_{false};

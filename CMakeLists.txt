@@ -40,8 +40,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 add_library(tgw_planner_core SHARED
   src/core/clearance_field.cpp
+  src/core/experience_backbone_graph.cpp
   src/core/experience_surface_graph.cpp
   src/core/experience_surface_builder.cpp
+  src/core/hybrid_experience_planner.cpp
   src/core/n3map_reader.cpp
   src/core/path_validator.cpp
   src/core/planner_connectivity_layer.cpp
