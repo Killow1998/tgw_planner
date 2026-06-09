@@ -929,6 +929,18 @@ private:
     return false;
   }
 
+  Point3 surfaceNodePoint(const SurfaceNodeId node_id) const
+  {
+    const SurfaceNode * node = surface_graph_.node(node_id);
+    if (node == nullptr) {
+      return {};
+    }
+    return {
+      (static_cast<double>(node->x) + 0.5) * surface_graph_.resolution(),
+      (static_cast<double>(node->y) + 0.5) * surface_graph_.resolution(),
+      node->z};
+  }
+
   tgw_planner::msg::PlannerStats makePlannerStats(
     const SurfacePlanResult & plan,
     double search_time_ms,
@@ -1022,9 +1034,14 @@ private:
       get_parameter("max_start_snap_distance_m").as_double();
     if (start_snap_distance > max_start_snap_distance_m) {
       plan.message = "start_not_on_reachable_surface";
+      const Point3 snapped_start = surfaceNodePoint(start_node);
       LOG(WARNING)
         << "PlanPath rejected before search"
         << " reason=" << plan.message
+        << " clicked_start=(" << start.x << ", " << start.y << ", " << start.z << ")"
+        << " snapped_start=(" <<
+        snapped_start.x << ", " << snapped_start.y << ", " << snapped_start.z << ")"
+        << " start_node=" << start_node.id
         << " start_snap_xy_m=" << start_snap_distance
         << " max_start_snap_xy_m=" << max_start_snap_distance_m
         << " start_component=" << start_component_id;
@@ -1038,9 +1055,14 @@ private:
     }
     if (!nearestSurfaceGraphNode(goal, &goal_node, &goal_snap_distance, &goal_component_id)) {
       plan.message = "goal_unreachable_outside_experience_surface";
+      const Point3 snapped_start = surfaceNodePoint(start_node);
       LOG(WARNING)
         << "PlanPath rejected before search"
         << " reason=" << plan.message
+        << " clicked_start=(" << start.x << ", " << start.y << ", " << start.z << ")"
+        << " snapped_start=(" <<
+        snapped_start.x << ", " << snapped_start.y << ", " << snapped_start.z << ")"
+        << " start_node=" << start_node.id
         << " goal=(" << goal.x << ", " << goal.y << ", " << goal.z << ")"
         << " no_graph_node_below_click=true"
         << " start_snap_xy_m=" << start_snap_distance
@@ -1057,9 +1079,19 @@ private:
       get_parameter("max_goal_snap_distance_m").as_double();
     if (goal_snap_distance > max_goal_snap_distance_m) {
       plan.message = "goal_unreachable_outside_experience_surface";
+      const Point3 snapped_start = surfaceNodePoint(start_node);
+      const Point3 snapped_goal = surfaceNodePoint(goal_node);
       LOG(WARNING)
         << "PlanPath rejected before search"
         << " reason=" << plan.message
+        << " clicked_start=(" << start.x << ", " << start.y << ", " << start.z << ")"
+        << " snapped_start=(" <<
+        snapped_start.x << ", " << snapped_start.y << ", " << snapped_start.z << ")"
+        << " start_node=" << start_node.id
+        << " clicked_goal=(" << goal.x << ", " << goal.y << ", " << goal.z << ")"
+        << " snapped_goal=(" <<
+        snapped_goal.x << ", " << snapped_goal.y << ", " << snapped_goal.z << ")"
+        << " goal_node=" << goal_node.id
         << " goal_snap_xy_m=" << goal_snap_distance
         << " max_goal_snap_xy_m=" << max_goal_snap_distance_m
         << " start_snap_xy_m=" << start_snap_distance
@@ -1075,9 +1107,19 @@ private:
     }
     if (start_component_id < 0 || start_component_id != goal_component_id) {
       plan.message = "no_path_on_experience_surface_different_planner_components";
+      const Point3 snapped_start = surfaceNodePoint(start_node);
+      const Point3 snapped_goal = surfaceNodePoint(goal_node);
       LOG(WARNING)
         << "PlanPath rejected before search"
         << " reason=" << plan.message
+        << " clicked_start=(" << start.x << ", " << start.y << ", " << start.z << ")"
+        << " snapped_start=(" <<
+        snapped_start.x << ", " << snapped_start.y << ", " << snapped_start.z << ")"
+        << " start_node=" << start_node.id
+        << " clicked_goal=(" << goal.x << ", " << goal.y << ", " << goal.z << ")"
+        << " snapped_goal=(" <<
+        snapped_goal.x << ", " << snapped_goal.y << ", " << snapped_goal.z << ")"
+        << " goal_node=" << goal_node.id
         << " start_component=" << start_component_id
         << " goal_component=" << goal_component_id
         << " start_snap_xy_m=" << start_snap_distance
@@ -1090,6 +1132,22 @@ private:
       }
       return plan;
     }
+
+    const Point3 snapped_start = surfaceNodePoint(start_node);
+    const Point3 snapped_goal = surfaceNodePoint(goal_node);
+    LOG(INFO)
+      << "PlanPath accepted for graph search"
+      << " clicked_start=(" << start.x << ", " << start.y << ", " << start.z << ")"
+      << " snapped_start=(" <<
+      snapped_start.x << ", " << snapped_start.y << ", " << snapped_start.z << ")"
+      << " start_node=" << start_node.id
+      << " clicked_goal=(" << goal.x << ", " << goal.y << ", " << goal.z << ")"
+      << " snapped_goal=(" <<
+      snapped_goal.x << ", " << snapped_goal.y << ", " << snapped_goal.z << ")"
+      << " goal_node=" << goal_node.id
+      << " component=" << start_component_id
+      << " start_snap_xy_m=" << start_snap_distance
+      << " goal_snap_xy_m=" << goal_snap_distance;
 
     const auto t0 = std::chrono::steady_clock::now();
     plan = SurfaceAstarPlanner(plannerOptions()).plan(surface_graph_, start_node, goal_node);
