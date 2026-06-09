@@ -1,40 +1,21 @@
-# TGW Layered Surface Graph Cross-Floor Planning Review
+# TGW Multi-Floor Surface Graph Connector Review
 
 ## Prompt For GPT Pro
 
-Please review this as a code/design problem, not as a parameter tuning problem.
+Please review this as a robotics planning / graph construction problem, not as
+parameter tuning.
 
-TGW is a pbstream experience planner. It consumes N3Mapping dense trajectory and
-keyframe clouds, builds an experience reachable surface, then plans on a layered
-2D surface graph. The current path planner can still draw invalid vertical
-floor-jump paths, or after stricter edge validation, it loses true cross-floor
-connectivity.
-
-I need concrete guidance on the right implementation shape:
+TGW is now a pbstream experience planner:
 
 ```text
-How should trajectory bridge evidence be represented and connected in the
-Layered 2D Surface Graph so that:
-
-1. A path cannot jump vertically between floors.
-2. A real walked stair/ramp gap can still be connected.
-3. Bridge cells do not become lateral expansion anchors.
-4. Graph A* searches only explicit valid surface/bridge edges.
-5. The implementation stays clean C++ core + thin ROS wrapper.
+N3Mapping n3map.pbstream
+  -> dense optimized trajectory + keyframe clouds
+  -> experience reachable surface
+  -> layered 2D surface graph
+  -> graph A*
 ```
 
-Please focus on what to change in:
-
-```text
-TrajectoryProjector
-ExperienceSurfaceBuilder / ExperienceSnapshot
-ExperienceSurfaceGraph
-SurfaceAstarPlanner
-ROS debug topics / stats
-tests
-```
-
-Do not suggest returning to:
+The planner should not return to:
 
 ```text
 3D voxel A*
@@ -44,37 +25,31 @@ StairFlight / semantic stair model
 global_map.pcd fallback
 ```
 
-## Current Question
-
-TGW has moved from 3D lattice A* to a layered 2D surface graph:
+The core question:
 
 ```text
-SurfaceNode = reachable surface cell with x/y and surface height z
-SurfaceEdge = local movement proof between two surface nodes
-A* expands graph adjacency only, not dz neighbors
+How should true cross-floor connectivity be represented in the Layered 2D
+Surface Graph so that:
+
+1. same-floor reachable surfaces remain connected when local movement is valid;
+2. illegal multi-meter vertical jumps are impossible;
+3. real walked stair/ramp gaps can be connected by dense-trajectory evidence;
+4. bridge cells do not become lateral expansion anchors;
+5. graph A* searches only explicit valid surface/bridge edges?
 ```
 
-This is the right high-level direction for a legged robot:
+Please focus on concrete implementation guidance for:
 
 ```text
-z is a surface attribute, not a commanded motion dimension
+TrajectoryProjector
+ExperienceSurfaceBuilder / ExperienceSnapshot
+ExperienceSurfaceGraph
+SurfaceAstarPlanner
+debug topics / stats_json / logs
+tests
 ```
 
-However, the current graph still does not produce a valid true cross-floor path.
-
-The most recent RViz result showed a path with large vertical white segments:
-
-```text
-The path visually jumps between floors.
-The start and goal are on reachable surfaces, but the path contains large
-layer-to-layer z discontinuities instead of following the stair/ramp surface.
-```
-
-The attached user screenshot should be reviewed together with this document.
-I cannot embed the chat-uploaded image bytes from the local workspace, so the
-important visual symptom is described above.
-
-## Branch And Code State
+## Current Branch And Commits
 
 Repository:
 
@@ -88,346 +63,516 @@ Branch:
 feature/pbstream-experience-reset
 ```
 
-Latest pushed commit before this diagnostic patch:
+Relevant latest pushed commits:
 
 ```text
-08d7673 Plan on layered 2D experience surface graph
+2262609 Allow layer-safe graph edges across support lineage
+631ffbd Log snapped surface graph endpoints
+d6e1589 Use glog file diagnostics for TGW planner
+bae4b37 Add ordered bridge connectors for surface graph
+1921f4a Make experience surface graph layer safe
 ```
 
-That commit introduced:
+## Images To Attach
 
-- `ExperienceSurfaceGraph`
-- graph-backed `SurfaceAstarPlanner::plan(graph, start, goal)`
-- graph-aware start/goal snap in `tgw_experience_planner_node`
-- no dz expansion in the new graph A*
+The screenshots were uploaded in chat, not available as local PNG files in the
+repo. Please attach the two latest RViz screenshots together with this document.
 
-Current local diagnostic patch, not yet a final solution:
-
-- adds `SurfaceGraphBuildOptions`
-- makes graph edge construction go through `makeContinuousSurfaceEdge()`
-- distinguishes normal surface edges from trajectory bridge edges
-- rejects adjacent XY graph edges whose true `SurfaceCell.height_m` jump is too large
-- adds tests for layer-jump rejection and bounded bridge-height policy
-
-## Verified Build And Test Status
-
-Commands:
-
-```bash
-cd /home/user/ros_ws/to_migrate_ws
-source /opt/ros/humble/setup.bash
-colcon build --packages-select tgw_planner --symlink-install
-colcon test --packages-select tgw_planner --event-handlers console_direct+
-colcon test-result --verbose
-```
-
-Result:
+Image 1:
 
 ```text
-Summary: 1 package finished
-PASS experience_core_smoke
-Summary: 212 tests, 0 errors, 0 failures, 0 skipped
+Same-floor query failure before 2262609.
+RViz text:
+PLAN FAIL: no_path_on_experience_surface_different_planner_components
+GOAL snap about 0.32m
+
+Visual symptom:
+start and goal are both on the low-floor green reachable surface. They appear
+connected by reachable/traversable cloud, but the planner reported different
+planner components.
 ```
 
-## Input Map
+Image 2:
 
-The real test input is:
+```text
+Cross-floor query failure after layer-safe graph.
+RViz text:
+PLAN FAIL: no_path_on_experience_surface_different_planner_components
+GOAL snap about 0.68m
+
+Visual symptom:
+start is on lower floor, goal is on upper floor. Both snap to reachable
+surfaces, but planner reports different components. This is the remaining
+problem to solve.
+```
+
+## Verified Logs For The Two Screenshots
+
+The current glog path is:
+
+```text
+src/tgw_planner/logs/
+```
+
+Relevant log file:
+
+```text
+logs/tgw_experience_planner_node.jammy.user.log.INFO.20260609-115524.539129
+logs/tgw_experience_planner_node.jammy.user.log.WARNING.20260609-115538.539129
+```
+
+Load summary:
+
+```text
+loaded n3map experience resource
+keyframes=799
+dense_trajectory=10649
+raw_geometry=836844
+support_candidates=313173
+projected_support=10579
+observed_seed=41542
+bridge_seed=526
+expanded_reachable=164899
+planner_components=2234
+largest_planner_component=62191
+planner_multifloor_components=0
+rejected_projection=70
+no_support=70
+ambiguous_multifloor=0
+bridge_used_as_expansion_anchor=0
+support_components=6144
+anchored_components=95
+footprint_rejected=1
+body_obstructed_rejected=154056
+hole_filled=28771
+```
+
+First query, same-floor failure before the latest fix:
+
+```text
+reason=no_path_on_experience_surface_different_planner_components
+
+clicked_start=(0.883019, -24.1057, 3.5)
+snapped_start=(1.15, -24.15, 0.163751)
+start_node=32481
+start_component=10
+start_snap_xy_m=0.270635
+
+clicked_goal=(-6.03045, -35.4196, 3.5)
+snapped_goal=(-5.85, -35.15, -0.284244)
+goal_node=110942
+goal_component=11
+goal_snap_xy_m=0.32441
+```
+
+Second query, true cross-floor failure:
+
+```text
+reason=no_path_on_experience_surface_different_planner_components
+
+clicked_start=(0.883019, -24.1057, 3.5)
+snapped_start=(1.15, -24.15, 0.163751)
+start_node=32481
+start_component=10
+start_snap_xy_m=0.270635
+
+clicked_goal=(4.64744, -28.1251, 9.7)
+snapped_goal=(4.15, -27.65, 8.15791)
+goal_node=87558
+goal_component=5
+goal_snap_xy_m=0.687843
+```
+
+Important note:
+
+```text
+snap distance is now XY-only.
+z is used only to select the highest surface below the clicked point.
+```
+
+## What Was Fixed In 2262609
+
+Before `2262609`, normal graph edges required:
+
+```text
+from.support_component_id == to.support_component_id
+```
+
+This was too strict. It prevented valid local movement between neighboring
+surface graph nodes if they came from different anchored support-lineage ids.
+That split same-floor reachable areas into different planner components.
+
+Probe evidence before the fix:
+
+```text
+component 10 and component 11 had 1945 adjacent XY candidate pairs.
+SurfaceTransitionValidator allowed 2 of those local transitions.
+Graph still rejected them because support_component_id differed.
+```
+
+The fix changed normal edge semantics:
+
+```text
+normal edge requires:
+  both endpoints have anchored support lineage (support_component_id >= 0)
+  true SurfaceNode.z dz is within normal edge policy
+  slope policy passes
+  SurfaceTransitionValidator passes
+
+normal edge no longer requires:
+  same support_component_id
+```
+
+This keeps unanchored/ceiling-like surfaces out, but avoids cutting one real
+floor into many graph components.
+
+## Probe Result After 2262609
+
+Temporary local helper:
+
+```text
+/tmp/tgw_component_probe.cpp
+```
+
+It rebuilds:
 
 ```text
 /tmp/tgw_n3map_nav_filtered.pbstream
-```
-
-The map has native dense trajectory and filtered nav cloud. TGW still rejects
-fallback/degraded dense trajectory and does not use `global_map.pcd`,
-realtime raycast, or StairFlight logic.
-
-## Root Cause Found For The RViz Floor Jump
-
-The pushed layered graph code created graph edges using a validator over
-`GridIndex{x,y,z}` cells, while the graph path output uses true surface height:
-
-```text
-SurfaceNode.z = SurfaceCell.height_m
-```
-
-That allowed this bad case:
-
-```text
-from.cell.z and to.cell.z are equal or close enough for GridIndex validation
-but
-abs(from.surface.height_m - to.surface.height_m) is several meters
-```
-
-So the graph could contain an edge between two adjacent XY nodes on different
-floors. RViz then showed a vertical path segment.
-
-This is not a path-smoothing problem. It is an invalid graph-edge problem.
-
-## Current Local Patch
-
-The current patch changes edge construction to this principle:
-
-```text
-Graph edges are not inferred from visual reachability.
-Each edge is a local movement proof.
-```
-
-Normal surface edge:
-
-```text
-both endpoints are non-bridge surface nodes
-true surface-height delta <= plan_max_step_height_m
-optional slope policy passes
-SurfaceTransitionValidator passes footprint / diagonal / swept checks
-```
-
-Trajectory bridge edge:
-
-```text
-at least one endpoint is a trajectory bridge node
-true surface-height delta <= max_trajectory_bridge_height_delta_m
-edge is tagged TrajectoryBridge and penalized
-```
-
-This removes the illegal multi-meter floor jumps.
-
-## Real Diagnostic After Removing Illegal Jumps
-
-Temporary helper:
-
-```text
-/tmp/tgw_high_pair.cpp
-```
-
-It builds:
-
-```text
-N3 pbstream
   -> ExperienceSurfaceBuilder
   -> ExperienceSurfaceGraph
 ```
 
-and searches for a graph component with at least 8 m z range.
-
-Output after the local patch:
+Probe output after `2262609`:
 
 ```text
-read_ms 173.569
-surface_build_ms 8806.23
-build_counts traversable 164899 bridge 508 bridge_z_min 0.55 bridge_z_max 8.35 bridge_z_range 7.8
-graph_build_ms 18333.1
+graph nodes 154186
+components 1966
+edges 1150179
+cross_reject 66516
+dz_reject 1005138
+slope_reject 2734
+invalid_bridge_reject 3106
 
-component_rank 0 id 0 size 88556 bridge_nodes 16555 z_min -1.09301 z_max 1.11032 z_range 2.20334
-component_rank 1 id 4 size 63782 bridge_nodes 11955 z_min 7.23157 z_max 8.35 z_range 1.11843
-component_rank 2 id 2 size 574 bridge_nodes 186 z_min 3.51011 z_max 4.26088 z_range 0.750764
-component_rank 3 id 1 size 62 bridge_nodes 40 z_min 4.48925 z_max 5.20012 z_range 0.710874
-component_rank 4 id 5 size 148 bridge_nodes 61 z_min 5.40037 z_max 5.88121 z_range 0.480843
-component_rank 5 id 14 size 16 bridge_nodes 11 z_min 7.42352 z_max 7.84916 z_range 0.425634
-component_rank 6 id 6 size 149 bridge_nodes 47 z_min 5.81539 z_max 6.20492 z_range 0.389534
-component_rank 7 id 7 size 213 bridge_nodes 76 z_min 2.10698 z_max 2.46132 z_range 0.35434
-component_rank 8 id 337 size 3 bridge_nodes 0 z_min 4.85307 z_max 5.19923 z_range 0.346161
-component_rank 9 id 568 size 2 bridge_nodes 0 z_min 7.31916 z_max 7.66071 z_range 0.34155
+node 32481
+  point 1.15 -24.15 0.163751
+  graph_component 10
+  support_component 6
+  clearance 0.45
+  bridge 0
+  degree 8
 
-no component with z range >= 8m
+node 110942
+  point -5.85 -35.15 -0.284244
+  graph_component 10
+  support_component 3
+  clearance 0.45
+  bridge 0
+  degree 8
+
+node 87558
+  point 4.15 -27.65 8.15791
+  graph_component 5
+  support_component 4
+  clearance 0.45
+  bridge 0
+  degree 8
+
+component 10
+  size 79707
+  z_min -1.09301
+  z_max 0.939479
+  z_range 2.03249
+  bridge_nodes 0
+  support_components 6:49444 3:28598 154:1117 1355:150 19:139
+
+component 5
+  size 62191
+  z_min 7.2335
+  z_max 8.32854
+  z_range 1.09504
+  bridge_nodes 161
+  support_components 4:62030 -1:161
 ```
 
-In this diagnostic:
+Plan probe:
 
 ```text
-build_counts bridge = cells with SurfaceLabel::TrajectoryBridge
-component_rank bridge_nodes = graph nodes where SurfaceNode.bridge is true,
-                              including TrajectoryBridge and LowConfidenceReachable
+plan_probe 32481_to_110942
+  success true
+  message path found
+  waypoints 145
+  expanded 18947
+  max_edge_dz 0.260066
+  layer_jump_edges 0
+
+plan_probe 32481_to_87558
+  success false
+  message no_path_on_experience_surface_different_components
+  waypoints 0
+  expanded 0
 ```
 
 Interpretation:
 
 ```text
-The previous cross-floor graph connectivity depended on illegal height-jump edges.
-After those edges are removed, there is no valid full-height graph component.
+Same-floor graph over-splitting is fixed.
+True cross-floor connectivity is still missing.
 ```
 
-Important nuance:
+## Remaining Problem
+
+The lower-floor start node and upper-floor goal node still fall into different
+planner components:
 
 ```text
-bridge cells exist and span z = 0.55m to 8.35m
-but they do not form one valid graph chain.
+start component: 10
+goal component: 5
 ```
 
-So the problem is not simply "no bridge cells". The problem is that bridge cells
-are only a set of cells after the builder stage; they do not retain trajectory
-order, bridge id, tangent, or endpoint metadata.
+Probe result for component 10 -> component 5:
 
-## Current Design Gap
+```text
+cross_component_probe 10 5
+checked 368113 adjacent-XY candidates
+validator_allowed_near_xy 0
+best_neighbor_dz 6.90038
+best_nodes 153316 39734
+```
 
-The planner now has the right abstraction:
+This means:
+
+```text
+There is no valid normal surface edge between the lower and upper planner
+components.
+
+The closest adjacent-XY candidate would require about a 6.9m z jump, which must
+remain illegal.
+```
+
+So the remaining issue is not:
+
+```text
+snap distance
+A* iteration budget
+same-floor graph connectivity
+```
+
+The remaining issue is:
+
+```text
+The system has not built a valid explicit cross-floor connector from dense
+trajectory evidence.
+```
+
+## Current Bridge State
+
+Current graph metrics:
+
+```text
+component 5 bridge_nodes 161
+invalid_bridge_reject 3106
+```
+
+This shows bridge nodes exist, but they do not connect lower component 10 to
+upper component 5.
+
+Potential reasons to review:
+
+```text
+1. Trajectory bridge segments are generated only for short local projection gaps,
+   not for the full walked stair/ramp connector.
+
+2. Bridge endpoint attachment requires intended entry/exit support components,
+   but the lower/upper support components for the actual stair traversal may not
+   be discovered or matched correctly.
+
+3. The dense trajectory along the stair may project partly onto missing point
+   cloud, so there is no sequence of accepted projected support samples suitable
+   as bridge endpoints.
+
+4. Bridge cells are present on the upper component, but not as an ordered chain
+   from lower observed support to upper observed support.
+
+5. The builder may need a separate trajectory connector extraction pass, rather
+   than relying only on local projection-gap bridge cells.
+```
+
+## Desired First-Principles Design
+
+The global planner should remain:
 
 ```text
 Layered 2D Surface Graph
 ```
 
-But the graph builder lacks a first-principles representation for trajectory
-connectors:
+Search state:
 
 ```text
-trajectory bridge = ordered connector evidence along dense trajectory
+SurfaceNodeId
 ```
 
-Current bridge information:
+Not:
 
 ```text
-std::unordered_set<GridIndex> bridge_seed_cells
-SurfaceCell.label = TrajectoryBridge
-ReachabilityLabel = LowConfidenceReachable
+GridIndex{x,y,z} dz lattice
 ```
 
-Missing bridge information:
+Normal edges:
 
 ```text
-bridge_id
-bridge_order
-bridge_tangent
-source projected sample seq/timestamp
-entry observed support node
-exit observed support node
-confidence / gap length
+local XY adjacency
+true SurfaceNode.z continuity
+slope/step policy
+footprint / transition validator
+anchored support lineage exists
 ```
 
-Because this metadata is missing, `ExperienceSurfaceGraph` can only connect
-bridge cells by local XY adjacency and height thresholds. That is insufficient:
+Bridge / connector edges:
 
 ```text
-if thresholds are loose:
-  graph can jump between layers
-
-if thresholds are strict:
-  graph becomes disconnected across missing stair observations
+explicit ordered connector evidence from dense trajectory
+not free local adjacency
+not lateral expansion
+not a support anchor
+not a generic low-confidence surface
 ```
 
-## First-Principles Requirement
+## Main Questions For Review
 
-The correct cross-floor connector should not be:
+1. Should TGW introduce a first-class `TrajectoryConnector` separate from
+   short-gap `TrajectoryBridgeSegment`?
 
-```text
-any nearby low-confidence cells with similar z
-```
-
-It should be:
-
-```text
-an explicit ordered trajectory bridge edge chain between two observed support
-samples that the robot actually traversed
-```
-
-Bridge semantics should be:
-
-```text
-ObservedTrajectorySupport:
-  can anchor normal surface expansion
-  can connect to normal graph edges
-
-TrajectoryBridge:
-  can preserve path continuity along dense trajectory gaps
-  cannot laterally expand
-  cannot create arbitrary same-height graph edges
-  cannot jump several meters
-  must connect in trajectory order
-```
-
-## Review Questions
-
-1. Should `TrajectoryProjector` output explicit bridge segments instead of only
-   `bridge_seed_cells`?
-
-   Proposed shape:
+   Possible shape:
 
    ```cpp
-   struct TrajectoryBridgeSegment {
-     uint32_t bridge_id;
-     int order;
-     ProjectedSupportSample from;
-     ProjectedSupportSample to;
-     std::vector<GridIndex> footprint_cells;
-     Point3 tangent;
-     double gap_length_m;
-     double height_delta_m;
+   struct TrajectoryConnector {
+     int connector_id;
+     std::vector<ProjectedOrInferredTrajectorySample> ordered_samples;
+     SurfaceNodeId entry_node;
+     SurfaceNodeId exit_node;
+     int entry_component_id;
+     int exit_component_id;
+     double length_m;
+     double z_delta_m;
+     double max_step_dz_m;
+     double confidence;
    };
    ```
 
-2. Should `ExperienceSnapshot` carry bridge connector metadata into
-   `ExperienceSurfaceGraph`?
+2. Should connector extraction operate directly on dense trajectory samples,
+   not only on missing projection gaps?
 
-   Proposed graph rule:
+   The robot physically walked the stair. If keyframe point cloud is sparse on
+   the stair, the connector may need to derive a narrow passable corridor from
+   the optimized dense trajectory itself.
 
-   ```text
-   normal edges:
-     local XY support graph
+3. What is the safe rule for connector endpoints?
 
-   bridge edges:
-     explicit edges from bridge segment order
-     not inferred from local adjacency
-   ```
-
-3. How should bridge edges attach to normal support components?
-
-   Candidate rule:
+   Current bridge endpoint attachment is strict:
 
    ```text
-   bridge entry/exit may attach only to observed support endpoint cells or
-   planner-valid normal nodes within one footprint radius of the projected
-   support endpoint
+   bridge endpoint can attach only to intended entry/exit support component
    ```
 
-4. Should bridge cells remain visible as nodes, or should the planner store
-   bridge as edges only?
+   But if the intended support component is not discovered due to sparse stair
+   point cloud, how should endpoints be selected without reintroducing false
+   ceiling/upper-plane links?
 
-   Candidate answer:
+4. Should connector edges bypass normal `SurfaceTransitionValidator` footprint
+   checks inside the missing geometry zone, while still bounding:
 
    ```text
-   Use narrow bridge nodes for visualization/path output, but only add bridge
-   adjacency according to bridge_id/order, not by free local XY expansion.
+   connector width
+   max segment dz
+   slope along trajectory
+   body collision against raw geometry
+   endpoint attachment safety
    ```
 
-5. Should graph edge validation use `SurfaceCell.height_m` everywhere and stop
-   using `GridIndex.z` for movement validation?
+5. How should RViz debug expose this?
 
-   Candidate answer:
+   Useful debug layers may include:
 
    ```text
-   Yes for graph planning. GridIndex.z is only a storage key. Real movement
-   continuity must use surface height.
+   /tgw_experience/connector_candidate_cloud
+   /tgw_experience/connector_endpoint_cloud
+   /tgw_experience/accepted_connector_edge_cloud
+   /tgw_experience/rejected_connector_cloud
+   /tgw_experience/component_gap_cloud
    ```
+
+6. What stats should prove the fix?
+
+   Candidate stats:
+
+   ```json
+   {
+     "trajectory_connectors": 0,
+     "accepted_trajectory_connectors": 0,
+     "rejected_trajectory_connectors": 0,
+     "connector_edges": 0,
+     "connector_component_links": 0,
+     "max_connector_segment_dz_m": 0.0,
+     "max_path_edge_dz_m": 0.0,
+     "path_layer_jump_edges": 0
+   }
+   ```
+
+## Acceptance Criteria
+
+Same-floor query:
+
+```text
+start_node=32481
+goal_node=110942
+must succeed
+must have path_layer_jump_edges=0
+must keep max_path_edge_dz_m bounded
+```
+
+Cross-floor query:
+
+```text
+start_node=32481
+goal_node=87558
+should succeed only if there is an explicit valid trajectory connector.
+It must not succeed by creating a normal edge with multi-meter dz.
+```
+
+Safety invariants:
+
+```text
+No 3D voxel A*
+No generic z-neighbor expansion
+No global_map.pcd fallback
+No realtime raycast fallback
+No StairFlight semantic route
+No bridge lateral expansion
+No normal graph edge with multi-meter dz
+No path with path_layer_jump_edges > 0
+```
 
 ## Current Recommendation
 
-Do not solve this by increasing:
+Do not tune these upward to force success:
 
 ```text
 plan_max_step_height_m
 max_trajectory_bridge_height_delta_m
 plan_max_iterations
+graph_bridge_attach_max_dz_m
 ```
 
-Those parameters can hide the symptom by recreating invalid layer jumps.
+That would likely recreate the invalid vertical layer jumps.
 
 The next clean implementation should be:
 
 ```text
-TrajectoryProjector emits ordered bridge segments
-ExperienceSurfaceBuilder stores bridge connector metadata
-ExperienceSurfaceGraph adds:
-  normal support edges from local surface continuity
-  bridge connector edges from ordered trajectory evidence
-A* searches only this graph
-RViz publishes bridge connector debug separately
-```
-
-Acceptance should include:
-
-```text
-1. no path edge has a multi-meter z jump
-2. true cross-floor path succeeds only if ordered bridge/stair connector exists
-3. if connector metadata is missing, planner fails explicitly instead of drawing
-   a vertical path
-4. max_path_dz per edge is bounded and reported
-5. bridge edge count and largest bridge-connected z range are reported in stats_json
+1. Keep normal graph edges layer-safe and support-lineage anchored.
+2. Add a first-class dense-trajectory connector extraction pass.
+3. Represent connector chains explicitly in ExperienceSnapshot.
+4. Let ExperienceSurfaceGraph add connector edges only from ordered connector
+   metadata.
+5. Keep connector edges narrow, ordered, bounded, and debuggable.
+6. Prove same-floor and cross-floor queries separately.
 ```
