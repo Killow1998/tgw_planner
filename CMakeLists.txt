@@ -87,6 +87,13 @@ ament_target_dependencies(tgw_clicked_point_router_node
   rclcpp
 )
 
+add_executable(tgw_experience_global_sweep
+  src/tools/experience_global_sweep.cpp
+)
+target_link_libraries(tgw_experience_global_sweep
+  tgw_planner_core
+)
+
 add_library(tgw_planner_rviz_plugins SHARED
   src/rviz_plugins/tgw_pose_tool.cpp
 )
@@ -118,6 +125,7 @@ install(TARGETS
   tgw_planner_core
   tgw_experience_planner_node
   tgw_clicked_point_router_node
+  tgw_experience_global_sweep
   tgw_planner_rviz_plugins
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
