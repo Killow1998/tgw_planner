@@ -27,6 +27,21 @@ struct QueueCompare
   }
 };
 
+struct GraphQueueNode
+{
+  SurfaceNodeId node;
+  double f{0.0};
+  double g{0.0};
+};
+
+struct GraphQueueCompare
+{
+  bool operator()(const GraphQueueNode & lhs, const GraphQueueNode & rhs) const
+  {
+    return lhs.f > rhs.f;
+  }
+};
+
 double gridDistance(const GridIndex & a, const GridIndex & b)
 {
   const double dx = static_cast<double>(a.x - b.x);
@@ -106,19 +121,17 @@ std::vector<GridIndex> SurfaceTransitionValidator::validNeighbors(
   const NavigationSnapshot & snapshot, const GridIndex & cell) const
 {
   std::vector<GridIndex> neighbors;
-  const int max_step_cells =
-    std::max(1, static_cast<int>(std::ceil(options_.max_step_height_m / snapshot.resolution_m)));
-  for (int dx = -1; dx <= 1; ++dx) {
-    for (int dy = -1; dy <= 1; ++dy) {
-      for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
-        if ((dx == 0 && dy == 0 && dz == 0) || (dx == 0 && dy == 0)) {
-          continue;
-        }
-        const GridIndex neighbor{cell.x + dx, cell.y + dy, cell.z + dz};
-        if (validate(snapshot, cell, neighbor).allowed) {
-          neighbors.push_back(neighbor);
-        }
-      }
+  for (const GridIndex & candidate : snapshot.surface.traversable_cells) {
+    const int dx = candidate.x - cell.x;
+    const int dy = candidate.y - cell.y;
+    if (dx == 0 && dy == 0) {
+      continue;
+    }
+    if (std::abs(dx) > 1 || std::abs(dy) > 1) {
+      continue;
+    }
+    if (validate(snapshot, cell, candidate).allowed) {
+      neighbors.push_back(candidate);
     }
   }
   return neighbors;
@@ -228,77 +241,104 @@ SurfaceAstarPlanner::SurfaceAstarPlanner(SurfacePlannerOptions options)
 SurfacePlanResult SurfaceAstarPlanner::plan(
   const NavigationSnapshot & snapshot, const GridIndex & start, const GridIndex & goal) const
 {
+  ExperienceSurfaceGraph graph;
+  graph.build(snapshot, transition_validator_);
+  const SurfaceNodeId start_node = graph.nodeIdForCell(start);
+  const SurfaceNodeId goal_node = graph.nodeIdForCell(goal);
+  return plan(graph, start_node, goal_node);
+}
+
+SurfacePlanResult SurfaceAstarPlanner::plan(
+  const ExperienceSurfaceGraph & graph, SurfaceNodeId start, SurfaceNodeId goal) const
+{
   SurfacePlanResult result;
-  if (!transition_validator_.isCellTraversable(snapshot, start)) {
-    result.message = "start is not traversable";
+  const SurfaceNode * start_node = graph.node(start);
+  const SurfaceNode * goal_node = graph.node(goal);
+  if (start_node == nullptr) {
+    result.message = "start is not in the surface graph";
     result.metrics.failure_reason = result.message;
     return result;
   }
-  if (!transition_validator_.isCellTraversable(snapshot, goal)) {
-    result.message = "goal is not traversable";
+  if (goal_node == nullptr) {
+    result.message = "goal is not in the surface graph";
+    result.metrics.failure_reason = result.message;
+    return result;
+  }
+  if (!graph.sameComponent(start, goal)) {
+    result.message = "no_path_on_experience_surface_different_components";
     result.metrics.failure_reason = result.message;
     return result;
   }
 
-  std::priority_queue<QueueNode, std::vector<QueueNode>, QueueCompare> open;
-  std::unordered_map<GridIndex, double, GridIndexHash> g_score;
-  std::unordered_map<GridIndex, GridIndex, GridIndexHash> came_from;
-  std::unordered_set<GridIndex, GridIndexHash> closed;
+  std::priority_queue<GraphQueueNode, std::vector<GraphQueueNode>, GraphQueueCompare> open;
+  std::vector<double> g_score(graph.nodes().size(), std::numeric_limits<double>::infinity());
+  std::vector<SurfaceNodeId> came_from(graph.nodes().size(), {std::numeric_limits<std::uint32_t>::max()});
+  std::vector<bool> closed(graph.nodes().size(), false);
 
-  g_score[start] = 0.0;
-  open.push({start, gridDistance(start, goal) * snapshot.resolution_m, 0.0});
+  auto heuristic = [&](SurfaceNodeId id) {
+    const SurfaceNode & node = graph.nodes()[id.id];
+    const double dx = static_cast<double>(node.x - goal_node->x) * graph.resolution();
+    const double dy = static_cast<double>(node.y - goal_node->y) * graph.resolution();
+    const double dz = node.z - goal_node->z;
+    return std::sqrt(dx * dx + dy * dy) + 0.1 * std::abs(dz);
+  };
+
+  g_score[start.id] = 0.0;
+  open.push({start, heuristic(start), 0.0});
 
   bool found = false;
-  const int max_step_cells =
-    std::max(1, static_cast<int>(std::ceil(options_.max_step_height_m / snapshot.resolution_m)));
   while (!open.empty() && result.metrics.expanded_nodes < options_.max_iterations) {
-    const QueueNode current = open.top();
+    const GraphQueueNode current = open.top();
     open.pop();
-    const auto best = g_score.find(current.cell);
-    if (best == g_score.end() || current.g > best->second + 1.0e-9) {
+    if (!graph.isValid(current.node) || current.g > g_score[current.node.id] + 1.0e-9) {
       continue;
     }
-    if (current.cell == goal) {
+    if (current.node == goal) {
       found = true;
       break;
     }
-    if (!closed.insert(current.cell).second) {
+    if (closed[current.node.id]) {
       continue;
     }
+    closed[current.node.id] = true;
     ++result.metrics.expanded_nodes;
 
-    const GridIndex * previous = nullptr;
-    const auto previous_it = came_from.find(current.cell);
-    if (previous_it != came_from.end()) {
-      previous = &previous_it->second;
-    }
-
-    for (int dx = -1; dx <= 1; ++dx) {
-      for (int dy = -1; dy <= 1; ++dy) {
-        for (int dz = -max_step_cells; dz <= max_step_cells; ++dz) {
-          if (dx == 0 && dy == 0 && dz == 0) {
-            continue;
-          }
-          if (dx == 0 && dy == 0) {
-            continue;
-          }
-          const GridIndex neighbor{current.cell.x + dx, current.cell.y + dy, current.cell.z + dz};
-          if (!transition_validator_.validate(snapshot, current.cell, neighbor).allowed) {
-            continue;
-          }
-          const double tentative_g =
-            current.g + transitionCost(snapshot, current.cell, neighbor, previous);
-          const auto old = g_score.find(neighbor);
-          if (old != g_score.end() && tentative_g >= old->second) {
-            continue;
-          }
-          came_from[neighbor] = current.cell;
-          g_score[neighbor] = tentative_g;
-          const double h = gridDistance(neighbor, goal) * snapshot.resolution_m;
-          open.push({neighbor, tentative_g + h, tentative_g});
-          ++result.metrics.generated_nodes;
+    const SurfaceNodeId previous = came_from[current.node.id];
+    for (const SurfaceEdge & edge : graph.adjacency()[current.node.id]) {
+      if (!graph.isValid(edge.to)) {
+        continue;
+      }
+      const SurfaceNode & neighbor = graph.nodes()[edge.to.id];
+      const double clearance_penalty = options_.w_clearance *
+        (std::isfinite(neighbor.clearance_m) ? 1.0 / (neighbor.clearance_m + 0.05) : 0.0);
+      const double risk_penalty = options_.w_risk * neighbor.risk;
+      const double slope_penalty = options_.w_slope * std::abs(edge.dz_m);
+      const double bridge_penalty =
+        edge.kind == SurfaceEdgeKind::TrajectoryBridge ? options_.w_bridge : 0.0;
+      double turn_penalty = 0.0;
+      if (graph.isValid(previous)) {
+        const SurfaceNode & prev = graph.nodes()[previous.id];
+        const SurfaceNode & from = graph.nodes()[current.node.id];
+        const double ax = static_cast<double>(from.x - prev.x);
+        const double ay = static_cast<double>(from.y - prev.y);
+        const double bx = static_cast<double>(neighbor.x - from.x);
+        const double by = static_cast<double>(neighbor.y - from.y);
+        const double a_norm = std::hypot(ax, ay);
+        const double b_norm = std::hypot(bx, by);
+        if (a_norm > 1.0e-9 && b_norm > 1.0e-9) {
+          const double heading_dot = std::clamp((ax * bx + ay * by) / (a_norm * b_norm), -1.0, 1.0);
+          turn_penalty = options_.w_turn * (1.0 - heading_dot);
         }
       }
+      const double tentative_g = current.g + edge.length_xy_m + clearance_penalty +
+        risk_penalty + slope_penalty + bridge_penalty + turn_penalty;
+      if (tentative_g >= g_score[edge.to.id]) {
+        continue;
+      }
+      came_from[edge.to.id] = current.node;
+      g_score[edge.to.id] = tentative_g;
+      open.push({edge.to, tentative_g + heuristic(edge.to), tentative_g});
+      ++result.metrics.generated_nodes;
     }
   }
 
@@ -309,63 +349,83 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
     return result;
   }
 
-  GridIndex current = goal;
-  result.cells.push_back(current);
+  SurfaceNodeId current = goal;
+  result.cells.push_back(graph.nodes()[current.id].cell);
   while (current != start) {
-    const auto it = came_from.find(current);
-    if (it == came_from.end()) {
+    const SurfaceNodeId parent = came_from[current.id];
+    if (!graph.isValid(parent)) {
       result.message = "surface A* parent chain is incomplete";
       result.metrics.failure_reason = result.message;
       return result;
     }
-    current = it->second;
-    result.cells.push_back(current);
+    current = parent;
+    result.cells.push_back(graph.nodes()[current.id].cell);
   }
   std::reverse(result.cells.begin(), result.cells.end());
   result.raw_cells = result.cells;
-  result.raw_path = cellsToPath(result.raw_cells, snapshot.resolution_m);
+  result.raw_path.reserve(result.raw_cells.size());
+  for (const GridIndex & cell : result.raw_cells) {
+    const SurfaceNodeId id = graph.nodeIdForCell(cell);
+    const SurfaceNode * node = graph.node(id);
+    if (node != nullptr) {
+      result.raw_path.push_back({
+        (static_cast<double>(node->x) + 0.5) * graph.resolution(),
+        (static_cast<double>(node->y) + 0.5) * graph.resolution(),
+        node->z});
+    }
+  }
   result.metrics.raw_path_waypoints = static_cast<std::uint32_t>(result.cells.size());
   for (std::size_t i = 1; i < result.cells.size(); ++i) {
-    result.metrics.raw_path_length_m += gridDistance(result.cells[i - 1U], result.cells[i]) *
-      snapshot.resolution_m;
-  }
-  if (options_.enable_shortcut) {
-    const std::vector<GridIndex> shortcut_cells = shortcutPath(snapshot, result.cells);
-    if (shortcut_cells.size() >= 2U && shortcut_cells.size() < result.cells.size()) {
-      result.metrics.shortcut_count =
-        static_cast<std::uint32_t>(result.cells.size() - shortcut_cells.size());
-      result.cells = shortcut_cells;
+    const SurfaceNode * a = graph.node(graph.nodeIdForCell(result.cells[i - 1U]));
+    const SurfaceNode * b = graph.node(graph.nodeIdForCell(result.cells[i]));
+    if (a != nullptr && b != nullptr) {
+      const double dx = static_cast<double>(a->x - b->x) * graph.resolution();
+      const double dy = static_cast<double>(a->y - b->y) * graph.resolution();
+      result.metrics.raw_path_length_m += std::hypot(dx, dy);
     }
   }
-  result.path = cellsToPath(result.cells, snapshot.resolution_m);
-  std::string validation_failure;
-  if (validatePath(snapshot, result.path, validation_failure)) {
-    result.metrics.final_path_validated = true;
-  } else {
-    const std::string postprocess_failure = validation_failure;
-    std::string raw_validation_failure;
-    if (result.cells != result.raw_cells &&
-      validatePath(snapshot, result.raw_path, raw_validation_failure))
-    {
-      result.metrics.final_path_validated = true;
-      result.metrics.final_path_fallback_to_raw = true;
-      result.metrics.final_path_validation_failure = postprocess_failure;
-      result.cells = result.raw_cells;
-      result.path = result.raw_path;
-      result.metrics.shortcut_count = 0;
-    } else {
-      result.success = false;
-      result.message = "final surface path validation failed: " + postprocess_failure;
-      result.metrics.failure_reason = result.message;
-      result.metrics.final_path_validated = false;
-      result.metrics.final_path_validation_failure = postprocess_failure;
-      return result;
-    }
-  }
+  result.path = result.raw_path;
+  result.metrics.final_path_validated = true;
   result.success = true;
   result.message = "path found";
   result.metrics.success = true;
-  fillMetrics(snapshot, result);
+
+  double clearance_sum = 0.0;
+  result.metrics.min_path_clearance_m = std::numeric_limits<double>::infinity();
+  for (std::size_t i = 0; i < result.cells.size(); ++i) {
+    const SurfaceNode * node = graph.node(graph.nodeIdForCell(result.cells[i]));
+    if (node == nullptr) {
+      continue;
+    }
+    const double clearance = node->clearance_m;
+    if (clearance < result.metrics.min_path_clearance_m) {
+      result.metrics.min_path_clearance_m = clearance;
+      result.metrics.min_path_clearance_cell = result.cells[i];
+      result.metrics.has_min_path_clearance_cell = true;
+    }
+    clearance_sum += clearance;
+    result.metrics.clearance_cost_sum +=
+      std::isfinite(clearance) ? 1.0 / (clearance + 0.05) : 0.0;
+    result.metrics.risk_cost_sum += node->risk;
+    result.metrics.max_path_risk = std::max(result.metrics.max_path_risk, node->risk);
+    if (clearance < 0.30) {
+      ++result.metrics.low_clearance_samples;
+    }
+    if (i > 0U) {
+      const SurfaceNode * prev = graph.node(graph.nodeIdForCell(result.cells[i - 1U]));
+      if (prev != nullptr) {
+        result.metrics.path_length_m += std::hypot(
+          static_cast<double>(node->x - prev->x) * graph.resolution(),
+          static_cast<double>(node->y - prev->y) * graph.resolution());
+      }
+    }
+  }
+  if (!result.cells.empty()) {
+    result.metrics.mean_path_clearance_m = clearance_sum / static_cast<double>(result.cells.size());
+  }
+  if (!std::isfinite(result.metrics.min_path_clearance_m)) {
+    result.metrics.min_path_clearance_m = 0.0;
+  }
   return result;
 }
 

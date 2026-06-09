@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "tgw_planner/core/experience_surface_graph.hpp"
 #include "tgw_planner/core/map_snapshot.hpp"
 #include "tgw_planner/core/planning_types.hpp"
 #include "tgw_planner/core/robot_footprint.hpp"
@@ -107,6 +108,8 @@ public:
 
   SurfacePlanResult plan(
     const NavigationSnapshot & snapshot, const GridIndex & start, const GridIndex & goal) const;
+  SurfacePlanResult plan(
+    const ExperienceSurfaceGraph & graph, SurfaceNodeId start, SurfaceNodeId goal) const;
 
 private:
   double transitionCost(

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "tgw_planner/core/experience_surface_builder.hpp"
+#include "tgw_planner/core/experience_surface_graph.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
 #include "tgw_planner/core/path_validator.hpp"
 #include "tgw_planner/core/planner_connectivity_layer.hpp"
@@ -17,6 +18,7 @@ namespace
 {
 using tgw_planner::core::ClearanceField;
 using tgw_planner::core::ExperienceSnapshot;
+using tgw_planner::core::ExperienceSurfaceGraph;
 using tgw_planner::core::ExperienceSurfaceBuilder;
 using tgw_planner::core::ExperienceSurfaceBuilderOptions;
 using tgw_planner::core::GridIndex;
@@ -179,6 +181,58 @@ void testPlannerConnectivityLayer()
   require(
     !connectivity.sameComponent({1, 0, 0}, {5, 0, 0}),
     "planner connectivity should reflect transition-level disconnection");
+}
+
+void testLayeredSurfaceGraph()
+{
+  ExperienceSnapshot snapshot = makeFlatSnapshot();
+
+  for (int x = 0; x <= 6; ++x) {
+    for (int y = -1; y <= 1; ++y) {
+      const GridIndex cell{x, y, 4};
+      SurfaceCell surface_cell;
+      surface_cell.cell = cell;
+      surface_cell.label = SurfaceLabel::Expanded;
+      surface_cell.reachability = ReachabilityLabel::InferredReachable;
+      surface_cell.height_m = 2.0;
+      surface_cell.confidence = 1.0;
+      snapshot.surface.surface_cells[cell] = surface_cell;
+      snapshot.surface.traversable_cells.insert(cell);
+    }
+  }
+  snapshot.clearance.compute(
+    snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, snapshot.resolution_m);
+  snapshot.risk.compute(snapshot.surface, snapshot.clearance);
+
+  SurfacePlannerOptions planner_options;
+  planner_options.require_footprint_support = true;
+  SurfaceTransitionValidator validator(planner_options);
+  ExperienceSurfaceGraph graph;
+  graph.build(snapshot, validator);
+
+  const auto xy_it = graph.xyToNodes().find({2, 0, 0});
+  require(xy_it != graph.xyToNodes().end(), "surface graph should index nodes by XY");
+  require(
+    xy_it->second.size() >= 2U,
+    "same XY with two valid surface heights should keep separate graph nodes");
+
+  const auto plan = SurfaceAstarPlanner(planner_options).plan(snapshot, {1, 0, 0}, {5, 0, 0});
+  require(plan.success, "graph-backed planner should succeed on a flat corridor");
+  require(plan.metrics.final_path_validated, "graph-backed planner should validate graph edges");
+
+  for (int y = -1; y <= 1; ++y) {
+    snapshot.surface.traversable_cells.erase({3, y, 0});
+    snapshot.surface.surface_cells.erase({3, y, 0});
+  }
+  snapshot.clearance.compute(
+    snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, snapshot.resolution_m);
+  snapshot.risk.compute(snapshot.surface, snapshot.clearance);
+  const auto disconnected_plan =
+    SurfaceAstarPlanner(planner_options).plan(snapshot, {1, 0, 0}, {5, 0, 0});
+  require(!disconnected_plan.success, "graph-backed planner should fail across graph components");
+  require(
+    disconnected_plan.message == "no_path_on_experience_surface_different_components",
+    "graph-backed planner should fail before A* when components differ");
 }
 
 void testExperienceBuilderSkeleton()
@@ -546,6 +600,7 @@ int main()
   testFootprintPlannerAndValidator();
   testFootprintSupportRatio();
   testPlannerConnectivityLayer();
+  testLayeredSurfaceGraph();
   testExperienceBuilderSkeleton();
   testReachableExpansionHeightGate();
   testReachableExpansionRejectsBodyObstruction();

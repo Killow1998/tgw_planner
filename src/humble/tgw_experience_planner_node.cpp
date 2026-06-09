@@ -22,9 +22,9 @@
 #include "visualization_msgs/msg/marker.hpp"
 
 #include "tgw_planner/core/experience_surface_builder.hpp"
+#include "tgw_planner/core/experience_surface_graph.hpp"
 #include "tgw_planner/core/grid_index.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
-#include "tgw_planner/core/planner_connectivity_layer.hpp"
 #include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/trajectory_projector.hpp"
 #include "tgw_planner/msg/planner_stats.hpp"
@@ -39,10 +39,12 @@ using tgw_planner::core::Point3;
 using tgw_planner::core::ProjectedSupportSample;
 using tgw_planner::core::RejectedProjectionSample;
 using tgw_planner::core::ExperienceBuildResult;
+using tgw_planner::core::ExperienceSurfaceGraph;
 using tgw_planner::core::ExperienceSurfaceBuilder;
 using tgw_planner::core::ExperienceSurfaceBuilderOptions;
 using tgw_planner::core::GridIndex;
-using tgw_planner::core::PlannerConnectivityLayer;
+using tgw_planner::core::SurfaceNode;
+using tgw_planner::core::SurfaceNodeId;
 using tgw_planner::core::SurfaceAstarPlanner;
 using tgw_planner::core::SurfacePlanResult;
 using tgw_planner::core::SurfacePlannerOptions;
@@ -90,7 +92,7 @@ std::string toStatsJson(
   const std::string & pbstream_path,
   const TrajectoryProjectionResult * projection,
   const ExperienceBuildResult * build,
-  const PlannerConnectivityLayer * planner_connectivity,
+  const ExperienceSurfaceGraph * surface_graph,
   double planner_multifloor_z_range_m)
 {
   const N3NavResource & resource = result.resource;
@@ -184,12 +186,12 @@ std::string toStatsJson(
   json << ",\"risk_count\":" <<
     (build && build->success ? build->snapshot.risk.risks().size() : 0U);
   json << ",\"planner_component_count\":" <<
-    (planner_connectivity ? planner_connectivity->componentCount() : 0U);
+    (surface_graph ? surface_graph->componentCount() : 0U);
   json << ",\"largest_planner_component_cells\":" <<
-    (planner_connectivity ? planner_connectivity->largestComponentSize() : 0U);
+    (surface_graph ? surface_graph->largestComponentSize() : 0U);
   json << ",\"planner_multifloor_component_count\":" <<
-    (planner_connectivity ?
-    planner_connectivity->multifloorComponentCount(planner_multifloor_z_range_m) : 0U);
+    (surface_graph ?
+    surface_graph->multifloorComponentCount(planner_multifloor_z_range_m) : 0U);
   json << "}";
   return json.str();
 }
@@ -499,8 +501,8 @@ private:
     if (build.success) {
       snapshot_ = build.snapshot;
       has_snapshot_ = true;
-      planner_connectivity_.build(snapshot_, SurfaceTransitionValidator(plannerOptions()));
-      has_planner_connectivity_ = true;
+      surface_graph_.build(snapshot_, SurfaceTransitionValidator(plannerOptions()));
+      has_surface_graph_ = true;
     }
     publishKeyframeGeometry(result.resource);
     publishTrajectory(result.resource);
@@ -523,10 +525,10 @@ private:
       projection.observed_seed_cells.size(),
       projection.bridge_seed_cells.size(),
       build.success ? build.snapshot.surface.traversable_cells.size() : 0U,
-      has_planner_connectivity_ ? planner_connectivity_.componentCount() : 0U,
-      has_planner_connectivity_ ? planner_connectivity_.largestComponentSize() : 0U,
-      has_planner_connectivity_ ?
-        planner_connectivity_.multifloorComponentCount(
+      has_surface_graph_ ? surface_graph_.componentCount() : 0U,
+      has_surface_graph_ ? surface_graph_.largestComponentSize() : 0U,
+      has_surface_graph_ ?
+        surface_graph_.multifloorComponentCount(
           get_parameter("planner_multifloor_z_range_m").as_double()) : 0U,
       projection.rejected_samples.size(),
       rejected_counts["support_projection_failed"],
@@ -654,7 +656,7 @@ private:
     std_msgs::msg::String msg;
     msg.data = toStatsJson(
       result, pbstream_path, projection, build,
-      has_planner_connectivity_ ? &planner_connectivity_ : nullptr,
+      has_surface_graph_ ? &surface_graph_ : nullptr,
       get_parameter("planner_multifloor_z_range_m").as_double());
     stats_json_pub_->publish(msg);
   }
@@ -679,11 +681,11 @@ private:
     return options;
   }
 
-  bool nearestTraversableCell(
-    const Point3 & point, GridIndex * nearest_cell, double * nearest_distance_m,
+  bool nearestSurfaceGraphNode(
+    const Point3 & point, SurfaceNodeId * nearest_node, double * nearest_distance_m,
     int * component_id = nullptr) const
   {
-    if (!has_snapshot_ || !has_planner_connectivity_) {
+    if (!has_snapshot_ || !has_surface_graph_) {
       return false;
     }
     const double layer_tolerance_m = 0.75 * snapshot_.resolution_m;
@@ -692,9 +694,11 @@ private:
     double target_layer_z = -std::numeric_limits<double>::infinity();
     bool found_layer = false;
 
-    for (const auto & entry : planner_connectivity_.componentIds()) {
-      const GridIndex & cell = entry.first;
-      const Point3 center = cellCenter(cell, snapshot_.resolution_m);
+    for (const SurfaceNode & node : surface_graph_.nodes()) {
+      const Point3 center{
+        (static_cast<double>(node.x) + 0.5) * surface_graph_.resolution(),
+        (static_cast<double>(node.y) + 0.5) * surface_graph_.resolution(),
+        node.z};
       const double dx = point.x - center.x;
       const double dy = point.y - center.y;
       const double xy_distance = std::sqrt(dx * dx + dy * dy);
@@ -725,8 +729,8 @@ private:
       get_parameter("robot_width_m").as_double(), snapshot_.resolution_m);
     double best_safe_score = std::numeric_limits<double>::infinity();
     double best_fallback_score = -std::numeric_limits<double>::infinity();
-    GridIndex best_safe_cell;
-    GridIndex best_fallback_cell;
+    SurfaceNodeId best_safe_node;
+    SurfaceNodeId best_fallback_node;
     double best_distance = 0.0;
     double best_fallback_distance = 0.0;
     bool found_safe = false;
@@ -734,9 +738,11 @@ private:
 
     int best_safe_component = -1;
     int best_fallback_component = -1;
-    for (const auto & entry : planner_connectivity_.componentIds()) {
-      const GridIndex & cell = entry.first;
-      const Point3 center = cellCenter(cell, snapshot_.resolution_m);
+    for (const SurfaceNode & node : surface_graph_.nodes()) {
+      const Point3 center{
+        (static_cast<double>(node.x) + 0.5) * surface_graph_.resolution(),
+        (static_cast<double>(node.y) + 0.5) * surface_graph_.resolution(),
+        node.z};
       if (std::abs(center.z - target_layer_z) > layer_tolerance_m) {
         continue;
       }
@@ -744,14 +750,14 @@ private:
       const double dy = point.y - center.y;
       const double xy_distance = std::sqrt(dx * dx + dy * dy);
 
-      const double clearance = snapshot_.clearance.clearanceDistance(cell);
+      const double clearance = node.clearance_m;
       if (clearance >= required_clearance_m) {
         const double score = xy_distance + 0.05 / std::max(clearance, 1.0e-3);
         if (!found_safe || score < best_safe_score) {
           best_safe_score = score;
           best_distance = tgw_planner::core::distance3d(point, center);
-          best_safe_cell = cell;
-          best_safe_component = entry.second;
+          best_safe_node = node.id;
+          best_safe_component = surface_graph_.componentId(node.id);
           found_safe = true;
         }
       }
@@ -760,14 +766,14 @@ private:
       if (!found_fallback || fallback_score > best_fallback_score) {
         best_fallback_score = fallback_score;
         best_fallback_distance = tgw_planner::core::distance3d(point, center);
-        best_fallback_cell = cell;
-        best_fallback_component = entry.second;
+        best_fallback_node = node.id;
+        best_fallback_component = surface_graph_.componentId(node.id);
         found_fallback = true;
       }
     }
 
     if (found_safe) {
-      *nearest_cell = best_safe_cell;
+      *nearest_node = best_safe_node;
       *nearest_distance_m = best_distance;
       if (component_id != nullptr) {
         *component_id = best_safe_component;
@@ -775,7 +781,7 @@ private:
       return true;
     }
     if (found_fallback) {
-      *nearest_cell = best_fallback_cell;
+      *nearest_node = best_fallback_node;
       *nearest_distance_m = best_fallback_distance;
       if (component_id != nullptr) {
         *component_id = best_fallback_component;
@@ -852,13 +858,13 @@ private:
       return plan;
     }
 
-    GridIndex start_cell;
-    GridIndex goal_cell;
+    SurfaceNodeId start_node;
+    SurfaceNodeId goal_node;
     double start_snap_distance = 0.0;
     double goal_snap_distance = 0.0;
     int start_component_id = -1;
     int goal_component_id = -1;
-    if (!nearestTraversableCell(start, &start_cell, &start_snap_distance, &start_component_id)) {
+    if (!nearestSurfaceGraphNode(start, &start_node, &start_snap_distance, &start_component_id)) {
       plan.message = "start could not snap to traversable experience surface";
       if (stats_out != nullptr) {
         *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
@@ -868,7 +874,7 @@ private:
       }
       return plan;
     }
-    if (!nearestTraversableCell(goal, &goal_cell, &goal_snap_distance, &goal_component_id)) {
+    if (!nearestSurfaceGraphNode(goal, &goal_node, &goal_snap_distance, &goal_component_id)) {
       plan.message = "goal could not snap to traversable experience surface";
       if (stats_out != nullptr) {
         *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
@@ -890,7 +896,7 @@ private:
     }
 
     const auto t0 = std::chrono::steady_clock::now();
-    plan = SurfaceAstarPlanner(plannerOptions()).plan(snapshot_, start_cell, goal_cell);
+    plan = SurfaceAstarPlanner(plannerOptions()).plan(surface_graph_, start_node, goal_node);
     const auto t1 = std::chrono::steady_clock::now();
     const double search_time_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     if (stats_out != nullptr) {
@@ -922,13 +928,19 @@ private:
 
   Point3 snappedMarkerPoint(const Point3 & point, double * snap_distance_m) const
   {
-    GridIndex snapped_cell;
+    SurfaceNodeId snapped_node;
     double distance = 0.0;
-    if (nearestTraversableCell(point, &snapped_cell, &distance)) {
+    if (nearestSurfaceGraphNode(point, &snapped_node, &distance)) {
       if (snap_distance_m != nullptr) {
         *snap_distance_m = distance;
       }
-      return cellCenter(snapped_cell, snapshot_.resolution_m);
+      const SurfaceNode * node = surface_graph_.node(snapped_node);
+      if (node != nullptr) {
+        return {
+          (static_cast<double>(node->x) + 0.5) * surface_graph_.resolution(),
+          (static_cast<double>(node->y) + 0.5) * surface_graph_.resolution(),
+          node->z};
+      }
     }
     if (snap_distance_m != nullptr) {
       *snap_distance_m = -1.0;
@@ -1253,17 +1265,21 @@ private:
 
   void publishPlannerConnectivityDebug(const N3NavResource & resource)
   {
-    if (!has_snapshot_ || !has_planner_connectivity_) {
+    if (!has_snapshot_ || !has_surface_graph_) {
       return;
     }
     const rclcpp::Time stamp = now();
     const std::string frame_id = resource.map_frame.empty() ?
       get_parameter("map_frame").as_string() : resource.map_frame;
     std::vector<IntensityPoint> component_points;
-    component_points.reserve(planner_connectivity_.componentIds().size());
-    for (const auto & entry : planner_connectivity_.componentIds()) {
-      component_points.push_back(
-        {cellCenter(entry.first, snapshot_.resolution_m), static_cast<double>(entry.second)});
+    component_points.reserve(surface_graph_.nodes().size());
+    for (const SurfaceNode & node : surface_graph_.nodes()) {
+      component_points.push_back({
+        {
+          (static_cast<double>(node.x) + 0.5) * surface_graph_.resolution(),
+          (static_cast<double>(node.y) + 0.5) * surface_graph_.resolution(),
+          node.z},
+        static_cast<double>(surface_graph_.componentId(node.id))});
     }
     planner_component_pub_->publish(makeIntensityCloud(stamp, frame_id, component_points));
   }
@@ -1296,9 +1312,9 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr start_pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pose_sub_;
   tgw_planner::core::ExperienceSnapshot snapshot_;
-  PlannerConnectivityLayer planner_connectivity_;
+  ExperienceSurfaceGraph surface_graph_;
   bool has_snapshot_{false};
-  bool has_planner_connectivity_{false};
+  bool has_surface_graph_{false};
   Point3 clicked_start_;
   Point3 clicked_goal_;
   bool has_clicked_start_{false};
