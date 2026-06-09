@@ -11,11 +11,17 @@ namespace tgw_planner::core
 namespace
 {
 constexpr std::uint32_t kInvalidNodeId = std::numeric_limits<std::uint32_t>::max();
+
+bool isBridgeLabel(const SurfaceCell & cell)
+{
+  return cell.label == SurfaceLabel::TrajectoryBridge;
+}
 }
 
 void ExperienceSurfaceGraph::build(
   const NavigationSnapshot & snapshot,
-  const SurfaceTransitionValidator & validator)
+  const SurfaceTransitionValidator & validator,
+  SurfaceGraphBuildOptions options)
 {
   nodes_.clear();
   adjacency_.clear();
@@ -23,11 +29,12 @@ void ExperienceSurfaceGraph::build(
   cell_to_node_.clear();
   component_id_.clear();
   components_.clear();
+  metrics_ = {};
   resolution_m_ = snapshot.resolution_m;
 
   nodes_.reserve(snapshot.surface.traversable_cells.size());
   for (const GridIndex & cell : snapshot.surface.traversable_cells) {
-    if (!validator.isEndpointCell(snapshot, cell)) {
+    if (!isSurfaceGraphNode(snapshot, validator, cell)) {
       continue;
     }
 
@@ -41,17 +48,18 @@ void ExperienceSurfaceGraph::build(
       const SurfaceCell & surface_cell = surface_it->second;
       node.z = surface_cell.height_m;
       node.reachability = surface_cell.reachability;
+      node.support_component_id = surface_cell.support_component_id;
+      node.bridge_id = surface_cell.bridge_id;
+      node.bridge_order = surface_cell.bridge_order;
+      node.bridge_endpoint = surface_cell.bridge_endpoint;
       node.confidence = surface_cell.confidence;
-      node.bridge = surface_cell.label == SurfaceLabel::TrajectoryBridge ||
-        surface_cell.reachability == ReachabilityLabel::LowConfidenceReachable;
+      node.bridge = isBridgeLabel(surface_cell);
     } else {
       node.z = cellCenter(cell, snapshot.resolution_m).z;
     }
     const auto reachability_it = snapshot.reachability.find(cell);
     if (reachability_it != snapshot.reachability.end()) {
       node.reachability = reachability_it->second;
-      node.bridge = node.bridge ||
-        reachability_it->second == ReachabilityLabel::LowConfidenceReachable;
     }
     node.clearance_m = snapshot.clearance.clearanceDistance(cell);
     node.risk = snapshot.risk.riskCost(cell);
@@ -79,26 +87,11 @@ void ExperienceSurfaceGraph::build(
             continue;
           }
           const SurfaceNode & candidate = nodes_[candidate_id.id];
-          const TransitionReport report = validator.validate(
-            snapshot, node.cell, candidate.cell);
-          if (!report.allowed) {
-            continue;
+          const std::optional<SurfaceEdge> edge = makeContinuousSurfaceEdge(
+            snapshot, validator, options, node, candidate, dx, dy);
+          if (edge.has_value()) {
+            edges.push_back(*edge);
           }
-          const double length_xy =
-            std::hypot(static_cast<double>(dx), static_cast<double>(dy)) *
-            snapshot.resolution_m;
-          const double dz = candidate.z - node.z;
-          SurfaceEdge edge;
-          edge.from = node.id;
-          edge.to = candidate_id;
-          edge.length_xy_m = length_xy;
-          edge.dz_m = dz;
-          edge.slope = length_xy > 1.0e-9 ? std::abs(dz) / length_xy : 0.0;
-          edge.kind = (node.bridge || candidate.bridge) ?
-            SurfaceEdgeKind::TrajectoryBridge : SurfaceEdgeKind::NormalSurface;
-          edge.cost = length_xy + 0.1 * std::abs(dz) +
-            (edge.kind == SurfaceEdgeKind::TrajectoryBridge ? 1.0 : 0.0);
-          edges.push_back(edge);
         }
       }
     }
@@ -215,12 +208,130 @@ const std::vector<SurfaceGraphComponentInfo> & ExperienceSurfaceGraph::component
   return components_;
 }
 
+const SurfaceGraphBuildMetrics & ExperienceSurfaceGraph::metrics() const
+{
+  return metrics_;
+}
+
 Point3 ExperienceSurfaceGraph::cellCenter(const GridIndex & cell, double resolution_m) const
 {
   return {
     (static_cast<double>(cell.x) + 0.5) * resolution_m,
     (static_cast<double>(cell.y) + 0.5) * resolution_m,
     (static_cast<double>(cell.z) + 0.5) * resolution_m};
+}
+
+bool ExperienceSurfaceGraph::isBridgeCell(
+  const NavigationSnapshot & snapshot, const GridIndex & cell) const
+{
+  const auto surface_it = snapshot.surface.surface_cells.find(cell);
+  if (surface_it != snapshot.surface.surface_cells.end() && isBridgeLabel(surface_it->second)) {
+    return true;
+  }
+  const auto reachability_it = snapshot.reachability.find(cell);
+  (void)reachability_it;
+  return false;
+}
+
+bool ExperienceSurfaceGraph::isSurfaceGraphNode(
+  const NavigationSnapshot & snapshot,
+  const SurfaceTransitionValidator & validator,
+  const GridIndex & cell) const
+{
+  if (!validator.isCellTraversable(snapshot, cell)) {
+    return false;
+  }
+  if (isBridgeCell(snapshot, cell)) {
+    return true;
+  }
+  return validator.isEndpointCell(snapshot, cell);
+}
+
+std::optional<SurfaceEdge> ExperienceSurfaceGraph::makeContinuousSurfaceEdge(
+  const NavigationSnapshot & snapshot,
+  const SurfaceTransitionValidator & validator,
+  const SurfaceGraphBuildOptions & options,
+  const SurfaceNode & from,
+  const SurfaceNode & to,
+  int dx,
+  int dy)
+{
+  const double length_xy =
+    std::hypot(static_cast<double>(dx), static_cast<double>(dy)) * snapshot.resolution_m;
+  if (length_xy <= 1.0e-9) {
+    return std::nullopt;
+  }
+
+  const double dz = to.z - from.z;
+  const double abs_dz = std::abs(dz);
+  const bool bridge_edge = from.bridge || to.bridge;
+  const double max_height_delta = bridge_edge ?
+    options.max_bridge_edge_height_delta_m : options.max_edge_height_delta_m;
+  if (abs_dz > max_height_delta) {
+    ++metrics_.graph_rejected_large_dz_edges;
+    return std::nullopt;
+  }
+
+  const double slope = abs_dz / length_xy;
+  if (slope > options.max_edge_slope) {
+    ++metrics_.graph_rejected_large_slope_edges;
+    return std::nullopt;
+  }
+
+  if (bridge_edge) {
+    if (!isValidBridgeTransition(from, to)) {
+      ++metrics_.graph_rejected_invalid_bridge_edges;
+      return std::nullopt;
+    }
+  } else {
+    if (!isValidNormalTransition(from, to)) {
+      ++metrics_.graph_rejected_cross_component_edges;
+      return std::nullopt;
+    }
+    const TransitionReport report = validator.validate(snapshot, from.cell, to.cell);
+    if (!report.allowed) {
+      return std::nullopt;
+    }
+  }
+
+  SurfaceEdge edge;
+  edge.from = from.id;
+  edge.to = to.id;
+  edge.length_xy_m = length_xy;
+  edge.dz_m = dz;
+  edge.slope = slope;
+  edge.kind = bridge_edge ? SurfaceEdgeKind::TrajectoryBridge : SurfaceEdgeKind::NormalSurface;
+  edge.cost = length_xy + 0.1 * abs_dz +
+    (edge.kind == SurfaceEdgeKind::TrajectoryBridge ? 1.0 : 0.0);
+  ++metrics_.graph_edges;
+  metrics_.max_graph_edge_dz_m = std::max(metrics_.max_graph_edge_dz_m, abs_dz);
+  metrics_.max_graph_edge_slope = std::max(metrics_.max_graph_edge_slope, slope);
+  if (edge.kind == SurfaceEdgeKind::TrajectoryBridge) {
+    ++metrics_.graph_bridge_edges;
+  } else {
+    ++metrics_.graph_normal_edges;
+  }
+  return edge;
+}
+
+bool ExperienceSurfaceGraph::isValidBridgeTransition(
+  const SurfaceNode & from, const SurfaceNode & to) const
+{
+  if (from.bridge && to.bridge) {
+    return from.bridge_id >= 0 && from.bridge_id == to.bridge_id &&
+           from.bridge_order >= 0 && to.bridge_order >= 0 &&
+           std::abs(from.bridge_order - to.bridge_order) <= 1;
+  }
+  const SurfaceNode & bridge_node = from.bridge ? from : to;
+  const SurfaceNode & normal_node = from.bridge ? to : from;
+  return bridge_node.bridge_endpoint && normal_node.support_component_id >= 0;
+}
+
+bool ExperienceSurfaceGraph::isValidNormalTransition(
+  const SurfaceNode & from, const SurfaceNode & to) const
+{
+  return from.support_component_id >= 0 &&
+         from.support_component_id == to.support_component_id;
 }
 
 void ExperienceSurfaceGraph::computeComponents()

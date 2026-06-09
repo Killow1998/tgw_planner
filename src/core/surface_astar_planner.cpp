@@ -242,7 +242,9 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
   const NavigationSnapshot & snapshot, const GridIndex & start, const GridIndex & goal) const
 {
   ExperienceSurfaceGraph graph;
-  graph.build(snapshot, transition_validator_);
+  SurfaceGraphBuildOptions graph_options;
+  graph_options.max_edge_height_delta_m = options_.max_step_height_m;
+  graph.build(snapshot, transition_validator_, graph_options);
   const SurfaceNodeId start_node = graph.nodeIdForCell(start);
   const SurfaceNodeId goal_node = graph.nodeIdForCell(goal);
   return plan(graph, start_node, goal_node);
@@ -350,6 +352,8 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
   }
 
   SurfaceNodeId current = goal;
+  std::vector<SurfaceNodeId> node_path;
+  node_path.push_back(current);
   result.cells.push_back(graph.nodes()[current.id].cell);
   while (current != start) {
     const SurfaceNodeId parent = came_from[current.id];
@@ -359,9 +363,20 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
       return result;
     }
     current = parent;
+    node_path.push_back(current);
     result.cells.push_back(graph.nodes()[current.id].cell);
   }
+  std::reverse(node_path.begin(), node_path.end());
   std::reverse(result.cells.begin(), result.cells.end());
+
+  std::string graph_validation_failure;
+  if (!validateGraphPath(graph, node_path, graph_validation_failure, result.metrics)) {
+    result.message = graph_validation_failure;
+    result.metrics.failure_reason = result.message;
+    result.metrics.final_path_validation_failure = graph_validation_failure;
+    return result;
+  }
+
   result.raw_cells = result.cells;
   result.raw_path.reserve(result.raw_cells.size());
   for (const GridIndex & cell : result.raw_cells) {
@@ -427,6 +442,53 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
     result.metrics.min_path_clearance_m = 0.0;
   }
   return result;
+}
+
+bool SurfaceAstarPlanner::validateGraphPath(
+  const ExperienceSurfaceGraph & graph,
+  const std::vector<SurfaceNodeId> & node_path,
+  std::string & failure_reason,
+  SurfacePlanMetrics & metrics) const
+{
+  for (std::size_t i = 1U; i < node_path.size(); ++i) {
+    const SurfaceNodeId from = node_path[i - 1U];
+    const SurfaceNodeId to = node_path[i];
+    if (!graph.isValid(from) || !graph.isValid(to)) {
+      failure_reason = "path_validation_failed_invalid_graph_node";
+      return false;
+    }
+    const SurfaceEdge * path_edge = nullptr;
+    for (const SurfaceEdge & edge : graph.adjacency()[from.id]) {
+      if (edge.to == to) {
+        path_edge = &edge;
+        break;
+      }
+    }
+    if (path_edge == nullptr) {
+      failure_reason = "path_validation_failed_missing_graph_edge";
+      return false;
+    }
+    const double abs_dz = std::abs(path_edge->dz_m);
+    metrics.max_path_edge_dz_m = std::max(metrics.max_path_edge_dz_m, abs_dz);
+    if (path_edge->kind == SurfaceEdgeKind::NormalSurface &&
+      abs_dz > options_.max_step_height_m)
+    {
+      ++metrics.path_layer_jump_edges;
+      failure_reason = "path_validation_failed_layer_jump_edge";
+      return false;
+    }
+    if (path_edge->kind == SurfaceEdgeKind::TrajectoryBridge) {
+      const SurfaceNode * from_node = graph.node(from);
+      const SurfaceNode * to_node = graph.node(to);
+      if (from_node == nullptr || to_node == nullptr ||
+        (!from_node->bridge && !to_node->bridge))
+      {
+        failure_reason = "path_validation_failed_invalid_bridge_edge";
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 double SurfaceAstarPlanner::transitionCost(

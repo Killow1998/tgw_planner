@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -42,6 +43,9 @@ struct SurfaceNode
   SurfaceNodeId id;
   GridIndex cell;
   int surface_id{-1};
+  int support_component_id{-1};
+  int bridge_id{-1};
+  int bridge_order{-1};
   int x{0};
   int y{0};
   double z{0.0};
@@ -50,6 +54,7 @@ struct SurfaceNode
   double risk{0.0};
   double confidence{0.0};
   bool bridge{false};
+  bool bridge_endpoint{false};
 };
 
 struct SurfaceEdge
@@ -71,12 +76,33 @@ struct SurfaceGraphComponentInfo
   double max_z{-std::numeric_limits<double>::infinity()};
 };
 
+struct SurfaceGraphBuildOptions
+{
+  double max_edge_height_delta_m{0.30};
+  double max_bridge_edge_height_delta_m{0.80};
+  double max_edge_slope{std::numeric_limits<double>::infinity()};
+};
+
+struct SurfaceGraphBuildMetrics
+{
+  std::size_t graph_edges{0};
+  std::size_t graph_normal_edges{0};
+  std::size_t graph_bridge_edges{0};
+  std::size_t graph_rejected_cross_component_edges{0};
+  std::size_t graph_rejected_large_dz_edges{0};
+  std::size_t graph_rejected_large_slope_edges{0};
+  std::size_t graph_rejected_invalid_bridge_edges{0};
+  double max_graph_edge_dz_m{0.0};
+  double max_graph_edge_slope{0.0};
+};
+
 class ExperienceSurfaceGraph
 {
 public:
   void build(
     const NavigationSnapshot & snapshot,
-    const SurfaceTransitionValidator & validator);
+    const SurfaceTransitionValidator & validator,
+    SurfaceGraphBuildOptions options = {});
 
   bool empty() const;
   double resolution() const;
@@ -96,9 +122,25 @@ public:
   double componentMinZ(int id) const;
   double componentMaxZ(int id) const;
   const std::vector<SurfaceGraphComponentInfo> & components() const;
+  const SurfaceGraphBuildMetrics & metrics() const;
 
 private:
   Point3 cellCenter(const GridIndex & cell, double resolution_m) const;
+  bool isBridgeCell(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
+  bool isSurfaceGraphNode(
+    const NavigationSnapshot & snapshot,
+    const SurfaceTransitionValidator & validator,
+    const GridIndex & cell) const;
+  std::optional<SurfaceEdge> makeContinuousSurfaceEdge(
+    const NavigationSnapshot & snapshot,
+    const SurfaceTransitionValidator & validator,
+    const SurfaceGraphBuildOptions & options,
+    const SurfaceNode & from,
+    const SurfaceNode & to,
+    int dx,
+    int dy);
+  bool isValidBridgeTransition(const SurfaceNode & from, const SurfaceNode & to) const;
+  bool isValidNormalTransition(const SurfaceNode & from, const SurfaceNode & to) const;
   void computeComponents();
 
   std::vector<SurfaceNode> nodes_;
@@ -107,6 +149,7 @@ private:
   std::unordered_map<GridIndex, SurfaceNodeId, GridIndexHash> cell_to_node_;
   std::vector<int> component_id_;
   std::vector<SurfaceGraphComponentInfo> components_;
+  SurfaceGraphBuildMetrics metrics_;
   double resolution_m_{0.10};
 };
 

@@ -221,6 +221,7 @@ void addTrajectoryBridgeSeeds(
   for (std::size_t i = 1U; i < result.accepted_projected_support_samples.size(); ++i) {
     const ProjectedSupportSample & previous = result.accepted_projected_support_samples[i - 1U];
     const ProjectedSupportSample & current = result.accepted_projected_support_samples[i];
+    const int bridge_id = static_cast<int>(i - 1U);
     const double gap_m = distance3d(previous.support_position, current.support_position);
     const double height_delta_m = std::abs(
       current.support_position.z - previous.support_position.z);
@@ -253,12 +254,22 @@ void addTrajectoryBridgeSeeds(
         previous.support_position.z + t *
         (current.support_position.z - previous.support_position.z)};
       const auto footprint_cells = sweepBridgeFootprintCells(bridge, yaw, options);
+      const bool bridge_endpoint = sample_index == 1 || sample_index == samples - 1;
       for (const GridIndex & cell : footprint_cells) {
-        if (result.observed_seed_cells.find(cell) == result.observed_seed_cells.end() &&
-          result.bridge_seed_cells.insert(cell).second)
-        {
-          result.bridged_seed_cells.insert(cell);
+        if (result.observed_seed_cells.find(cell) != result.observed_seed_cells.end()) {
+          continue;
+        }
+        if (result.bridge_seed_cells.insert(cell).second) {
           ++result.trajectory_bridge_seed_count;
+        }
+        result.bridged_seed_cells.insert(cell);
+        BridgeCellMetadata & metadata = result.bridge_cell_metadata[cell];
+        if (metadata.bridge_id < 0 || bridge_endpoint) {
+          metadata.bridge_id = bridge_id;
+          metadata.bridge_order = sample_index;
+          metadata.bridge_endpoint = bridge_endpoint;
+          metadata.height_m = bridge.support_position.z;
+          metadata.confidence = 0.30;
         }
       }
     }

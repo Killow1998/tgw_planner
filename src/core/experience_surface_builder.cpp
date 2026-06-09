@@ -66,7 +66,7 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & reso
 
   ReachableExpansionResult expanded =
     ReachableExpander(options_.expander).expand(
-      seeds.observed_seed_cells, seeds.bridge_seed_cells, geometry);
+      seeds.observed_seed_cells, seeds.bridge_seed_cells, seeds.bridge_cell_metadata, geometry);
   if (expanded.traversable_cells.empty()) {
     result.error_code = "experience_surface_empty";
     result.message = "reachable surface builder produced no traversable cells";

@@ -29,6 +29,8 @@ uint32 path_waypoints
 float64 path_length_m
 float64 path_vertical_gain_m
 float64 path_vertical_loss_m
+float64 max_path_edge_dz_m
+uint32 path_layer_jump_edges
 
 bool final_path_validated
 bool final_path_fallback_to_raw

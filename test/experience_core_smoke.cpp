@@ -40,8 +40,10 @@ using tgw_planner::core::RobotFootprint;
 using tgw_planner::core::RobotFootprintOptions;
 using tgw_planner::core::SurfaceAstarPlanner;
 using tgw_planner::core::SurfaceCell;
+using tgw_planner::core::SurfaceGraphBuildOptions;
 using tgw_planner::core::SurfaceLabel;
 using tgw_planner::core::SurfaceMap;
+using tgw_planner::core::SurfaceNodeId;
 using tgw_planner::core::SurfacePlannerOptions;
 using tgw_planner::core::SurfaceTransitionValidator;
 using tgw_planner::core::TrajectoryProjector;
@@ -69,6 +71,7 @@ ExperienceSnapshot makeFlatSnapshot()
       surface_cell.support = {x, y, -1};
       surface_cell.label = SurfaceLabel::Expanded;
       surface_cell.reachability = ReachabilityLabel::InferredReachable;
+      surface_cell.support_component_id = 1;
       surface_cell.height_m = 0.0;
       surface_cell.confidence = 1.0;
       snapshot.surface.surface_cells[cell] = surface_cell;
@@ -194,6 +197,7 @@ void testLayeredSurfaceGraph()
       surface_cell.cell = cell;
       surface_cell.label = SurfaceLabel::Expanded;
       surface_cell.reachability = ReachabilityLabel::InferredReachable;
+      surface_cell.support_component_id = 2;
       surface_cell.height_m = 2.0;
       surface_cell.confidence = 1.0;
       snapshot.surface.surface_cells[cell] = surface_cell;
@@ -233,6 +237,147 @@ void testLayeredSurfaceGraph()
   require(
     disconnected_plan.message == "no_path_on_experience_surface_different_components",
     "graph-backed planner should fail before A* when components differ");
+}
+
+void testSurfaceGraphRejectsLayerJump()
+{
+  ExperienceSnapshot snapshot;
+  snapshot.map_frame = "map";
+  snapshot.resolution_m = 0.50;
+
+  SurfaceCell lower;
+  lower.cell = {0, 0, 0};
+  lower.label = SurfaceLabel::Expanded;
+  lower.reachability = ReachabilityLabel::InferredReachable;
+  lower.support_component_id = 1;
+  lower.height_m = 0.0;
+  lower.confidence = 1.0;
+  snapshot.surface.surface_cells[lower.cell] = lower;
+  snapshot.surface.traversable_cells.insert(lower.cell);
+
+  SurfaceCell upper = lower;
+  upper.cell = {1, 0, 0};
+  upper.height_m = 2.0;
+  snapshot.surface.surface_cells[upper.cell] = upper;
+  snapshot.surface.traversable_cells.insert(upper.cell);
+
+  snapshot.clearance.compute(
+    snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, snapshot.resolution_m);
+  snapshot.risk.compute(snapshot.surface, snapshot.clearance);
+
+  SurfacePlannerOptions planner_options;
+  planner_options.require_footprint_support = false;
+  planner_options.max_step_height_m = 0.35;
+  SurfaceTransitionValidator validator(planner_options);
+  ExperienceSurfaceGraph graph;
+  graph.build(snapshot, validator);
+
+  const SurfaceNodeId lower_node = graph.nodeIdForCell(lower.cell);
+  const SurfaceNodeId upper_node = graph.nodeIdForCell(upper.cell);
+  require(graph.isValid(lower_node), "lower layer jump test node should exist");
+  require(graph.isValid(upper_node), "upper layer jump test node should exist");
+  require(
+    !graph.sameComponent(lower_node, upper_node),
+    "surface graph must reject adjacent XY edges with large true surface-height jumps");
+}
+
+void testSurfaceGraphBridgeHeightPolicy()
+{
+  ExperienceSnapshot snapshot;
+  snapshot.map_frame = "map";
+  snapshot.resolution_m = 0.50;
+
+  auto add_bridge_cell = [&](const GridIndex & cell, double height_m) {
+    SurfaceCell surface_cell;
+    surface_cell.cell = cell;
+    surface_cell.label = SurfaceLabel::TrajectoryBridge;
+    surface_cell.reachability = ReachabilityLabel::LowConfidenceReachable;
+    surface_cell.bridge_id = 7;
+    surface_cell.bridge_order = cell.x;
+    surface_cell.bridge_endpoint = cell.x == 0 || cell.x == 2;
+    surface_cell.height_m = height_m;
+    surface_cell.confidence = 0.30;
+    snapshot.surface.surface_cells[cell] = surface_cell;
+    snapshot.surface.traversable_cells.insert(cell);
+    snapshot.reachability[cell] = surface_cell.reachability;
+  };
+
+  add_bridge_cell({0, 0, 0}, 0.0);
+  add_bridge_cell({1, 0, 0}, 0.60);
+  add_bridge_cell({2, 0, 0}, 1.80);
+
+  snapshot.clearance.compute(
+    snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, snapshot.resolution_m);
+  snapshot.risk.compute(snapshot.surface, snapshot.clearance);
+
+  SurfacePlannerOptions planner_options;
+  planner_options.require_footprint_support = false;
+  planner_options.max_step_height_m = 0.35;
+  SurfaceTransitionValidator validator(planner_options);
+  SurfaceGraphBuildOptions graph_options;
+  graph_options.max_edge_height_delta_m = planner_options.max_step_height_m;
+  graph_options.max_bridge_edge_height_delta_m = 0.80;
+
+  ExperienceSurfaceGraph graph;
+  graph.build(snapshot, validator, graph_options);
+
+  const SurfaceNodeId bridge_a = graph.nodeIdForCell({0, 0, 0});
+  const SurfaceNodeId bridge_b = graph.nodeIdForCell({1, 0, 0});
+  const SurfaceNodeId bridge_too_high = graph.nodeIdForCell({2, 0, 0});
+  require(graph.isValid(bridge_a), "first bridge policy test node should exist");
+  require(graph.isValid(bridge_b), "second bridge policy test node should exist");
+  require(graph.isValid(bridge_too_high), "third bridge policy test node should exist");
+  require(
+    graph.sameComponent(bridge_a, bridge_b),
+    "trajectory bridge edge should allow a bounded bridge-height change");
+  require(
+    !graph.sameComponent(bridge_b, bridge_too_high),
+    "trajectory bridge edge should reject jumps beyond the bridge-height policy");
+}
+
+void testLowConfidenceIsNotBridge()
+{
+  ExperienceSnapshot snapshot;
+  snapshot.map_frame = "map";
+  snapshot.resolution_m = 0.50;
+
+  SurfaceCell a;
+  a.cell = {0, 0, 0};
+  a.label = SurfaceLabel::Expanded;
+  a.reachability = ReachabilityLabel::LowConfidenceReachable;
+  a.support_component_id = 1;
+  a.height_m = 0.0;
+  a.confidence = 0.35;
+  snapshot.surface.surface_cells[a.cell] = a;
+  snapshot.surface.traversable_cells.insert(a.cell);
+  snapshot.reachability[a.cell] = a.reachability;
+
+  SurfaceCell b = a;
+  b.cell = {1, 0, 0};
+  b.support_component_id = 2;
+  snapshot.surface.surface_cells[b.cell] = b;
+  snapshot.surface.traversable_cells.insert(b.cell);
+  snapshot.reachability[b.cell] = b.reachability;
+
+  snapshot.clearance.compute(
+    snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, snapshot.resolution_m);
+  snapshot.risk.compute(snapshot.surface, snapshot.clearance);
+
+  SurfacePlannerOptions planner_options;
+  planner_options.require_footprint_support = false;
+  SurfaceTransitionValidator validator(planner_options);
+  ExperienceSurfaceGraph graph;
+  graph.build(snapshot, validator);
+
+  const SurfaceNodeId a_node = graph.nodeIdForCell(a.cell);
+  const SurfaceNodeId b_node = graph.nodeIdForCell(b.cell);
+  require(graph.isValid(a_node), "first low confidence node should exist");
+  require(graph.isValid(b_node), "second low confidence node should exist");
+  require(!graph.node(a_node)->bridge, "low confidence node should not become a bridge");
+  require(!graph.node(b_node)->bridge, "low confidence node should not become a bridge");
+  require(
+    !graph.sameComponent(a_node, b_node),
+    "low confidence cells should not bypass support component edge constraints");
 }
 
 void testExperienceBuilderSkeleton()
@@ -601,6 +746,9 @@ int main()
   testFootprintSupportRatio();
   testPlannerConnectivityLayer();
   testLayeredSurfaceGraph();
+  testSurfaceGraphRejectsLayerJump();
+  testSurfaceGraphBridgeHeightPolicy();
+  testLowConfidenceIsNotBridge();
   testExperienceBuilderSkeleton();
   testReachableExpansionHeightGate();
   testReachableExpansionRejectsBodyObstruction();

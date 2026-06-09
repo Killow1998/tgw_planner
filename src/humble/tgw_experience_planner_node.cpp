@@ -43,6 +43,7 @@ using tgw_planner::core::ExperienceSurfaceGraph;
 using tgw_planner::core::ExperienceSurfaceBuilder;
 using tgw_planner::core::ExperienceSurfaceBuilderOptions;
 using tgw_planner::core::GridIndex;
+using tgw_planner::core::SurfaceGraphBuildOptions;
 using tgw_planner::core::SurfaceNode;
 using tgw_planner::core::SurfaceNodeId;
 using tgw_planner::core::SurfaceAstarPlanner;
@@ -192,6 +193,32 @@ std::string toStatsJson(
   json << ",\"planner_multifloor_component_count\":" <<
     (surface_graph ?
     surface_graph->multifloorComponentCount(planner_multifloor_z_range_m) : 0U);
+  if (surface_graph) {
+    const auto & graph_metrics = surface_graph->metrics();
+    json << ",\"graph_edges\":" << graph_metrics.graph_edges;
+    json << ",\"graph_normal_edges\":" << graph_metrics.graph_normal_edges;
+    json << ",\"graph_bridge_edges\":" << graph_metrics.graph_bridge_edges;
+    json << ",\"graph_rejected_cross_component_edges\":" <<
+      graph_metrics.graph_rejected_cross_component_edges;
+    json << ",\"graph_rejected_large_dz_edges\":" <<
+      graph_metrics.graph_rejected_large_dz_edges;
+    json << ",\"graph_rejected_large_slope_edges\":" <<
+      graph_metrics.graph_rejected_large_slope_edges;
+    json << ",\"graph_rejected_invalid_bridge_edges\":" <<
+      graph_metrics.graph_rejected_invalid_bridge_edges;
+    json << ",\"max_graph_edge_dz_m\":" << graph_metrics.max_graph_edge_dz_m;
+    json << ",\"max_graph_edge_slope\":" << graph_metrics.max_graph_edge_slope;
+  } else {
+    json << ",\"graph_edges\":0";
+    json << ",\"graph_normal_edges\":0";
+    json << ",\"graph_bridge_edges\":0";
+    json << ",\"graph_rejected_cross_component_edges\":0";
+    json << ",\"graph_rejected_large_dz_edges\":0";
+    json << ",\"graph_rejected_large_slope_edges\":0";
+    json << ",\"graph_rejected_invalid_bridge_edges\":0";
+    json << ",\"max_graph_edge_dz_m\":0";
+    json << ",\"max_graph_edge_slope\":0";
+  }
   json << "}";
   return json.str();
 }
@@ -501,7 +528,12 @@ private:
     if (build.success) {
       snapshot_ = build.snapshot;
       has_snapshot_ = true;
-      surface_graph_.build(snapshot_, SurfaceTransitionValidator(plannerOptions()));
+      const SurfacePlannerOptions planner_options = plannerOptions();
+      SurfaceGraphBuildOptions graph_options;
+      graph_options.max_edge_height_delta_m = planner_options.max_step_height_m;
+      graph_options.max_bridge_edge_height_delta_m =
+        get_parameter("max_trajectory_bridge_height_delta_m").as_double();
+      surface_graph_.build(snapshot_, SurfaceTransitionValidator(planner_options), graph_options);
       has_surface_graph_ = true;
     }
     publishKeyframeGeometry(result.resource);
@@ -821,6 +853,8 @@ private:
     stats.postprocess_floor_shortcuts = plan.metrics.shortcut_count;
     stats.path_waypoints = static_cast<std::uint32_t>(plan.path.size());
     stats.path_length_m = plan.metrics.path_length_m;
+    stats.max_path_edge_dz_m = plan.metrics.max_path_edge_dz_m;
+    stats.path_layer_jump_edges = plan.metrics.path_layer_jump_edges;
     stats.final_path_validated = plan.metrics.final_path_validated;
     stats.final_path_fallback_to_raw = plan.metrics.final_path_fallback_to_raw;
     stats.final_path_validation_failure = plan.metrics.final_path_validation_failure;

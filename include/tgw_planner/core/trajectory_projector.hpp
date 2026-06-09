@@ -2,11 +2,13 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "tgw_planner/core/grid_index.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
+#include "tgw_planner/core/surface_map.hpp"
 
 namespace tgw_planner::core
 {
@@ -56,6 +58,7 @@ struct TrajectoryProjectionResult
   std::unordered_set<GridIndex, GridIndexHash> bridge_seed_cells;
   std::unordered_set<GridIndex, GridIndexHash> proven_seed_cells;
   std::unordered_set<GridIndex, GridIndexHash> bridged_seed_cells;
+  std::unordered_map<GridIndex, BridgeCellMetadata, GridIndexHash> bridge_cell_metadata;
   std::vector<ProjectedSupportSample> accepted_projected_support_samples;
   std::vector<ProjectedSupportSample> projected_support_samples;
   std::vector<RejectedProjectionSample> rejected_samples;

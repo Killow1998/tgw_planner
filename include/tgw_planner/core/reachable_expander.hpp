@@ -53,6 +53,11 @@ public:
     const std::unordered_set<GridIndex, GridIndexHash> & observed_seed_cells,
     const std::unordered_set<GridIndex, GridIndexHash> & bridge_seed_cells,
     const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry_cells) const;
+  ReachableExpansionResult expand(
+    const std::unordered_set<GridIndex, GridIndexHash> & observed_seed_cells,
+    const std::unordered_set<GridIndex, GridIndexHash> & bridge_seed_cells,
+    const std::unordered_map<GridIndex, BridgeCellMetadata, GridIndexHash> & bridge_metadata,
+    const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry_cells) const;
 
 private:
   ReachableExpanderOptions options_;

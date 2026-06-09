@@ -244,6 +244,30 @@ bool isAnchoredComponent(
   }
   return anchored_components.find(it->second) != anchored_components.end();
 }
+
+int supportComponentForCell(
+  const ComponentMap & components,
+  const GridIndex & cell,
+  const ReachableExpanderOptions & options)
+{
+  const auto exact_it = components.find(cell);
+  if (exact_it != components.end()) {
+    return exact_it->second;
+  }
+  for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      for (int dz = -options.vertical_tolerance_cells; dz <= options.vertical_tolerance_cells;
+        ++dz)
+      {
+        const auto it = components.find({cell.x + dx, cell.y + dy, cell.z + dz});
+        if (it != components.end()) {
+          return it->second;
+        }
+      }
+    }
+  }
+  return -1;
+}
 }  // namespace
 
 ReachableExpander::ReachableExpander(ReachableExpanderOptions options)
@@ -276,10 +300,26 @@ ReachableExpansionResult ReachableExpander::expand(
   const std::unordered_set<GridIndex, GridIndexHash> & bridge_seed_cells,
   const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry_cells) const
 {
+  const std::unordered_map<GridIndex, BridgeCellMetadata, GridIndexHash> bridge_metadata;
+  return expand(observed_seed_cells, bridge_seed_cells, bridge_metadata, geometry_cells);
+}
+
+ReachableExpansionResult ReachableExpander::expand(
+  const std::unordered_set<GridIndex, GridIndexHash> & observed_seed_cells,
+  const std::unordered_set<GridIndex, GridIndexHash> & bridge_seed_cells,
+  const std::unordered_map<GridIndex, BridgeCellMetadata, GridIndexHash> & bridge_metadata,
+  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry_cells) const
+{
   ReachableExpansionResult result;
   result.surface_cells = geometry_cells;
   const ComponentMap components = buildSupportComponents(
     geometry_cells, options_, &result.support_component_count);
+  for (auto & entry : result.surface_cells) {
+    const auto component_it = components.find(entry.first);
+    if (component_it != components.end()) {
+      entry.second.support_component_id = component_it->second;
+    }
+  }
   const std::unordered_set<int> anchored_components = anchoredComponents(
     components, observed_seed_cells, options_);
   result.anchored_support_component_count = anchored_components.size();
@@ -291,6 +331,7 @@ ReachableExpansionResult ReachableExpander::expand(
     cell.support = {seed.x, seed.y, seed.z - 1};
     cell.label = SurfaceLabel::ReachableSeed;
     cell.reachability = ReachabilityLabel::ProvenReachable;
+    cell.support_component_id = supportComponentForCell(components, seed, options_);
     cell.confidence = 1.0;
     if (!std::isfinite(cell.height_m)) {
       cell.height_m = fallbackHeight(seed, options_.resolution_m);
@@ -357,6 +398,7 @@ ReachableExpansionResult ReachableExpander::expand(
           cell = geometry_it->second;
           cell.label = SurfaceLabel::Expanded;
           cell.reachability = ReachabilityLabel::InferredReachable;
+          cell.support_component_id = supportComponentForCell(components, neighbor, options_);
           cell.confidence = std::max(cell.confidence, 0.5);
           result.reachability[neighbor] = ReachabilityLabel::InferredReachable;
           ++result.inferred_cell_count;
@@ -430,6 +472,7 @@ ReachableExpansionResult ReachableExpander::expand(
             filled.support = {candidate.x, candidate.y, candidate.z - 1};
             filled.label = SurfaceLabel::Expanded;
             filled.reachability = ReachabilityLabel::LowConfidenceReachable;
+            filled.support_component_id = supportComponentForCell(components, candidate, options_);
             filled.height_m = geometry_it == geometry_cells.end() ?
               average_height : geometry_it->second.height_m;
             filled.confidence = std::max(filled.confidence, 0.35);
@@ -463,7 +506,19 @@ ReachableExpansionResult ReachableExpander::expand(
     cell.support = {seed.x, seed.y, seed.z - 1};
     cell.label = SurfaceLabel::TrajectoryBridge;
     cell.reachability = ReachabilityLabel::LowConfidenceReachable;
-    cell.height_m = fallbackHeight(seed, options_.resolution_m);
+    cell.support_component_id = -1;
+    const auto metadata_it = bridge_metadata.find(seed);
+    if (metadata_it != bridge_metadata.end()) {
+      const BridgeCellMetadata & metadata = metadata_it->second;
+      cell.bridge_id = metadata.bridge_id;
+      cell.bridge_order = metadata.bridge_order;
+      cell.bridge_endpoint = metadata.bridge_endpoint;
+      cell.height_m = std::isfinite(metadata.height_m) ?
+        metadata.height_m : fallbackHeight(seed, options_.resolution_m);
+      cell.confidence = std::max(cell.confidence, metadata.confidence);
+    } else {
+      cell.height_m = fallbackHeight(seed, options_.resolution_m);
+    }
     cell.confidence = std::max(cell.confidence, 0.30);
     result.traversable_cells.insert(seed);
     result.reachability[seed] = ReachabilityLabel::LowConfidenceReachable;

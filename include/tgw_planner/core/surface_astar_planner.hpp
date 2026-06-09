@@ -60,6 +60,8 @@ struct SurfacePlanMetrics
   bool final_path_validated{false};
   bool final_path_fallback_to_raw{false};
   std::string final_path_validation_failure;
+  std::uint32_t path_layer_jump_edges{0};
+  double max_path_edge_dz_m{0.0};
 };
 
 struct SurfacePlanResult
@@ -131,6 +133,9 @@ private:
   bool validatePath(
     const NavigationSnapshot & snapshot, const std::vector<Point3> & path,
     std::string & failure_reason) const;
+  bool validateGraphPath(
+    const ExperienceSurfaceGraph & graph, const std::vector<SurfaceNodeId> & node_path,
+    std::string & failure_reason, SurfacePlanMetrics & metrics) const;
   bool hasRequiredFinalClearance(
     const NavigationSnapshot & snapshot, const GridIndex & cell, std::string & failure_reason) const;
   void fillMetrics(const NavigationSnapshot & snapshot, SurfacePlanResult & result) const;

@@ -32,11 +32,24 @@ struct SurfaceCell
   GridIndex support;
   SurfaceLabel label{SurfaceLabel::Unknown};
   ReachabilityLabel reachability{ReachabilityLabel::Unknown};
+  int support_component_id{-1};
+  int bridge_id{-1};
+  int bridge_order{-1};
   double height_m{0.0};
   double slope_m{0.0};
   double confidence{0.0};
   bool body_obstructed{false};
   bool hole_filled{false};
+  bool bridge_endpoint{false};
+};
+
+struct BridgeCellMetadata
+{
+  int bridge_id{-1};
+  int bridge_order{-1};
+  bool bridge_endpoint{false};
+  double height_m{0.0};
+  double confidence{0.30};
 };
 
 struct SurfaceMap
