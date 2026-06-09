@@ -133,6 +133,25 @@ const HybridEdge * findEdge(
   return nullptr;
 }
 
+PathPointKind nodePathKind(
+  const HybridGraph & graph, const std::vector<std::uint32_t> & path, std::size_t index)
+{
+  if (index > 0U) {
+    const HybridEdge * edge = findEdge(graph, path[index - 1U], path[index]);
+    if (edge != nullptr && edge->kind == HybridEdgeKind::Portal) {
+      return PathPointKind::Portal;
+    }
+  }
+  if (index + 1U < path.size()) {
+    const HybridEdge * edge = findEdge(graph, path[index], path[index + 1U]);
+    if (edge != nullptr && edge->kind == HybridEdgeKind::Portal) {
+      return PathPointKind::Portal;
+    }
+  }
+  const HybridNode & node = graph.nodes[path[index]];
+  return node.kind == HybridNodeKind::Backbone ? PathPointKind::Backbone : PathPointKind::Surface;
+}
+
 HybridGraph buildHybridGraph(
   const ExperienceSurfaceGraph & surface_graph,
   const ExperienceBackboneGraph & backbone_graph,
@@ -364,9 +383,11 @@ SurfacePlanResult HybridExperiencePlanner::plan(
   result.metrics.selected_total_hybrid_cost = cost[goal_id];
   result.raw_path.reserve(hybrid_path.size());
   result.path.reserve(hybrid_path.size());
-  for (const std::uint32_t node_id : hybrid_path) {
+  result.path_kinds.reserve(hybrid_path.size());
+  for (std::size_t i = 0U; i < hybrid_path.size(); ++i) {
+    const std::uint32_t node_id = hybrid_path[i];
     const HybridNode & node = graph.nodes[node_id];
-    appendPoint(result.path, node.point);
+    appendPathPoint(result, node.point, nodePathKind(graph, hybrid_path, i));
     appendPoint(result.raw_path, node.point);
     if (node.kind == HybridNodeKind::Surface) {
       const SurfaceNode * surface_node = surface_graph.node(node.surface_id);
@@ -447,6 +468,24 @@ void HybridExperiencePlanner::appendPoint(std::vector<Point3> & out, const Point
     return;
   }
   out.push_back(point);
+}
+
+void HybridExperiencePlanner::appendPathPoint(
+  SurfacePlanResult & result, const Point3 & point, PathPointKind kind) const
+{
+  if (!result.path.empty() && xyDistance(result.path.back(), point) < 1.0e-6 &&
+    std::abs(result.path.back().z - point.z) < 1.0e-6)
+  {
+    if (!result.path_kinds.empty() &&
+      result.path_kinds.back() != PathPointKind::Portal &&
+      kind == PathPointKind::Portal)
+    {
+      result.path_kinds.back() = kind;
+    }
+    return;
+  }
+  result.path.push_back(point);
+  result.path_kinds.push_back(kind);
 }
 
 double HybridExperiencePlanner::pathLength(const std::vector<Point3> & path) const

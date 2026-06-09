@@ -33,6 +33,7 @@ public:
 private:
   Point3 surfacePoint(const ExperienceSurfaceGraph & graph, SurfaceNodeId node_id) const;
   void appendPoint(std::vector<Point3> & out, const Point3 & point) const;
+  void appendPathPoint(SurfacePlanResult & result, const Point3 & point, PathPointKind kind) const;
   double pathLength(const std::vector<Point3> & path) const;
   void fillPathMetrics(SurfacePlanResult & result) const;
 

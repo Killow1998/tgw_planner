@@ -88,6 +88,14 @@ struct SurfacePlanMetrics
   double selected_total_hybrid_cost{0.0};
 };
 
+enum class PathPointKind
+{
+  Unknown,
+  Surface,
+  Backbone,
+  Portal
+};
+
 struct SurfacePlanResult
 {
   bool success{false};
@@ -96,6 +104,7 @@ struct SurfacePlanResult
   std::vector<Point3> raw_path;
   std::vector<GridIndex> cells;
   std::vector<Point3> path;
+  std::vector<PathPointKind> path_kinds;
   std::vector<Point3> debug_start_portal_candidates;
   std::vector<Point3> debug_goal_portal_candidates;
   std::vector<Point3> debug_selected_start_portal;

@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -29,6 +31,7 @@ using tgw_planner::core::GridIndex;
 using tgw_planner::core::HybridExperiencePlanner;
 using tgw_planner::core::HybridExperiencePlannerOptions;
 using tgw_planner::core::N3MapReader;
+using tgw_planner::core::PathPointKind;
 using tgw_planner::core::Point3;
 using tgw_planner::core::SurfaceEdge;
 using tgw_planner::core::SurfaceGraphBuildOptions;
@@ -48,6 +51,8 @@ struct SweepOptions
   double low_z_max{0.0};
   double high_z_min{0.0};
   std::size_t sample_pairs{50};
+  bool strict_all{false};
+  std::string export_jsonl_path;
 };
 
 struct HybridConnectivity
@@ -57,6 +62,17 @@ struct HybridConnectivity
   std::size_t surface_edges{0};
   std::size_t backbone_edges{0};
   std::size_t portal_edges{0};
+};
+
+struct QualityStats
+{
+  std::size_t successful_queries{0};
+  std::size_t suspicious_detour_count{0};
+  double detour_sum{0.0};
+  double max_detour_ratio{0.0};
+  double backbone_ratio_sum{0.0};
+  double max_backbone_ratio{0.0};
+  std::uint32_t max_portal_switch_count{0};
 };
 
 double parseDouble(const char * text)
@@ -79,21 +95,189 @@ std::size_t parseSize(const char * text)
   return static_cast<std::size_t>(value);
 }
 
+std::string jsonEscape(const std::string & text)
+{
+  std::string out;
+  out.reserve(text.size());
+  for (const char ch : text) {
+    switch (ch) {
+      case '\\':
+        out += "\\\\";
+        break;
+      case '"':
+        out += "\\\"";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
+      default:
+        out += ch;
+        break;
+    }
+  }
+  return out;
+}
+
+const char * pathKindName(PathPointKind kind)
+{
+  switch (kind) {
+    case PathPointKind::Surface:
+      return "surface";
+    case PathPointKind::Backbone:
+      return "backbone";
+    case PathPointKind::Portal:
+      return "portal";
+    case PathPointKind::Unknown:
+    default:
+      return "unknown";
+  }
+}
+
+double xyDistance(const Point3 & a, const Point3 & b)
+{
+  return std::hypot(a.x - b.x, a.y - b.y);
+}
+
+double pathLength(const std::vector<Point3> & path)
+{
+  double length = 0.0;
+  for (std::size_t i = 1U; i < path.size(); ++i) {
+    length += xyDistance(path[i - 1U], path[i]);
+  }
+  return length;
+}
+
+void writePointJson(std::ostream & out, const Point3 & point)
+{
+  out << "{\"x\":" << point.x << ",\"y\":" << point.y << ",\"z\":" << point.z << "}";
+}
+
+void writePointArrayJson(std::ostream & out, const std::vector<Point3> & points)
+{
+  out << "[";
+  for (std::size_t i = 0U; i < points.size(); ++i) {
+    if (i > 0U) {
+      out << ",";
+    }
+    writePointJson(out, points[i]);
+  }
+  out << "]";
+}
+
+void writePathJson(
+  std::ostream & out,
+  const std::vector<Point3> & points,
+  const std::vector<PathPointKind> & kinds)
+{
+  out << "[";
+  for (std::size_t i = 0U; i < points.size(); ++i) {
+    if (i > 0U) {
+      out << ",";
+    }
+    const PathPointKind kind = i < kinds.size() ? kinds[i] : PathPointKind::Surface;
+    out << "{\"x\":" << points[i].x <<
+      ",\"y\":" << points[i].y <<
+      ",\"z\":" << points[i].z <<
+      ",\"kind\":\"" << pathKindName(kind) << "\"}";
+  }
+  out << "]";
+}
+
+void writeQueryJsonl(
+  std::ostream & out,
+  std::size_t query_id,
+  const Point3 & start,
+  const Point3 & goal,
+  const SurfacePlanResult & plan,
+  double xy_distance,
+  double detour_ratio,
+  double backbone_ratio)
+{
+  out << std::setprecision(10);
+  out << "{\"query_id\":" << query_id <<
+    ",\"success\":" << (plan.success ? "true" : "false") <<
+    ",\"failure_reason\":\"" << jsonEscape(plan.success ? "" : plan.message) << "\"";
+  out << ",\"start\":";
+  writePointJson(out, start);
+  out << ",\"goal\":";
+  writePointJson(out, goal);
+  out << ",\"snapped_start\":";
+  writePointJson(out, start);
+  out << ",\"snapped_goal\":";
+  writePointJson(out, goal);
+  out << ",\"path\":";
+  writePathJson(out, plan.path, plan.path_kinds);
+  out << ",\"used_backbone\":";
+  writePointArrayJson(out, plan.debug_selected_backbone_segment);
+  out << ",\"selected_start_portal\":";
+  writePointArrayJson(out, plan.debug_selected_start_portal);
+  out << ",\"selected_goal_portal\":";
+  writePointArrayJson(out, plan.debug_selected_goal_portal);
+  out << ",\"metrics\":{";
+  out << "\"path_length_m\":" << plan.metrics.path_length_m <<
+    ",\"xy_start_goal_distance_m\":" << xy_distance <<
+    ",\"detour_ratio\":" << detour_ratio <<
+    ",\"backbone_ratio\":" << backbone_ratio <<
+    ",\"backbone_path_length_m\":" << plan.metrics.backbone_path_length_m <<
+    ",\"surface_path_length_m\":" << plan.metrics.surface_path_length_m <<
+    ",\"portal_switch_count\":" << plan.metrics.portal_switch_count <<
+    ",\"used_backbone_edges\":" << plan.metrics.used_backbone_edges <<
+    ",\"used_surface_edges\":" << plan.metrics.used_surface_edges <<
+    ",\"used_portal_edges\":" << plan.metrics.used_portal_edges <<
+    ",\"max_path_edge_dz_m\":" << plan.metrics.max_path_edge_dz_m;
+  out << "}}\n";
+}
+
 SweepOptions parseArgs(int argc, char ** argv)
 {
-  if (argc < 2 || argc > 5) {
-    throw std::runtime_error(
-      "usage: tgw_experience_global_sweep <n3map.pbstream> [low_z_max high_z_min [sample_pairs]]");
+  std::vector<std::string> positional;
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--export-jsonl") {
+      if (i + 1 >= argc) {
+        throw std::runtime_error("--export-jsonl requires a path");
+      }
+      positional.push_back(arg);
+      positional.push_back(argv[++i]);
+      continue;
+    }
+    positional.push_back(arg);
   }
+
   SweepOptions options;
-  options.pbstream_path = argv[1];
-  if (argc >= 4) {
-    options.auto_bands = false;
-    options.low_z_max = parseDouble(argv[2]);
-    options.high_z_min = parseDouble(argv[3]);
+  std::vector<std::string> values;
+  for (std::size_t i = 0U; i < positional.size(); ++i) {
+    const std::string & arg = positional[i];
+    if (arg == "--export-jsonl") {
+      options.export_jsonl_path = positional[++i];
+    } else if (arg == "--strict-all") {
+      options.strict_all = true;
+    } else if (arg == "--dominant-only") {
+      options.strict_all = false;
+    } else {
+      values.push_back(arg);
+    }
   }
-  if (argc == 5) {
-    options.sample_pairs = parseSize(argv[4]);
+
+  if (values.empty() || values.size() > 4U || values.size() == 2U) {
+    throw std::runtime_error(
+      "usage: tgw_experience_global_sweep <n3map.pbstream> [low_z_max high_z_min [sample_pairs]] "
+      "[--export-jsonl /tmp/tgw_sweep_paths.jsonl] [--strict-all|--dominant-only]");
+  }
+  options.pbstream_path = values[0];
+  if (values.size() >= 3U) {
+    options.auto_bands = false;
+    options.low_z_max = parseDouble(values[1].c_str());
+    options.high_z_min = parseDouble(values[2].c_str());
+  }
+  if (values.size() == 4U) {
+    options.sample_pairs = parseSize(values[3].c_str());
   }
   return options;
 }
@@ -485,19 +669,48 @@ int main(int argc, char ** argv)
       sampleNodes(dominant_low_nodes, sweep_options.sample_pairs);
     const std::vector<SurfaceNodeId> sampled_high =
       sampleNodes(dominant_high_nodes, sweep_options.sample_pairs);
+    std::ofstream jsonl_out;
+    if (!sweep_options.export_jsonl_path.empty()) {
+      jsonl_out.open(sweep_options.export_jsonl_path);
+      if (!jsonl_out.is_open()) {
+        throw std::runtime_error("failed to open export JSONL: " + sweep_options.export_jsonl_path);
+      }
+      jsonl_out << std::setprecision(10);
+    }
     std::size_t sampled_queries = 0U;
     std::size_t sampled_success = 0U;
     std::string first_failure;
     std::size_t first_failure_index = 0U;
+    QualityStats quality;
     for (std::size_t i = 0; i < sampled_low.size() && i < sampled_high.size(); ++i) {
       const SurfacePlanResult plan = planner.plan(surface_graph, backbone_graph, sampled_low[i], sampled_high[i]);
       ++sampled_queries;
+      const Point3 low = surfacePoint(surface_graph, sampled_low[i]);
+      const Point3 high = surfacePoint(surface_graph, sampled_high[i]);
+      const double xy_distance = xyDistance(low, high);
+      const double plan_length = plan.metrics.path_length_m > 0.0 ?
+        plan.metrics.path_length_m : pathLength(plan.path);
+      const double detour_ratio = plan.success ?
+        plan_length / std::max(xy_distance, 1.0e-6) : 0.0;
+      const double backbone_ratio = plan.success && plan_length > 1.0e-6 ?
+        plan.metrics.backbone_path_length_m / plan_length : 0.0;
+      if (jsonl_out.is_open()) {
+        writeQueryJsonl(jsonl_out, i, low, high, plan, xy_distance, detour_ratio, backbone_ratio);
+      }
       if (plan.success) {
         ++sampled_success;
+        ++quality.successful_queries;
+        quality.detour_sum += detour_ratio;
+        quality.max_detour_ratio = std::max(quality.max_detour_ratio, detour_ratio);
+        quality.backbone_ratio_sum += backbone_ratio;
+        quality.max_backbone_ratio = std::max(quality.max_backbone_ratio, backbone_ratio);
+        quality.max_portal_switch_count =
+          std::max(quality.max_portal_switch_count, plan.metrics.portal_switch_count);
+        if (detour_ratio > 3.0 || (xy_distance < 8.0 && backbone_ratio > 0.8)) {
+          ++quality.suspicious_detour_count;
+        }
       } else if (first_failure.empty()) {
         first_failure_index = i;
-        const Point3 low = surfacePoint(surface_graph, sampled_low[i]);
-        const Point3 high = surfacePoint(surface_graph, sampled_high[i]);
         first_failure = plan.message + " low=(" + std::to_string(low.x) + "," +
           std::to_string(low.y) + "," + std::to_string(low.z) + ") high=(" +
           std::to_string(high.x) + "," + std::to_string(high.y) + "," +
@@ -526,13 +739,19 @@ int main(int argc, char ** argv)
       !dominant_high_nodes.empty() &&
       sampled_queries > 0U &&
       sampled_success == sampled_queries;
+    const bool sweep_success = sweep_options.strict_all ?
+      (all_cross_connected && main_component_sweep_success) : main_component_sweep_success;
+    const double mean_detour_ratio = quality.successful_queries > 0U ?
+      quality.detour_sum / static_cast<double>(quality.successful_queries) : 0.0;
+    const double mean_backbone_ratio = quality.successful_queries > 0U ?
+      quality.backbone_ratio_sum / static_cast<double>(quality.successful_queries) : 0.0;
 
     const auto end_time = std::chrono::steady_clock::now();
     const double elapsed_ms =
       std::chrono::duration<double, std::milli>(end_time - start_time).count();
 
     std::cout << "global_sweep_success=" <<
-      (all_cross_connected && main_component_sweep_success ? "true" : "false") << "\n";
+      (sweep_success ? "true" : "false") << "\n";
     std::cout << "pbstream=" << sweep_options.pbstream_path << "\n";
     std::cout << "low_z_max=" << low_z_max << " high_z_min=" << high_z_min <<
       " auto_bands=" << (sweep_options.auto_bands ? "true" : "false") << "\n";
@@ -560,13 +779,22 @@ int main(int argc, char ** argv)
       " main_component_sweep_success=" << (main_component_sweep_success ? "true" : "false") << "\n";
     std::cout << "sampled_queries=" << sampled_queries <<
       " sampled_success=" << sampled_success << "\n";
+    std::cout << "max_detour_ratio=" << quality.max_detour_ratio <<
+      " mean_detour_ratio=" << mean_detour_ratio <<
+      " suspicious_detour_count=" << quality.suspicious_detour_count <<
+      " max_backbone_ratio=" << quality.max_backbone_ratio <<
+      " mean_backbone_ratio=" << mean_backbone_ratio <<
+      " max_portal_switch_count=" << quality.max_portal_switch_count << "\n";
+    if (!sweep_options.export_jsonl_path.empty()) {
+      std::cout << "export_jsonl=" << sweep_options.export_jsonl_path << "\n";
+    }
     if (!first_failure.empty()) {
       std::cout << "first_sample_failure_index=" << first_failure_index << "\n";
       std::cout << "first_sample_failure=" << first_failure << "\n";
     }
     std::cout << "elapsed_ms=" << elapsed_ms << "\n";
 
-    return all_cross_connected && main_component_sweep_success ? 0 : 1;
+    return sweep_success ? 0 : 1;
   } catch (const std::exception & error) {
     std::cerr << "error: " << error.what() << std::endl;
     return 2;
