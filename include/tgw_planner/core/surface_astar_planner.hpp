@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,18 @@ struct SurfacePlanMetrics
   std::string final_path_validation_failure;
   std::uint32_t path_layer_jump_edges{0};
   double max_path_edge_dz_m{0.0};
+  std::uint32_t start_portal_candidates{0};
+  std::uint32_t goal_portal_candidates{0};
+  std::uint32_t evaluated_portal_pairs{0};
+  std::uint32_t selected_start_portal_id{std::numeric_limits<std::uint32_t>::max()};
+  std::uint32_t selected_goal_portal_id{std::numeric_limits<std::uint32_t>::max()};
+  std::uint32_t selected_start_backbone_node{std::numeric_limits<std::uint32_t>::max()};
+  std::uint32_t selected_goal_backbone_node{std::numeric_limits<std::uint32_t>::max()};
+  std::uint32_t selected_backbone_index_delta{0};
+  double selected_backbone_length_m{0.0};
+  double selected_start_surface_leg_m{0.0};
+  double selected_goal_surface_leg_m{0.0};
+  double selected_total_hybrid_cost{0.0};
 };
 
 struct SurfacePlanResult
@@ -72,6 +85,11 @@ struct SurfacePlanResult
   std::vector<Point3> raw_path;
   std::vector<GridIndex> cells;
   std::vector<Point3> path;
+  std::vector<Point3> debug_start_portal_candidates;
+  std::vector<Point3> debug_goal_portal_candidates;
+  std::vector<Point3> debug_selected_start_portal;
+  std::vector<Point3> debug_selected_goal_portal;
+  std::vector<Point3> debug_selected_backbone_segment;
   SurfacePlanMetrics metrics;
 };
 

@@ -338,6 +338,44 @@ std::string toStatsJson(
   return json.str();
 }
 
+std::string toPlanRouteStatsJson(
+  const SurfacePlanResult & plan,
+  double search_time_ms,
+  double start_snap_distance_m,
+  double goal_snap_distance_m)
+{
+  std::ostringstream json;
+  json << "{";
+  json << "\"kind\":\"plan_route\"";
+  json << ",\"success\":" << (plan.success ? "true" : "false");
+  json << ",\"message\":\"" << jsonEscape(plan.message) << "\"";
+  json << ",\"search_time_ms\":" << search_time_ms;
+  json << ",\"start_snap_distance_m\":" << start_snap_distance_m;
+  json << ",\"goal_snap_distance_m\":" << goal_snap_distance_m;
+  json << ",\"path_waypoints\":" << plan.path.size();
+  json << ",\"path_length_m\":" << plan.metrics.path_length_m;
+  json << ",\"max_path_edge_dz_m\":" << plan.metrics.max_path_edge_dz_m;
+  json << ",\"start_portal_candidates\":" << plan.metrics.start_portal_candidates;
+  json << ",\"goal_portal_candidates\":" << plan.metrics.goal_portal_candidates;
+  json << ",\"evaluated_portal_pairs\":" << plan.metrics.evaluated_portal_pairs;
+  json << ",\"selected_start_portal_id\":" << plan.metrics.selected_start_portal_id;
+  json << ",\"selected_goal_portal_id\":" << plan.metrics.selected_goal_portal_id;
+  json << ",\"selected_start_backbone_node\":" <<
+    plan.metrics.selected_start_backbone_node;
+  json << ",\"selected_goal_backbone_node\":" <<
+    plan.metrics.selected_goal_backbone_node;
+  json << ",\"selected_backbone_index_delta\":" <<
+    plan.metrics.selected_backbone_index_delta;
+  json << ",\"selected_backbone_length_m\":" << plan.metrics.selected_backbone_length_m;
+  json << ",\"selected_start_surface_leg_m\":" <<
+    plan.metrics.selected_start_surface_leg_m;
+  json << ",\"selected_goal_surface_leg_m\":" <<
+    plan.metrics.selected_goal_surface_leg_m;
+  json << ",\"selected_total_hybrid_cost\":" << plan.metrics.selected_total_hybrid_cost;
+  json << "}";
+  return json.str();
+}
+
 sensor_msgs::msg::PointCloud2 makePointCloud(
   const rclcpp::Time & stamp,
   const std::string & frame_id,
@@ -553,7 +591,7 @@ public:
     declare_parameter<double>("backbone_max_portal_xy_distance_m", 1.20);
     declare_parameter<double>("backbone_max_portal_height_error_m", 0.45);
     declare_parameter<double>("backbone_min_portal_clearance_m", 0.0);
-    declare_parameter<int>("hybrid_max_portal_candidates_per_side", 1);
+    declare_parameter<int>("hybrid_max_portal_candidates_per_side", 64);
     declare_parameter<double>("planner_multifloor_z_range_m", 1.50);
     declare_parameter<int>("max_trajectory_points", 200000);
     declare_parameter<int>("max_geometry_debug_points", 400000);
@@ -597,6 +635,16 @@ public:
       "/tgw_experience/backbone_cloud", latched_qos);
     portal_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/tgw_experience/portal_cloud", latched_qos);
+    start_portal_candidates_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/tgw_experience/start_portal_candidates", latched_qos);
+    goal_portal_candidates_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/tgw_experience/goal_portal_candidates", latched_qos);
+    selected_start_portal_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/tgw_experience/selected_start_portal", latched_qos);
+    selected_goal_portal_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/tgw_experience/selected_goal_portal", latched_qos);
+    selected_backbone_segment_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/tgw_experience/selected_backbone_segment", latched_qos);
     path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_experience/path", latched_qos);
     raw_path_pub_ = create_publisher<nav_msgs::msg::Path>(
       "/tgw_experience/raw_path", latched_qos);
@@ -1044,6 +1092,18 @@ private:
     stats.low_clearance_samples = plan.metrics.low_clearance_samples;
     stats.start_snap_distance_m = start_snap_distance_m;
     stats.goal_snap_distance_m = goal_snap_distance_m;
+    stats.start_portal_candidates = plan.metrics.start_portal_candidates;
+    stats.goal_portal_candidates = plan.metrics.goal_portal_candidates;
+    stats.evaluated_portal_pairs = plan.metrics.evaluated_portal_pairs;
+    stats.selected_start_portal_id = plan.metrics.selected_start_portal_id;
+    stats.selected_goal_portal_id = plan.metrics.selected_goal_portal_id;
+    stats.selected_start_backbone_node = plan.metrics.selected_start_backbone_node;
+    stats.selected_goal_backbone_node = plan.metrics.selected_goal_backbone_node;
+    stats.selected_backbone_index_delta = plan.metrics.selected_backbone_index_delta;
+    stats.selected_backbone_length_m = plan.metrics.selected_backbone_length_m;
+    stats.selected_start_surface_leg_m = plan.metrics.selected_start_surface_leg_m;
+    stats.selected_goal_surface_leg_m = plan.metrics.selected_goal_surface_leg_m;
+    stats.selected_total_hybrid_cost = plan.metrics.selected_total_hybrid_cost;
     stats.map_resolution_m = snapshot_.resolution_m;
     stats.robot_radius_m = 0.5 * get_parameter("robot_width_m").as_double();
     return stats;
@@ -1209,6 +1269,28 @@ private:
       get_parameter("map_frame").as_string() : snapshot_.map_frame;
     path_pub_->publish(makePathMsg(stamp, frame_id, plan.path));
     raw_path_pub_->publish(makePathMsg(stamp, frame_id, plan.raw_path));
+    start_portal_candidates_pub_->publish(
+      makePointCloud(stamp, frame_id, plan.debug_start_portal_candidates));
+    goal_portal_candidates_pub_->publish(
+      makePointCloud(stamp, frame_id, plan.debug_goal_portal_candidates));
+    selected_start_portal_pub_->publish(
+      makePointCloud(stamp, frame_id, plan.debug_selected_start_portal));
+    selected_goal_portal_pub_->publish(
+      makePointCloud(stamp, frame_id, plan.debug_selected_goal_portal));
+    selected_backbone_segment_pub_->publish(
+      makePointCloud(stamp, frame_id, plan.debug_selected_backbone_segment));
+  }
+
+  void publishPlanRouteStatsJson(
+    const SurfacePlanResult & plan,
+    double search_time_ms,
+    double start_snap_distance_m,
+    double goal_snap_distance_m)
+  {
+    std_msgs::msg::String msg;
+    msg.data = toPlanRouteStatsJson(
+      plan, search_time_ms, start_snap_distance_m, goal_snap_distance_m);
+    stats_json_pub_->publish(msg);
   }
 
   std::string markerFrameId() const
@@ -1323,6 +1405,8 @@ private:
       get_parameter("map_frame").as_string() : snapshot_.map_frame;
     response->path = makePathMsg(now(), frame_id, plan.path);
     publishPlanDebug(plan);
+    publishPlanRouteStatsJson(
+      plan, search_time_ms, stats.start_snap_distance_m, stats.goal_snap_distance_m);
     LOG(INFO)
       << "PlanPath"
       << " success=" << (plan.success ? "true" : "false")
@@ -1347,6 +1431,11 @@ private:
     const std::string frame_id = markerFrameId();
     path_pub_->publish(makePathMsg(stamp, frame_id, {}));
     raw_path_pub_->publish(makePathMsg(stamp, frame_id, {}));
+    start_portal_candidates_pub_->publish(makePointCloud(stamp, frame_id, {}));
+    goal_portal_candidates_pub_->publish(makePointCloud(stamp, frame_id, {}));
+    selected_start_portal_pub_->publish(makePointCloud(stamp, frame_id, {}));
+    selected_goal_portal_pub_->publish(makePointCloud(stamp, frame_id, {}));
+    selected_backbone_segment_pub_->publish(makePointCloud(stamp, frame_id, {}));
     start_marker_pub_->publish(makeDeleteAllMarker(frame_id));
     goal_marker_pub_->publish(makeDeleteAllMarker(frame_id));
     plan_status_marker_pub_->publish(makeDeleteAllMarker(frame_id));
@@ -1398,6 +1487,8 @@ private:
     const SurfacePlanResult plan = planBetween(
       clicked_start_, clicked_goal_, &stats, &search_time_ms);
     publishPlanDebug(plan);
+    publishPlanRouteStatsJson(
+      plan, search_time_ms, stats.start_snap_distance_m, stats.goal_snap_distance_m);
     publishPlanStatusMarker(plan);
     LOG(INFO)
       << "clicked PlanPath"
@@ -1627,6 +1718,11 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr planner_component_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr backbone_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr portal_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr start_portal_candidates_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr goal_portal_candidates_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr selected_start_portal_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr selected_goal_portal_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr selected_backbone_segment_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr raw_path_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;

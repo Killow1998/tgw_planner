@@ -31,6 +31,7 @@ void ExperienceBackboneGraph::build(
 {
   nodes_.clear();
   edges_.clear();
+  cumulative_length_m_.clear();
   portals_.clear();
   portals_by_component_.clear();
   options_ = options;
@@ -82,6 +83,7 @@ void ExperienceBackboneGraph::build(
     have_last_kept = true;
   }
 
+  cumulative_length_m_.assign(nodes_.size(), 0.0);
   for (std::size_t i = 1U; i < nodes_.size(); ++i) {
     const BackboneNode & from = nodes_[i - 1U];
     const BackboneNode & to = nodes_[i];
@@ -96,6 +98,7 @@ void ExperienceBackboneGraph::build(
     edge.slope = slope;
     edge.confidence = from.has_projected_support && to.has_projected_support ? 1.0 : 0.45;
     edges_.push_back(edge);
+    cumulative_length_m_[i] = cumulative_length_m_[i - 1U] + length_xy;
     metrics_.max_backbone_edge_dz_m =
       std::max(metrics_.max_backbone_edge_dz_m, std::abs(dz));
     metrics_.max_backbone_edge_slope = std::max(metrics_.max_backbone_edge_slope, slope);
@@ -193,13 +196,16 @@ double ExperienceBackboneGraph::pathLengthBetween(BackboneNodeId from, BackboneN
   if (!isValid(from) || !isValid(to) || from == to) {
     return 0.0;
   }
+  if (cumulative_length_m_.size() == nodes_.size()) {
+    return std::abs(cumulative_length_m_[from.id] - cumulative_length_m_[to.id]);
+  }
   const std::uint32_t begin = std::min(from.id, to.id);
   const std::uint32_t end = std::max(from.id, to.id);
-  double length = 0.0;
+  double fallback_length = 0.0;
   for (std::uint32_t i = begin + 1U; i <= end; ++i) {
-    length += xyDistance(nodes_[i - 1U].path_position, nodes_[i].path_position);
+    fallback_length += xyDistance(nodes_[i - 1U].path_position, nodes_[i].path_position);
   }
-  return length;
+  return fallback_length;
 }
 
 const ExperienceBackboneMetrics & ExperienceBackboneGraph::metrics() const

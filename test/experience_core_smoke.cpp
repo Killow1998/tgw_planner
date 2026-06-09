@@ -27,6 +27,7 @@ using tgw_planner::core::ExperienceSurfaceBuilder;
 using tgw_planner::core::ExperienceSurfaceBuilderOptions;
 using tgw_planner::core::GridIndex;
 using tgw_planner::core::HybridExperiencePlanner;
+using tgw_planner::core::HybridExperiencePlannerOptions;
 using tgw_planner::core::N3KeyframeLite;
 using tgw_planner::core::N3MapReader;
 using tgw_planner::core::N3NavResource;
@@ -594,6 +595,107 @@ void testHybridPlannerUsesDenseTrajectoryBackboneAcrossIslands()
   require(plan.path.size() > 4U, "hybrid path should include surface and backbone waypoints");
 }
 
+void testHybridPlannerOptimizesPortalPairCost()
+{
+  ExperienceSnapshot snapshot;
+  snapshot.map_frame = "map";
+  snapshot.resolution_m = 1.0;
+
+  auto add_surface_cell = [&](const GridIndex & cell, double height_m, int support_component_id) {
+    SurfaceCell surface_cell;
+    surface_cell.cell = cell;
+    surface_cell.label = SurfaceLabel::Expanded;
+    surface_cell.reachability = ReachabilityLabel::InferredReachable;
+    surface_cell.support_component_id = support_component_id;
+    surface_cell.height_m = height_m;
+    surface_cell.confidence = 1.0;
+    snapshot.surface.surface_cells[cell] = surface_cell;
+    snapshot.surface.traversable_cells.insert(cell);
+    snapshot.reachability[cell] = surface_cell.reachability;
+  };
+
+  for (int x = 0; x <= 2; ++x) {
+    add_surface_cell({x, 0, 0}, 0.0, 1);
+  }
+  for (int x = 10; x <= 12; ++x) {
+    add_surface_cell({x, 0, 0}, 0.0, 2);
+  }
+
+  snapshot.clearance.compute(
+    snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, snapshot.resolution_m);
+  snapshot.risk.compute(snapshot.surface, snapshot.clearance);
+
+  SurfacePlannerOptions planner_options;
+  planner_options.require_footprint_support = false;
+  SurfaceTransitionValidator validator(planner_options);
+  ExperienceSurfaceGraph surface_graph;
+  surface_graph.build(snapshot, validator);
+
+  const SurfaceNodeId start = surface_graph.nodeIdForCell({0, 0, 0});
+  const SurfaceNodeId goal = surface_graph.nodeIdForCell({12, 0, 0});
+  require(surface_graph.isValid(start), "portal pair test start node should exist");
+  require(surface_graph.isValid(goal), "portal pair test goal node should exist");
+  require(
+    !surface_graph.sameComponent(start, goal),
+    "portal pair test islands should be disconnected by surface graph");
+
+  N3NavResource resource;
+  resource.map_frame = "map";
+  resource.body_frame = "base";
+  resource.has_native_dense_trajectory = true;
+  resource.dense_trajectory_source = "native";
+  TrajectoryProjectionResult projection;
+
+  auto add_backbone_sample = [&](int seq, const Point3 & support) {
+    N3TrajectoryPose pose;
+    pose.seq = static_cast<std::uint64_t>(seq);
+    pose.timestamp = static_cast<double>(seq);
+    pose.pose_world_lidar.translation = {support.x, support.y, support.z + 0.50};
+    resource.dense_trajectory.push_back(pose);
+
+    ProjectedSupportSample sample;
+    sample.seq = pose.seq;
+    sample.timestamp = pose.timestamp;
+    sample.trajectory_position = pose.pose_world_lidar.translation;
+    sample.support_position = support;
+    projection.accepted_projected_support_samples.push_back(sample);
+  };
+
+  add_backbone_sample(0, {0.5, 0.5, 0.0});
+  for (int i = 1; i < 49; ++i) {
+    add_backbone_sample(i, {100.0 + static_cast<double>(i), 20.0, 0.0});
+  }
+  add_backbone_sample(49, {10.5, 0.5, 0.0});
+  add_backbone_sample(50, {2.5, 0.5, 0.0});
+  for (int i = 51; i < 99; ++i) {
+    add_backbone_sample(i, {200.0 + static_cast<double>(i), -20.0, 0.0});
+  }
+  add_backbone_sample(99, {12.5, 0.5, 0.0});
+
+  ExperienceBackboneOptions backbone_options;
+  backbone_options.min_node_spacing_m = 0.0;
+  backbone_options.max_portal_xy_distance_m = 0.75;
+  backbone_options.max_portal_height_error_m = 0.20;
+  ExperienceBackboneGraph backbone;
+  backbone.build(resource, projection, surface_graph, backbone_options);
+  require(backbone.portals().size() >= 4U, "portal pair test should expose multiple portals");
+
+  HybridExperiencePlannerOptions hybrid_options;
+  hybrid_options.max_portal_candidates_per_side = 64;
+  const auto plan = HybridExperiencePlanner(planner_options, hybrid_options).plan(
+    surface_graph, backbone, start, goal);
+  require(plan.success, "hybrid planner should find a route through candidate portal pairs");
+  require(
+    plan.metrics.evaluated_portal_pairs >= 4U,
+    "hybrid planner should evaluate multiple portal pairs");
+  require(
+    plan.metrics.selected_backbone_index_delta <= 2U,
+    "hybrid planner should choose the short backbone interval, not the locally nearest endpoints");
+  require(
+    plan.metrics.selected_backbone_length_m < 10.0,
+    "selected backbone leg should be the short optimized pair");
+}
+
 void testExperienceBuilderSkeleton()
 {
   N3MapReader reader;
@@ -966,6 +1068,7 @@ int main()
   testSurfaceGraphRejectsMissingSupportLineage();
   testBridgeEndpointAttachesOnlyToIntendedComponent();
   testHybridPlannerUsesDenseTrajectoryBackboneAcrossIslands();
+  testHybridPlannerOptimizesPortalPairCost();
   testExperienceBuilderSkeleton();
   testReachableExpansionHeightGate();
   testReachableExpansionRejectsBodyObstruction();

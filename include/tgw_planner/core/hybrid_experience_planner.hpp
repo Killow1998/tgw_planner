@@ -11,7 +11,7 @@ namespace tgw_planner::core
 
 struct HybridExperiencePlannerOptions
 {
-  std::size_t max_portal_candidates_per_side{1};
+  std::size_t max_portal_candidates_per_side{64};
 };
 
 class HybridExperiencePlanner

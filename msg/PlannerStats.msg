@@ -47,5 +47,18 @@ uint32 low_clearance_samples
 float64 start_snap_distance_m
 float64 goal_snap_distance_m
 
+uint32 start_portal_candidates
+uint32 goal_portal_candidates
+uint32 evaluated_portal_pairs
+uint32 selected_start_portal_id
+uint32 selected_goal_portal_id
+uint32 selected_start_backbone_node
+uint32 selected_goal_backbone_node
+uint32 selected_backbone_index_delta
+float64 selected_backbone_length_m
+float64 selected_start_surface_leg_m
+float64 selected_goal_surface_leg_m
+float64 selected_total_hybrid_cost
+
 float64 map_resolution_m
 float64 robot_radius_m

@@ -59,6 +59,174 @@ Visualization Manager:
           Use Fixed Frame: true
           Use rainbow: true
           Value: true
+        - Alpha: 0.80
+          Autocompute Intensity Bounds: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: true
+          Name: Backbone
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.05
+          Style: Points
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/backbone_cloud
+          Use Fixed Frame: true
+          Value: true
+        - Alpha: 0.95
+          Autocompute Intensity Bounds: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 255; 255; 0
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: true
+          Name: Portals
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 5
+          Size (m): 0.10
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/portal_cloud
+          Use Fixed Frame: true
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 255; 120; 0
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: true
+          Name: Start Portal Candidates
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 6
+          Size (m): 0.12
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/start_portal_candidates
+          Use Fixed Frame: true
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 180; 80; 255
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: true
+          Name: Goal Portal Candidates
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 6
+          Size (m): 0.12
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/goal_portal_candidates
+          Use Fixed Frame: true
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 255; 0; 0
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: true
+          Name: Selected Portals
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 8
+          Size (m): 0.18
+          Style: Spheres
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/selected_start_portal
+          Use Fixed Frame: true
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 0; 255; 255
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: true
+          Name: Selected Goal Portal
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 8
+          Size (m): 0.18
+          Style: Spheres
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/selected_goal_portal
+          Use Fixed Frame: true
+          Value: true
+        - Alpha: 1
+          Autocompute Intensity Bounds: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: true
+          Name: Selected Backbone Segment
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 5
+          Size (m): 0.10
+          Style: Points
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/selected_backbone_segment
+          Use Fixed Frame: true
+          Value: true
         - Alpha: 0.45
           Autocompute Intensity Bounds: true
           Axis: Z

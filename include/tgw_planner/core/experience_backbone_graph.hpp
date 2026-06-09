@@ -129,6 +129,7 @@ private:
 
   std::vector<BackboneNode> nodes_;
   std::vector<BackboneEdge> edges_;
+  std::vector<double> cumulative_length_m_;
   std::vector<ExperiencePortal> portals_;
   std::unordered_map<int, std::vector<ExperiencePortalId>> portals_by_component_;
   std::vector<ExperiencePortalId> empty_portals_;
