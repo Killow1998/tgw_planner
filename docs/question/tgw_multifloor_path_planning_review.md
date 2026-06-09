@@ -73,15 +73,16 @@ bae4b37 Add ordered bridge connectors for surface graph
 1921f4a Make experience surface graph layer safe
 ```
 
-## Images To Attach
+## Attached RViz Images
 
-The screenshots were uploaded in chat, not available as local PNG files in the
-repo. Please attach the two latest RViz screenshots together with this document.
+The relevant RViz screenshots are stored with this question document.
 
 Image 1:
 
+![same-floor component split](images/01_same_floor_component_split.png)
+
 ```text
-Same-floor query failure before 2262609.
+Same-floor query failure from the latest RViz run.
 RViz text:
 PLAN FAIL: no_path_on_experience_surface_different_planner_components
 GOAL snap about 0.32m
@@ -94,6 +95,8 @@ planner components.
 
 Image 2:
 
+![cross-floor component split](images/02_cross_floor_component_split.png)
+
 ```text
 Cross-floor query failure after layer-safe graph.
 RViz text:
@@ -104,6 +107,22 @@ Visual symptom:
 start is on lower floor, goal is on upper floor. Both snap to reachable
 surfaces, but planner reports different components. This is the remaining
 problem to solve.
+```
+
+Additional historical reference images:
+
+![same-floor split before fix](images/03_same_floor_component_split_before_fix.png)
+
+```text
+Earlier same-floor component split screenshot with GOAL snap about 0.61m.
+This class of failure is expected to be fixed by commit 2262609.
+```
+
+![previous start not on surface failure](images/04_previous_start_not_on_surface.png)
+
+```text
+Earlier snap-distance failure before snap bounds were changed to XY-only.
+This is not the current remaining issue.
 ```
 
 ## Verified Logs For The Two Screenshots
