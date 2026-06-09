@@ -14,6 +14,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 find_package(ament_cmake REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(glog REQUIRED)
 find_package(n3mapping REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
@@ -64,6 +65,7 @@ add_executable(tgw_experience_planner_node
 )
 target_link_libraries(tgw_experience_planner_node
   tgw_planner_core
+  glog::glog
 )
 ament_target_dependencies(tgw_experience_planner_node
   geometry_msgs

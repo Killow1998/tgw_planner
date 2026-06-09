@@ -26,8 +26,6 @@ public:
       std::bind(
         &ClickedPointRouterNode::handleSetMode, this, std::placeholders::_1,
         std::placeholders::_2));
-
-    RCLCPP_INFO(get_logger(), "clicked point router started with mode=%s", mode_.c_str());
   }
 
 private:
@@ -35,10 +33,8 @@ private:
   {
     if (mode_ == "start") {
       start_pub_->publish(*msg);
-      RCLCPP_INFO(get_logger(), "published clicked point as start");
     } else if (mode_ == "goal") {
       goal_pub_->publish(*msg);
-      RCLCPP_INFO(get_logger(), "published clicked point as goal");
     }
   }
 
@@ -54,7 +50,6 @@ private:
     mode_ = request->mode;
     response->success = true;
     response->message = "mode set to " + mode_;
-    RCLCPP_INFO(get_logger(), "click mode set to %s", mode_.c_str());
   }
 
   std::string mode_;
@@ -66,7 +61,9 @@ private:
 
 int main(int argc, char ** argv)
 {
-  rclcpp::init(argc, argv);
+  rclcpp::InitOptions init_options;
+  init_options.auto_initialize_logging(false);
+  rclcpp::init(argc, argv, init_options);
   rclcpp::spin(std::make_shared<ClickedPointRouterNode>());
   rclcpp::shutdown();
   return 0;

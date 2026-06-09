@@ -35,14 +35,26 @@ def generate_launch_description():
                 package="tgw_planner",
                 executable="tgw_experience_planner_node",
                 name="tgw_experience_planner_node",
-                output="screen",
+                output="log",
+                arguments=[
+                    "--ros-args",
+                    "--disable-stdout-logs",
+                    "--disable-rosout-logs",
+                    "--disable-external-lib-logs",
+                ],
                 parameters=[params_file, {"pbstream_path": pbstream_path}],
             ),
             Node(
                 package="tgw_planner",
                 executable="tgw_clicked_point_router_node",
                 name="tgw_clicked_point_router_node",
-                output="screen",
+                output="log",
+                arguments=[
+                    "--ros-args",
+                    "--disable-stdout-logs",
+                    "--disable-rosout-logs",
+                    "--disable-external-lib-logs",
+                ],
                 condition=IfCondition(use_clicked_point_router),
             ),
             Node(

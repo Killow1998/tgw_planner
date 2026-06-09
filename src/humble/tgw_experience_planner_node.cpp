@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -10,6 +11,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include <glog/logging.h>
 
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -32,6 +35,8 @@
 
 namespace
 {
+namespace fs = std::filesystem;
+
 using tgw_planner::core::N3MapReadResult;
 using tgw_planner::core::N3MapReader;
 using tgw_planner::core::N3NavResource;
@@ -59,6 +64,83 @@ struct IntensityPoint
   Point3 point;
   double intensity{0.0};
 };
+
+void cleanupOldLogFiles(const std::string & log_dir, int retention_days)
+{
+  if (retention_days <= 0 || log_dir.empty()) {
+    return;
+  }
+  std::error_code error;
+  if (!fs::exists(log_dir, error)) {
+    return;
+  }
+  const auto cutoff = fs::file_time_type::clock::now() -
+    std::chrono::hours(24 * retention_days);
+  for (const fs::directory_entry & entry : fs::directory_iterator(log_dir, error)) {
+    if (error) {
+      return;
+    }
+    const fs::file_status status = entry.symlink_status(error);
+    if (error || !(fs::is_regular_file(status) || fs::is_symlink(status))) {
+      error.clear();
+      continue;
+    }
+    const auto modified = entry.last_write_time(error);
+    if (error) {
+      error.clear();
+      continue;
+    }
+    if (modified < cutoff) {
+      fs::remove(entry.path(), error);
+      error.clear();
+    }
+  }
+}
+
+std::string resolvePlannerLogDir(const std::string & configured_log_dir)
+{
+  if (configured_log_dir.empty()) {
+    return configured_log_dir;
+  }
+  const fs::path configured(configured_log_dir);
+  if (configured.is_absolute()) {
+    return configured.string();
+  }
+
+  std::error_code error;
+  const fs::path cwd = fs::current_path(error);
+  if (error) {
+    return configured.string();
+  }
+  if (cwd.filename() == "tgw_planner") {
+    return (cwd / configured).string();
+  }
+  const fs::path source_package = cwd / "src" / "tgw_planner";
+  if (fs::is_directory(source_package, error)) {
+    return (source_package / configured).string();
+  }
+  return (cwd / configured).string();
+}
+
+void configurePlannerFileLogging(const std::string & log_dir, int retention_days)
+{
+  const std::string resolved_log_dir = resolvePlannerLogDir(log_dir);
+  if (resolved_log_dir.empty()) {
+    return;
+  }
+  std::error_code error;
+  fs::create_directories(resolved_log_dir, error);
+  if (error) {
+    return;
+  }
+  cleanupOldLogFiles(resolved_log_dir, retention_days);
+  FLAGS_log_dir = resolved_log_dir;
+  FLAGS_logtostderr = false;
+  FLAGS_alsologtostderr = false;
+  FLAGS_colorlogtostderr = false;
+  FLAGS_stderrthreshold = google::GLOG_FATAL;
+  FLAGS_log_link = "";
+}
 
 std::string jsonEscape(const std::string & text)
 {
@@ -439,6 +521,12 @@ public:
     declare_parameter<double>("planner_multifloor_z_range_m", 1.50);
     declare_parameter<int>("max_trajectory_points", 200000);
     declare_parameter<int>("max_geometry_debug_points", 400000);
+    declare_parameter<std::string>("planner_log_dir", "logs");
+    declare_parameter<int>("planner_log_retention_days", 7);
+
+    configurePlannerFileLogging(
+      get_parameter("planner_log_dir").as_string(),
+      static_cast<int>(get_parameter("planner_log_retention_days").as_int()));
 
     const auto latched_qos = rclcpp::QoS(1).transient_local().reliable();
     trajectory_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -515,16 +603,14 @@ private:
       result.error_code = "pbstream_open_failed";
       result.message = "pbstream_path parameter is required";
       publishStats(result, pbstream_path, nullptr, nullptr);
-      RCLCPP_ERROR(get_logger(), "%s", result.message.c_str());
+      LOG(ERROR) << result.message;
       return;
     }
 
     const N3MapReadResult result = reader_.readPbstream(pbstream_path);
     if (!result.success) {
       publishStats(result, pbstream_path, nullptr, nullptr);
-      RCLCPP_ERROR(
-        get_logger(), "pbstream load failed: [%s] %s",
-        result.error_code.c_str(), result.message.c_str());
+      LOG(ERROR) << "pbstream load failed: [" << result.error_code << "] " << result.message;
       return;
     }
 
@@ -558,41 +644,48 @@ private:
     for (const RejectedProjectionSample & sample : projection.rejected_samples) {
       ++rejected_counts[sample.reason];
     }
-    RCLCPP_INFO(
-      get_logger(),
-      "loaded n3map experience resource: keyframes=%zu dense_trajectory=%zu raw_geometry=%zu support_candidates=%zu projected_support=%zu observed_seed=%zu bridge_seed=%zu expanded_reachable=%zu planner_components=%zu largest_planner_component=%zu planner_multifloor_components=%zu rejected_projection=%zu no_support=%zu ambiguous_multifloor=%zu reanchored_support=%zu retry_support=%zu bridge_used_as_expansion_anchor=%zu support_components=%zu anchored_components=%zu rejected_unanchored_component=%zu footprint_rejected=%zu body_obstructed_rejected=%zu anchor_envelope_rejected=%zu hole_filled=%zu frame=%s body=%s",
-      result.resource.keyframes.size(),
-      result.resource.dense_trajectory.size(),
-      build.success ? build.raw_geometry_cell_count : 0U,
-      build.success ? build.support_candidate_count : 0U,
-      projection.projected_support_samples.size(),
-      projection.observed_seed_cells.size(),
-      projection.bridge_seed_cells.size(),
-      build.success ? build.snapshot.surface.traversable_cells.size() : 0U,
-      has_surface_graph_ ? surface_graph_.componentCount() : 0U,
-      has_surface_graph_ ? surface_graph_.largestComponentSize() : 0U,
-      has_surface_graph_ ?
-        surface_graph_.multifloorComponentCount(
-          get_parameter("planner_multifloor_z_range_m").as_double()) : 0U,
-      projection.rejected_samples.size(),
-      rejected_counts["support_projection_failed"],
-      rejected_counts["support_projection_ambiguous_multifloor"],
-      projection.reanchored_support_samples,
-      projection.retry_support_samples,
-      build.success ? build.bridge_used_as_expansion_anchor : 0U,
-      build.success ? build.support_component_count : 0U,
-      build.success ? build.anchored_support_component_count : 0U,
-      build.success ? build.rejected_unanchored_component_cells : 0U,
-      projection.footprint_rejected_samples,
-      build.success ? build.body_obstructed_rejected_count : 0U,
-      build.success ? build.anchor_envelope_rejected_count : 0U,
-      build.success ? build.hole_filled_count : 0U,
-      result.resource.map_frame.c_str(),
-      result.resource.body_frame.c_str());
+    LOG(INFO)
+      << "loaded n3map experience resource"
+      << " keyframes=" << result.resource.keyframes.size()
+      << " dense_trajectory=" << result.resource.dense_trajectory.size()
+      << " raw_geometry=" << (build.success ? build.raw_geometry_cell_count : 0U)
+      << " support_candidates=" << (build.success ? build.support_candidate_count : 0U)
+      << " projected_support=" << projection.projected_support_samples.size()
+      << " observed_seed=" << projection.observed_seed_cells.size()
+      << " bridge_seed=" << projection.bridge_seed_cells.size()
+      << " expanded_reachable=" <<
+      (build.success ? build.snapshot.surface.traversable_cells.size() : 0U)
+      << " planner_components=" << (has_surface_graph_ ? surface_graph_.componentCount() : 0U)
+      << " largest_planner_component=" <<
+      (has_surface_graph_ ? surface_graph_.largestComponentSize() : 0U)
+      << " planner_multifloor_components=" <<
+      (has_surface_graph_ ?
+      surface_graph_.multifloorComponentCount(
+        get_parameter("planner_multifloor_z_range_m").as_double()) : 0U)
+      << " rejected_projection=" << projection.rejected_samples.size()
+      << " no_support=" << rejected_counts["support_projection_failed"]
+      << " ambiguous_multifloor=" <<
+      rejected_counts["support_projection_ambiguous_multifloor"]
+      << " reanchored_support=" << projection.reanchored_support_samples
+      << " retry_support=" << projection.retry_support_samples
+      << " bridge_used_as_expansion_anchor=" <<
+      (build.success ? build.bridge_used_as_expansion_anchor : 0U)
+      << " support_components=" << (build.success ? build.support_component_count : 0U)
+      << " anchored_components=" <<
+      (build.success ? build.anchored_support_component_count : 0U)
+      << " rejected_unanchored_component=" <<
+      (build.success ? build.rejected_unanchored_component_cells : 0U)
+      << " footprint_rejected=" << projection.footprint_rejected_samples
+      << " body_obstructed_rejected=" <<
+      (build.success ? build.body_obstructed_rejected_count : 0U)
+      << " anchor_envelope_rejected=" <<
+      (build.success ? build.anchor_envelope_rejected_count : 0U)
+      << " hole_filled=" << (build.success ? build.hole_filled_count : 0U)
+      << " frame=" << result.resource.map_frame
+      << " body=" << result.resource.body_frame;
     if (!build.success) {
-      RCLCPP_WARN(
-        get_logger(), "experience expansion failed: [%s] %s",
-        build.error_code.c_str(), build.message.c_str());
+      LOG(WARNING) << "experience expansion failed: [" << build.error_code << "] " <<
+        build.message;
     }
   }
 
@@ -799,7 +892,7 @@ private:
         const double score = xy_distance + 0.05 / std::max(clearance, 1.0e-3);
         if (!found_safe || score < best_safe_score) {
           best_safe_score = score;
-          best_distance = tgw_planner::core::distance3d(point, center);
+          best_distance = xy_distance;
           best_safe_node = node.id;
           best_safe_component = surface_graph_.componentId(node.id);
           found_safe = true;
@@ -809,7 +902,7 @@ private:
       const double fallback_score = clearance - 0.05 * xy_distance;
       if (!found_fallback || fallback_score > best_fallback_score) {
         best_fallback_score = fallback_score;
-        best_fallback_distance = tgw_planner::core::distance3d(point, center);
+        best_fallback_distance = xy_distance;
         best_fallback_node = node.id;
         best_fallback_component = surface_graph_.componentId(node.id);
         found_fallback = true;
@@ -912,6 +1005,11 @@ private:
     int goal_component_id = -1;
     if (!nearestSurfaceGraphNode(start, &start_node, &start_snap_distance, &start_component_id)) {
       plan.message = "start_not_on_reachable_surface";
+      LOG(WARNING)
+        << "PlanPath rejected before search"
+        << " reason=" << plan.message
+        << " start=(" << start.x << ", " << start.y << ", " << start.z << ")"
+        << " no_graph_node_below_click=true";
       if (stats_out != nullptr) {
         *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
       }
@@ -924,6 +1022,12 @@ private:
       get_parameter("max_start_snap_distance_m").as_double();
     if (start_snap_distance > max_start_snap_distance_m) {
       plan.message = "start_not_on_reachable_surface";
+      LOG(WARNING)
+        << "PlanPath rejected before search"
+        << " reason=" << plan.message
+        << " start_snap_xy_m=" << start_snap_distance
+        << " max_start_snap_xy_m=" << max_start_snap_distance_m
+        << " start_component=" << start_component_id;
       if (stats_out != nullptr) {
         *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
       }
@@ -934,6 +1038,13 @@ private:
     }
     if (!nearestSurfaceGraphNode(goal, &goal_node, &goal_snap_distance, &goal_component_id)) {
       plan.message = "goal_unreachable_outside_experience_surface";
+      LOG(WARNING)
+        << "PlanPath rejected before search"
+        << " reason=" << plan.message
+        << " goal=(" << goal.x << ", " << goal.y << ", " << goal.z << ")"
+        << " no_graph_node_below_click=true"
+        << " start_snap_xy_m=" << start_snap_distance
+        << " start_component=" << start_component_id;
       if (stats_out != nullptr) {
         *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
       }
@@ -946,6 +1057,14 @@ private:
       get_parameter("max_goal_snap_distance_m").as_double();
     if (goal_snap_distance > max_goal_snap_distance_m) {
       plan.message = "goal_unreachable_outside_experience_surface";
+      LOG(WARNING)
+        << "PlanPath rejected before search"
+        << " reason=" << plan.message
+        << " goal_snap_xy_m=" << goal_snap_distance
+        << " max_goal_snap_xy_m=" << max_goal_snap_distance_m
+        << " start_snap_xy_m=" << start_snap_distance
+        << " start_component=" << start_component_id
+        << " goal_component=" << goal_component_id;
       if (stats_out != nullptr) {
         *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
       }
@@ -956,6 +1075,13 @@ private:
     }
     if (start_component_id < 0 || start_component_id != goal_component_id) {
       plan.message = "no_path_on_experience_surface_different_planner_components";
+      LOG(WARNING)
+        << "PlanPath rejected before search"
+        << " reason=" << plan.message
+        << " start_component=" << start_component_id
+        << " goal_component=" << goal_component_id
+        << " start_snap_xy_m=" << start_snap_distance
+        << " goal_snap_xy_m=" << goal_snap_distance;
       if (stats_out != nullptr) {
         *stats_out = makePlannerStats(plan, 0.0, start_snap_distance, goal_snap_distance);
       }
@@ -1100,16 +1226,15 @@ private:
       get_parameter("map_frame").as_string() : snapshot_.map_frame;
     response->path = makePathMsg(now(), frame_id, plan.path);
     publishPlanDebug(plan);
-    RCLCPP_INFO(
-      get_logger(),
-      "PlanPath success=%s waypoints=%zu raw_waypoints=%zu expanded=%u generated=%u search_ms=%.3f message=%s",
-      plan.success ? "true" : "false",
-      plan.path.size(),
-      plan.raw_path.size(),
-      plan.metrics.expanded_nodes,
-      plan.metrics.generated_nodes,
-      search_time_ms,
-      plan.message.c_str());
+    LOG(INFO)
+      << "PlanPath"
+      << " success=" << (plan.success ? "true" : "false")
+      << " waypoints=" << plan.path.size()
+      << " raw_waypoints=" << plan.raw_path.size()
+      << " expanded=" << plan.metrics.expanded_nodes
+      << " generated=" << plan.metrics.generated_nodes
+      << " search_ms=" << search_time_ms
+      << " message=" << plan.message;
   }
 
   void handleClearPlan(
@@ -1131,7 +1256,7 @@ private:
 
     response->success = true;
     response->message = "cleared TGW start, goal, and planned path";
-    RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
+    LOG(INFO) << response->message;
   }
 
   void onStartPoint(const geometry_msgs::msg::PointStamped::SharedPtr msg)
@@ -1177,16 +1302,15 @@ private:
       clicked_start_, clicked_goal_, &stats, &search_time_ms);
     publishPlanDebug(plan);
     publishPlanStatusMarker(plan);
-    RCLCPP_INFO(
-      get_logger(),
-      "clicked PlanPath success=%s waypoints=%zu raw_waypoints=%zu expanded=%u generated=%u search_ms=%.3f message=%s",
-      plan.success ? "true" : "false",
-      plan.path.size(),
-      plan.raw_path.size(),
-      plan.metrics.expanded_nodes,
-      plan.metrics.generated_nodes,
-      search_time_ms,
-      plan.message.c_str());
+    LOG(INFO)
+      << "clicked PlanPath"
+      << " success=" << (plan.success ? "true" : "false")
+      << " waypoints=" << plan.path.size()
+      << " raw_waypoints=" << plan.raw_path.size()
+      << " expanded=" << plan.metrics.expanded_nodes
+      << " generated=" << plan.metrics.generated_nodes
+      << " search_ms=" << search_time_ms
+      << " message=" << plan.message;
   }
 
   void publishTrajectory(const N3NavResource & resource)
@@ -1393,8 +1517,12 @@ private:
 
 int main(int argc, char ** argv)
 {
-  rclcpp::init(argc, argv);
+  rclcpp::InitOptions init_options;
+  init_options.auto_initialize_logging(false);
+  rclcpp::init(argc, argv, init_options);
+  google::InitGoogleLogging(argv[0]);
   rclcpp::spin(std::make_shared<TgwExperiencePlannerNode>());
   rclcpp::shutdown();
+  google::ShutdownGoogleLogging();
   return 0;
 }

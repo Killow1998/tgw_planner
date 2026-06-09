@@ -41,3 +41,5 @@ tgw_experience_planner_node:
     max_hole_fill_height_spread_m: 0.12
     max_trajectory_points: 200000
     max_geometry_debug_points: 400000
+    planner_log_dir: "logs"
+    planner_log_retention_days: 7
