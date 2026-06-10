@@ -2,7 +2,7 @@
 
 Generated from `/tmp/tgw_sweep_paths.jsonl` using `scripts/plot_tgw_hybrid_path.py`.
 
-Legend: black path, green surface points, blue backbone points, red portal points, green start marker, red goal marker.
+Legend: gray line = full dense-trajectory backbone, black line = selected path, green points = surface path, blue points = selected backbone path, red points = portal points, green marker = start, red marker = goal.
 
 | Query | Detour | XY distance m | Path length m | Backbone length m | Portal switches | Image |
 |---:|---:|---:|---:|---:|---:|---|

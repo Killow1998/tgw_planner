@@ -35,6 +35,20 @@ def add_points(ax, points, label, color, size):
     )
 
 
+def add_line(ax, points, label, color, linewidth, alpha):
+    if len(points) < 2:
+        return
+    ax.plot(
+        [point["x"] for point in points],
+        [point["y"] for point in points],
+        [point["z"] for point in points],
+        color=color,
+        linewidth=linewidth,
+        alpha=alpha,
+        label=label,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("jsonl", type=Path)
@@ -49,6 +63,8 @@ def main():
 
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection="3d")
+
+    add_line(ax, record.get("global_backbone", []), "global backbone", "#9e9e9e", 0.8, 0.35)
 
     path = record.get("path", [])
     if path:

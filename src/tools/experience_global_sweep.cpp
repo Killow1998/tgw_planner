@@ -195,6 +195,7 @@ void writeQueryJsonl(
   const Point3 & start,
   const Point3 & goal,
   const SurfacePlanResult & plan,
+  const ExperienceBackboneGraph & backbone_graph,
   double xy_distance,
   double detour_ratio,
   double backbone_ratio)
@@ -215,6 +216,13 @@ void writeQueryJsonl(
   writePathJson(out, plan.path, plan.path_kinds);
   out << ",\"used_backbone\":";
   writePointArrayJson(out, plan.debug_selected_backbone_segment);
+  std::vector<Point3> backbone_points;
+  backbone_points.reserve(backbone_graph.nodes().size());
+  for (const auto & node : backbone_graph.nodes()) {
+    backbone_points.push_back(node.path_position);
+  }
+  out << ",\"global_backbone\":";
+  writePointArrayJson(out, backbone_points);
   out << ",\"selected_start_portal\":";
   writePointArrayJson(out, plan.debug_selected_start_portal);
   out << ",\"selected_goal_portal\":";
@@ -695,7 +703,8 @@ int main(int argc, char ** argv)
       const double backbone_ratio = plan.success && plan_length > 1.0e-6 ?
         plan.metrics.backbone_path_length_m / plan_length : 0.0;
       if (jsonl_out.is_open()) {
-        writeQueryJsonl(jsonl_out, i, low, high, plan, xy_distance, detour_ratio, backbone_ratio);
+        writeQueryJsonl(
+          jsonl_out, i, low, high, plan, backbone_graph, xy_distance, detour_ratio, backbone_ratio);
       }
       if (plan.success) {
         ++sampled_success;
