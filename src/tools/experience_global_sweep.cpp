@@ -45,14 +45,26 @@ using tgw_planner::core::TrajectoryProjectionResult;
 using tgw_planner::core::TrajectoryProjector;
 using tgw_planner::core::TrajectoryProjectorOptions;
 
+enum class QueryMode
+{
+  LowHigh,
+  SameBand
+};
+
 struct SweepOptions
 {
   std::string pbstream_path;
   bool auto_bands{true};
   double low_z_max{0.0};
   double high_z_min{0.0};
+  bool has_same_band_bounds{false};
+  bool has_same_z_min{false};
+  bool has_same_z_max{false};
+  double same_z_min{0.0};
+  double same_z_max{0.0};
   std::size_t sample_pairs{50};
   bool strict_all{false};
+  QueryMode query_mode{QueryMode::LowHigh};
   std::string export_jsonl_path;
 };
 
@@ -135,6 +147,18 @@ const char * pathKindName(PathPointKind kind)
     case PathPointKind::Portal:
       return "portal";
     case PathPointKind::Unknown:
+    default:
+      return "unknown";
+  }
+}
+
+const char * queryModeName(QueryMode mode)
+{
+  switch (mode) {
+    case QueryMode::LowHigh:
+      return "low-high";
+    case QueryMode::SameBand:
+      return "same-band";
     default:
       return "unknown";
   }
@@ -276,9 +300,11 @@ SweepOptions parseArgs(int argc, char ** argv)
   std::vector<std::string> positional;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--export-jsonl") {
+    if (arg == "--export-jsonl" || arg == "--mode" ||
+      arg == "--same-z-min" || arg == "--same-z-max")
+    {
       if (i + 1 >= argc) {
-        throw std::runtime_error("--export-jsonl requires a path");
+        throw std::runtime_error(arg + " requires a value");
       }
       positional.push_back(arg);
       positional.push_back(argv[++i]);
@@ -293,6 +319,23 @@ SweepOptions parseArgs(int argc, char ** argv)
     const std::string & arg = positional[i];
     if (arg == "--export-jsonl") {
       options.export_jsonl_path = positional[++i];
+    } else if (arg == "--mode") {
+      const std::string mode = positional[++i];
+      if (mode == "low-high") {
+        options.query_mode = QueryMode::LowHigh;
+      } else if (mode == "same-band") {
+        options.query_mode = QueryMode::SameBand;
+      } else {
+        throw std::runtime_error("unknown --mode: " + mode);
+      }
+    } else if (arg == "--same-z-min") {
+      options.same_z_min = parseDouble(positional[++i].c_str());
+      options.has_same_band_bounds = true;
+      options.has_same_z_min = true;
+    } else if (arg == "--same-z-max") {
+      options.same_z_max = parseDouble(positional[++i].c_str());
+      options.has_same_band_bounds = true;
+      options.has_same_z_max = true;
     } else if (arg == "--strict-all") {
       options.strict_all = true;
     } else if (arg == "--dominant-only") {
@@ -305,6 +348,7 @@ SweepOptions parseArgs(int argc, char ** argv)
   if (values.empty() || values.size() > 4U || values.size() == 2U) {
     throw std::runtime_error(
       "usage: tgw_experience_global_sweep <n3map.pbstream> [low_z_max high_z_min [sample_pairs]] "
+      "[--mode low-high|same-band] [--same-z-min M --same-z-max M] "
       "[--export-jsonl /tmp/tgw_sweep_paths.jsonl] [--strict-all|--dominant-only]");
   }
   options.pbstream_path = values[0];
@@ -315,6 +359,12 @@ SweepOptions parseArgs(int argc, char ** argv)
   }
   if (values.size() == 4U) {
     options.sample_pairs = parseSize(values[3].c_str());
+  }
+  if (options.has_same_band_bounds && (!options.has_same_z_min || !options.has_same_z_max)) {
+    throw std::runtime_error("--same-z-min and --same-z-max must be provided together");
+  }
+  if (options.has_same_band_bounds && options.same_z_min > options.same_z_max) {
+    throw std::runtime_error("--same-z-min must be <= --same-z-max");
   }
   return options;
 }
@@ -570,6 +620,19 @@ int largestSharedComponent(
   return best_component;
 }
 
+int largestComponent(const std::unordered_map<int, std::size_t> & components)
+{
+  int best_component = -1;
+  std::size_t best_count = 0U;
+  for (const auto & entry : components) {
+    if (entry.second > best_count) {
+      best_count = entry.second;
+      best_component = entry.first;
+    }
+  }
+  return best_component;
+}
+
 std::vector<SurfaceNodeId> filterNodesByComponent(
   const std::vector<SurfaceNodeId> & nodes,
   const HybridConnectivity & connectivity,
@@ -599,6 +662,24 @@ std::vector<SurfaceNodeId> sampleNodes(const std::vector<SurfaceNodeId> & nodes,
     out.push_back(nodes[std::min(index, nodes.size() - 1U)]);
   }
   return out;
+}
+
+std::vector<SurfaceNodeId> reversedGoalSamples(std::vector<SurfaceNodeId> samples)
+{
+  std::reverse(samples.begin(), samples.end());
+  if (samples.size() > 1U) {
+    bool all_same_pair = true;
+    for (std::size_t i = 0U; i < samples.size(); ++i) {
+      if (samples[i].id != samples[samples.size() - 1U - i].id) {
+        all_same_pair = false;
+        break;
+      }
+    }
+    if (all_same_pair) {
+      std::rotate(samples.begin(), samples.begin() + 1, samples.end());
+    }
+  }
+  return samples;
 }
 
 Point3 surfacePoint(const ExperienceSurfaceGraph & graph, SurfaceNodeId node_id)
@@ -652,10 +733,19 @@ int main(int argc, char ** argv)
       chooseAutoBands(surface_graph, &low_z_max, &high_z_min);
     }
 
+    double same_z_min = sweep_options.same_z_min;
+    double same_z_max = sweep_options.same_z_max;
+    if (sweep_options.query_mode == QueryMode::SameBand && !sweep_options.has_same_band_bounds) {
+      same_z_min = low_z_max;
+      same_z_max = high_z_min;
+    }
+
     std::vector<SurfaceNodeId> low_nodes;
     std::vector<SurfaceNodeId> high_nodes;
+    std::vector<SurfaceNodeId> same_band_nodes;
     low_nodes.reserve(surface_graph.nodes().size());
     high_nodes.reserve(surface_graph.nodes().size());
+    same_band_nodes.reserve(surface_graph.nodes().size());
     for (const SurfaceNode & node : surface_graph.nodes()) {
       if (node.z <= low_z_max) {
         low_nodes.push_back(node.id);
@@ -663,11 +753,15 @@ int main(int argc, char ** argv)
       if (node.z >= high_z_min) {
         high_nodes.push_back(node.id);
       }
+      if (node.z >= same_z_min && node.z <= same_z_max) {
+        same_band_nodes.push_back(node.id);
+      }
     }
 
     const HybridConnectivity connectivity = buildHybridConnectivity(surface_graph, backbone_graph);
     const auto low_components = countComponents(low_nodes, connectivity);
     const auto high_components = countComponents(high_nodes, connectivity);
+    const auto same_band_components = countComponents(same_band_nodes, connectivity);
     std::size_t cross_connected_low = 0U;
     std::size_t cross_connected_high = 0U;
     for (const auto & entry : low_components) {
@@ -687,25 +781,49 @@ int main(int argc, char ** argv)
       low_components.size() == 1U &&
       high_components.size() == 1U &&
       low_components.begin()->first == high_components.begin()->first;
+    const bool all_same_band_connected =
+      !same_band_nodes.empty() &&
+      same_band_components.size() == 1U;
 
     const int dominant_shared_component =
+      sweep_options.query_mode == QueryMode::SameBand ?
+      largestComponent(same_band_components) :
       largestSharedComponent(low_components, high_components);
     const std::vector<SurfaceNodeId> dominant_low_nodes =
       filterNodesByComponent(low_nodes, connectivity, dominant_shared_component);
     const std::vector<SurfaceNodeId> dominant_high_nodes =
       filterNodesByComponent(high_nodes, connectivity, dominant_shared_component);
+    const std::vector<SurfaceNodeId> dominant_same_band_nodes =
+      filterNodesByComponent(same_band_nodes, connectivity, dominant_shared_component);
     const double dominant_low_coverage =
       low_nodes.empty() ? 0.0 :
       static_cast<double>(dominant_low_nodes.size()) / static_cast<double>(low_nodes.size());
     const double dominant_high_coverage =
       high_nodes.empty() ? 0.0 :
       static_cast<double>(dominant_high_nodes.size()) / static_cast<double>(high_nodes.size());
+    const double dominant_same_band_coverage =
+      same_band_nodes.empty() ? 0.0 :
+      static_cast<double>(dominant_same_band_nodes.size()) /
+      static_cast<double>(same_band_nodes.size());
 
     HybridExperiencePlanner planner(surface_options, hybridOptions());
-    const std::vector<SurfaceNodeId> sampled_low =
-      sampleNodes(dominant_low_nodes, sweep_options.sample_pairs);
-    const std::vector<SurfaceNodeId> sampled_high =
-      sampleNodes(dominant_high_nodes, sweep_options.sample_pairs);
+    std::vector<SurfaceNodeId> sampled_start;
+    std::vector<SurfaceNodeId> sampled_goal;
+    if (sweep_options.query_mode == QueryMode::SameBand) {
+      sampled_start = sampleNodes(dominant_same_band_nodes, sweep_options.sample_pairs);
+      sampled_goal = reversedGoalSamples(sampled_start);
+      if (sampled_goal.size() > 1U) {
+        for (std::size_t i = 0U; i < sampled_start.size() && i < sampled_goal.size(); ++i) {
+          if (sampled_start[i].id == sampled_goal[i].id) {
+            std::rotate(sampled_goal.begin(), sampled_goal.begin() + 1, sampled_goal.end());
+            break;
+          }
+        }
+      }
+    } else {
+      sampled_start = sampleNodes(dominant_low_nodes, sweep_options.sample_pairs);
+      sampled_goal = sampleNodes(dominant_high_nodes, sweep_options.sample_pairs);
+    }
     std::ofstream jsonl_out;
     if (!sweep_options.export_jsonl_path.empty()) {
       jsonl_out.open(sweep_options.export_jsonl_path);
@@ -719,12 +837,13 @@ int main(int argc, char ** argv)
     std::string first_failure;
     std::size_t first_failure_index = 0U;
     QualityStats quality;
-    for (std::size_t i = 0; i < sampled_low.size() && i < sampled_high.size(); ++i) {
-      const SurfacePlanResult plan = planner.plan(surface_graph, backbone_graph, sampled_low[i], sampled_high[i]);
+    for (std::size_t i = 0; i < sampled_start.size() && i < sampled_goal.size(); ++i) {
+      const SurfacePlanResult plan =
+        planner.plan(surface_graph, backbone_graph, sampled_start[i], sampled_goal[i]);
       ++sampled_queries;
-      const Point3 low = surfacePoint(surface_graph, sampled_low[i]);
-      const Point3 high = surfacePoint(surface_graph, sampled_high[i]);
-      const double xy_distance = xyDistance(low, high);
+      const Point3 start = surfacePoint(surface_graph, sampled_start[i]);
+      const Point3 goal = surfacePoint(surface_graph, sampled_goal[i]);
+      const double xy_distance = xyDistance(start, goal);
       const double plan_length = plan.metrics.path_length_m > 0.0 ?
         plan.metrics.path_length_m : pathLength(plan.path);
       const double detour_ratio = plan.success ?
@@ -733,7 +852,7 @@ int main(int argc, char ** argv)
         plan.metrics.backbone_path_length_m / plan_length : 0.0;
       if (jsonl_out.is_open()) {
         writeQueryJsonl(
-          jsonl_out, i, low, high, plan, backbone_graph, xy_distance, detour_ratio, backbone_ratio);
+          jsonl_out, i, start, goal, plan, backbone_graph, xy_distance, detour_ratio, backbone_ratio);
       }
       if (plan.success) {
         ++sampled_success;
@@ -749,19 +868,19 @@ int main(int argc, char ** argv)
         }
       } else if (first_failure.empty()) {
         first_failure_index = i;
-        first_failure = plan.message + " low=(" + std::to_string(low.x) + "," +
-          std::to_string(low.y) + "," + std::to_string(low.z) + ") high=(" +
-          std::to_string(high.x) + "," + std::to_string(high.y) + "," +
-          std::to_string(high.z) + ") low_node=" + std::to_string(sampled_low[i].id) +
-          " high_node=" + std::to_string(sampled_high[i].id) +
-          " low_hybrid_component=" +
-          std::to_string(connectivity.component[sampled_low[i].id]) +
-          " high_hybrid_component=" +
-          std::to_string(connectivity.component[sampled_high[i].id]) +
-          " low_surface_component=" +
-          std::to_string(surface_graph.componentId(sampled_low[i])) +
-          " high_surface_component=" +
-          std::to_string(surface_graph.componentId(sampled_high[i])) +
+        first_failure = plan.message + " start=(" + std::to_string(start.x) + "," +
+          std::to_string(start.y) + "," + std::to_string(start.z) + ") goal=(" +
+          std::to_string(goal.x) + "," + std::to_string(goal.y) + "," +
+          std::to_string(goal.z) + ") start_node=" + std::to_string(sampled_start[i].id) +
+          " goal_node=" + std::to_string(sampled_goal[i].id) +
+          " start_hybrid_component=" +
+          std::to_string(connectivity.component[sampled_start[i].id]) +
+          " goal_hybrid_component=" +
+          std::to_string(connectivity.component[sampled_goal[i].id]) +
+          " start_surface_component=" +
+          std::to_string(surface_graph.componentId(sampled_start[i])) +
+          " goal_surface_component=" +
+          std::to_string(surface_graph.componentId(sampled_goal[i])) +
           " hybrid_expanded=" +
           std::to_string(plan.metrics.hybrid_expanded_nodes) +
           " generated=" + std::to_string(plan.metrics.generated_nodes) +
@@ -773,12 +892,15 @@ int main(int argc, char ** argv)
     }
     const bool main_component_sweep_success =
       dominant_shared_component >= 0 &&
-      !dominant_low_nodes.empty() &&
-      !dominant_high_nodes.empty() &&
+      (sweep_options.query_mode == QueryMode::SameBand ?
+      dominant_same_band_nodes.size() >= 2U :
+      (!dominant_low_nodes.empty() && !dominant_high_nodes.empty())) &&
       sampled_queries > 0U &&
       sampled_success == sampled_queries;
     const bool sweep_success = sweep_options.strict_all ?
-      (all_cross_connected && main_component_sweep_success) : main_component_sweep_success;
+      ((sweep_options.query_mode == QueryMode::SameBand ?
+      all_same_band_connected : all_cross_connected) && main_component_sweep_success) :
+      main_component_sweep_success;
     const double mean_detour_ratio = quality.successful_queries > 0U ?
       quality.detour_sum / static_cast<double>(quality.successful_queries) : 0.0;
     const double mean_backbone_ratio = quality.successful_queries > 0U ?
@@ -791,12 +913,18 @@ int main(int argc, char ** argv)
     std::cout << "global_sweep_success=" <<
       (sweep_success ? "true" : "false") << "\n";
     std::cout << "pbstream=" << sweep_options.pbstream_path << "\n";
+    std::cout << "query_mode=" << queryModeName(sweep_options.query_mode) << "\n";
     std::cout << "low_z_max=" << low_z_max << " high_z_min=" << high_z_min <<
       " auto_bands=" << (sweep_options.auto_bands ? "true" : "false") << "\n";
+    if (sweep_options.query_mode == QueryMode::SameBand) {
+      std::cout << "same_z_min=" << same_z_min << " same_z_max=" << same_z_max <<
+        " same_band_auto=" << (!sweep_options.has_same_band_bounds ? "true" : "false") << "\n";
+    }
     std::cout << "surface_nodes=" << surface_graph.nodes().size() <<
       " surface_components=" << surface_graph.componentCount() <<
       " low_nodes=" << low_nodes.size() <<
-      " high_nodes=" << high_nodes.size() << "\n";
+      " high_nodes=" << high_nodes.size() <<
+      " same_band_nodes=" << same_band_nodes.size() << "\n";
     std::cout << "backbone_nodes=" << backbone_graph.nodes().size() <<
       " backbone_edges=" << backbone_graph.edges().size() <<
       " portals=" << backbone_graph.portals().size() << "\n";
@@ -806,14 +934,18 @@ int main(int argc, char ** argv)
       " hybrid_portal_edges=" << connectivity.portal_edges << "\n";
     std::cout << "low_components=" << low_components.size() <<
       " high_components=" << high_components.size() <<
+      " same_band_components=" << same_band_components.size() <<
       " cross_connected_low=" << cross_connected_low <<
       " cross_connected_high=" << cross_connected_high <<
-      " all_low_high_connected=" << (all_cross_connected ? "true" : "false") << "\n";
+      " all_low_high_connected=" << (all_cross_connected ? "true" : "false") <<
+      " all_same_band_connected=" << (all_same_band_connected ? "true" : "false") << "\n";
     std::cout << "dominant_shared_component=" << dominant_shared_component <<
       " dominant_low_nodes=" << dominant_low_nodes.size() <<
       " dominant_high_nodes=" << dominant_high_nodes.size() <<
+      " dominant_same_band_nodes=" << dominant_same_band_nodes.size() <<
       " dominant_low_coverage=" << dominant_low_coverage <<
       " dominant_high_coverage=" << dominant_high_coverage <<
+      " dominant_same_band_coverage=" << dominant_same_band_coverage <<
       " main_component_sweep_success=" << (main_component_sweep_success ? "true" : "false") << "\n";
     std::cout << "sampled_queries=" << sampled_queries <<
       " sampled_success=" << sampled_success << "\n";
