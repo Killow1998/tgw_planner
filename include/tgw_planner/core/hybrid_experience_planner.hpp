@@ -15,7 +15,7 @@ struct HybridExperiencePlannerOptions
   double portal_switch_cost{0.5};
   double portal_height_error_weight{0.25};
   double backbone_low_confidence_penalty{0.5};
-  double max_backbone_edge_xy_gap_m{0.50};
+  double max_backbone_edge_xy_gap_m{5.00};
   double max_backbone_edge_dz_m{0.85};
   double max_backbone_edge_slope{4.0};
   double max_portal_xy_distance_m{1.20};

@@ -365,7 +365,7 @@ SurfacePlannerOptions plannerOptions()
 {
   SurfacePlannerOptions options;
   options.max_step_height_m = 0.35;
-  options.max_iterations = 250000;
+  options.max_iterations = 500000;
   options.w_bridge = 2.5;
   options.footprint.length_m = 0.70;
   options.footprint.width_m = 0.43;

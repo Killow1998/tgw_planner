@@ -590,7 +590,7 @@ public:
     declare_parameter<int>("min_hole_fill_neighbors", 5);
     declare_parameter<double>("max_hole_fill_height_spread_m", 0.12);
     declare_parameter<double>("plan_max_step_height_m", 0.35);
-    declare_parameter<int>("plan_max_iterations", 250000);
+    declare_parameter<int>("plan_max_iterations", 500000);
     declare_parameter<double>("plan_bridge_cost", 2.5);
     declare_parameter<double>("max_start_snap_distance_m", 1.50);
     declare_parameter<double>("max_goal_snap_distance_m", 1.50);

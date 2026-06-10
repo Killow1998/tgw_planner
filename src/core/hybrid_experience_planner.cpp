@@ -57,13 +57,14 @@ struct QueueNode
 {
   std::uint32_t node{kInvalidHybridNode};
   double cost{0.0};
+  double priority{0.0};
 };
 
 struct QueueCompare
 {
   bool operator()(const QueueNode & lhs, const QueueNode & rhs) const
   {
-    return lhs.cost > rhs.cost;
+    return lhs.priority > rhs.priority;
   }
 };
 
@@ -429,8 +430,11 @@ SurfacePlanResult HybridExperiencePlanner::plan(
   std::vector<double> cost(graph.nodes.size(), std::numeric_limits<double>::infinity());
   std::vector<std::uint32_t> previous(graph.nodes.size(), kInvalidHybridNode);
   std::priority_queue<QueueNode, std::vector<QueueNode>, QueueCompare> open;
+  const auto heuristic = [&](std::uint32_t node_id) {
+      return validHybridId(graph, node_id) ? xyDistance(graph.nodes[node_id].point, graph.nodes[goal_id].point) : 0.0;
+    };
   cost[start_id] = 0.0;
-  open.push({start_id, 0.0});
+  open.push({start_id, 0.0, heuristic(start_id)});
   bool found = false;
   while (!open.empty() && result.metrics.hybrid_expanded_nodes < surface_options_.max_iterations) {
     const QueueNode current = open.top();
@@ -455,7 +459,7 @@ SurfacePlanResult HybridExperiencePlanner::plan(
       }
       cost[edge.to] = next_cost;
       previous[edge.to] = current.node;
-      open.push({edge.to, next_cost});
+      open.push({edge.to, next_cost, next_cost + heuristic(edge.to)});
       ++result.metrics.generated_nodes;
     }
   }
