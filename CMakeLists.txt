@@ -41,15 +41,20 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 add_library(tgw_planner_core SHARED
   src/core/clearance_field.cpp
   src/core/experience_backbone_graph.cpp
+  src/core/experience_planner_defaults.cpp
   src/core/experience_surface_graph.cpp
   src/core/experience_surface_builder.cpp
+  src/core/global_path_tracker.cpp
   src/core/hybrid_experience_planner.cpp
+  src/core/local_path_smoother.cpp
   src/core/n3map_reader.cpp
   src/core/path_validator.cpp
-  src/core/planner_connectivity_layer.cpp
+  src/core/regulated_pure_pursuit.cpp
   src/core/reachable_expander.cpp
   src/core/risk_field.cpp
   src/core/robot_footprint.cpp
+  src/core/rolling_local_map.cpp
+  src/core/route_progress_tracker.cpp
   src/core/surface_astar_planner.cpp
   src/core/trajectory_projector.cpp
 )
@@ -140,6 +145,13 @@ install(DIRECTORY include/
 install(DIRECTORY config launch rviz
   DESTINATION share/${PROJECT_NAME}
 )
+
+set(TGW_DEMO_PBSTREAM "${CMAKE_CURRENT_SOURCE_DIR}/docs/data/tgw_n3map_nav_filtered_20260610.pbstream")
+if(EXISTS "${TGW_DEMO_PBSTREAM}")
+  install(FILES "${TGW_DEMO_PBSTREAM}"
+    DESTINATION share/${PROJECT_NAME}/docs/data
+  )
+endif()
 
 install(FILES README.md
   DESTINATION share/${PROJECT_NAME}

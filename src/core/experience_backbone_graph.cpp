@@ -2,12 +2,24 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
+#include <vector>
 
 namespace tgw_planner::core
 {
 namespace
 {
 constexpr std::uint32_t kInvalidSurfaceNodeId = std::numeric_limits<std::uint32_t>::max();
+
+struct PortalCandidate
+{
+  SurfaceNodeId node{kInvalidSurfaceNodeId};
+  int component{-1};
+  double xy_distance_m{0.0};
+  double height_error_m{0.0};
+  double confidence{0.0};
+  double score{std::numeric_limits<double>::infinity()};
+};
 
 double xyDistance(const Point3 & a, const Point3 & b)
 {
@@ -225,12 +237,7 @@ void ExperienceBackboneGraph::addPortalForNode(
   const int radius_cells = std::max(
     0, static_cast<int>(std::ceil(options_.max_portal_xy_distance_m / surface_graph.resolution())));
 
-  double best_score = std::numeric_limits<double>::infinity();
-  SurfaceNodeId best_node{kInvalidSurfaceNodeId};
-  int best_component = -1;
-  double best_xy_distance = 0.0;
-  double best_height_error = 0.0;
-  double best_confidence = 0.0;
+  std::unordered_map<int, PortalCandidate> best_by_component;
 
   for (int dx = -radius_cells; dx <= radius_cells; ++dx) {
     for (int dy = -radius_cells; dy <= radius_cells; ++dy) {
@@ -261,38 +268,59 @@ void ExperienceBackboneGraph::addPortalForNode(
         }
         const double confidence = std::clamp(candidate->confidence, 0.0, 1.0);
         const double score = xy_distance_m + 0.25 * height_error_m + 0.05 * (1.0 - confidence);
-        if (score < best_score) {
-          best_score = score;
-          best_node = candidate_id;
-          best_component = component;
-          best_xy_distance = xy_distance_m;
-          best_height_error = height_error_m;
-          best_confidence = confidence;
+        auto component_it = best_by_component.find(component);
+        if (component_it == best_by_component.end() || score < component_it->second.score) {
+          best_by_component[component] = {
+            candidate_id,
+            component,
+            xy_distance_m,
+            height_error_m,
+            confidence,
+            score};
         }
       }
     }
   }
 
-  if (best_component < 0) {
+  if (best_by_component.empty()) {
     return;
   }
 
-  node.nearest_surface_node = best_node;
-  node.nearest_surface_component_id = best_component;
-  node.portal_distance_m = best_xy_distance;
-  node.portal_height_error_m = best_height_error;
+  std::vector<PortalCandidate> candidates;
+  candidates.reserve(best_by_component.size());
+  for (const auto & entry : best_by_component) {
+    candidates.push_back(entry.second);
+  }
+  std::sort(
+    candidates.begin(), candidates.end(),
+    [](const PortalCandidate & lhs, const PortalCandidate & rhs) {
+      return lhs.score < rhs.score;
+    });
+  const std::size_t max_portals =
+    std::max<std::size_t>(1U, options_.max_portals_per_node);
+  if (candidates.size() > max_portals) {
+    candidates.resize(max_portals);
+  }
+
+  const PortalCandidate & best = candidates.front();
+  node.nearest_surface_node = best.node;
+  node.nearest_surface_component_id = best.component;
+  node.portal_distance_m = best.xy_distance_m;
+  node.portal_height_error_m = best.height_error_m;
   node.has_surface_portal = true;
 
-  ExperiencePortal portal;
-  portal.id = {static_cast<std::uint32_t>(portals_.size())};
-  portal.surface_component_id = best_component;
-  portal.surface_node = best_node;
-  portal.backbone_node = node.id;
-  portal.distance_xy_m = best_xy_distance;
-  portal.height_error_m = best_height_error;
-  portal.confidence = best_confidence;
-  portals_by_component_[best_component].push_back(portal.id);
-  portals_.push_back(portal);
+  for (const PortalCandidate & candidate : candidates) {
+    ExperiencePortal portal;
+    portal.id = {static_cast<std::uint32_t>(portals_.size())};
+    portal.surface_component_id = candidate.component;
+    portal.surface_node = candidate.node;
+    portal.backbone_node = node.id;
+    portal.distance_xy_m = candidate.xy_distance_m;
+    portal.height_error_m = candidate.height_error_m;
+    portal.confidence = candidate.confidence;
+    portals_by_component_[candidate.component].push_back(portal.id);
+    portals_.push_back(portal);
+  }
 }
 
 double ExperienceBackboneGraph::inferBodyToSupportOffset(

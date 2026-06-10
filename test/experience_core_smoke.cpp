@@ -8,11 +8,15 @@
 #include "tgw_planner/core/experience_surface_builder.hpp"
 #include "tgw_planner/core/experience_backbone_graph.hpp"
 #include "tgw_planner/core/experience_surface_graph.hpp"
+#include "tgw_planner/core/global_path_tracker.hpp"
 #include "tgw_planner/core/hybrid_experience_planner.hpp"
+#include "tgw_planner/core/local_path_smoother.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
 #include "tgw_planner/core/path_validator.hpp"
-#include "tgw_planner/core/planner_connectivity_layer.hpp"
+#include "tgw_planner/core/regulated_pure_pursuit.hpp"
 #include "tgw_planner/core/reachable_expander.hpp"
+#include "tgw_planner/core/rolling_local_map.hpp"
+#include "tgw_planner/core/route_progress_tracker.hpp"
 #include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/trajectory_projector.hpp"
 
@@ -26,15 +30,21 @@ using tgw_planner::core::ExperienceSurfaceGraph;
 using tgw_planner::core::ExperienceSurfaceBuilder;
 using tgw_planner::core::ExperienceSurfaceBuilderOptions;
 using tgw_planner::core::GridIndex;
+using tgw_planner::core::GlobalPathPoint;
+using tgw_planner::core::GlobalPathTracker;
+using tgw_planner::core::GlobalPathTrackerOptions;
 using tgw_planner::core::HybridExperiencePlanner;
 using tgw_planner::core::HybridExperiencePlannerOptions;
+using tgw_planner::core::LocalPathResult;
+using tgw_planner::core::LocalPathSmoother;
+using tgw_planner::core::LocalPathSmootherOptions;
 using tgw_planner::core::N3KeyframeLite;
 using tgw_planner::core::N3MapReader;
 using tgw_planner::core::N3NavResource;
 using tgw_planner::core::N3TrajectoryPose;
 using tgw_planner::core::PathValidationOptions;
 using tgw_planner::core::PathValidator;
-using tgw_planner::core::PlannerConnectivityLayer;
+using tgw_planner::core::PathPointKind;
 using tgw_planner::core::Point3;
 using tgw_planner::core::PointXYZI;
 using tgw_planner::core::Pose3;
@@ -45,6 +55,13 @@ using tgw_planner::core::ReachableExpanderOptions;
 using tgw_planner::core::RiskField;
 using tgw_planner::core::RobotFootprint;
 using tgw_planner::core::RobotFootprintOptions;
+using tgw_planner::core::RegulatedPurePursuitController;
+using tgw_planner::core::RegulatedPurePursuitOptions;
+using tgw_planner::core::RollingLocalMap;
+using tgw_planner::core::RoutePose2D;
+using tgw_planner::core::RouteProgressState;
+using tgw_planner::core::RouteProgressTracker;
+using tgw_planner::core::RouteProgressTrackerOptions;
 using tgw_planner::core::SurfaceAstarPlanner;
 using tgw_planner::core::SurfaceCell;
 using tgw_planner::core::SurfaceGraphBuildOptions;
@@ -57,6 +74,7 @@ using tgw_planner::core::TrajectoryBridgeSegment;
 using tgw_planner::core::TrajectoryProjectionResult;
 using tgw_planner::core::TrajectoryProjector;
 using tgw_planner::core::TrajectoryProjectorOptions;
+using tgw_planner::core::TrackerPose2D;
 
 void require(bool condition, const std::string & message)
 {
@@ -81,6 +99,7 @@ ExperienceSnapshot makeFlatSnapshot()
       surface_cell.label = SurfaceLabel::Expanded;
       surface_cell.reachability = ReachabilityLabel::InferredReachable;
       surface_cell.support_component_id = 1;
+      surface_cell.surface_layer_id = 1;
       surface_cell.height_m = 0.0;
       surface_cell.confidence = 1.0;
       snapshot.surface.surface_cells[cell] = surface_cell;
@@ -172,27 +191,262 @@ void testFootprintSupportRatio()
     "footprint ratio check should accept sparse but mostly supported footprint");
 }
 
-void testPlannerConnectivityLayer()
+GlobalPathPoint makeGlobalPathPoint(
+  double x, double y, double z, PathPointKind kind, double target_speed_mps)
 {
-  ExperienceSnapshot snapshot = makeFlatSnapshot();
-  SurfacePlannerOptions planner_options;
-  planner_options.require_footprint_support = true;
-  SurfaceTransitionValidator validator(planner_options);
-  PlannerConnectivityLayer connectivity;
-  connectivity.build(snapshot, validator);
-  require(connectivity.componentCount() >= 1U, "planner connectivity should find a component");
-  require(
-    connectivity.sameComponent({1, 0, 0}, {5, 0, 0}),
-    "flat corridor endpoints should be in the same planner component");
+  GlobalPathPoint point;
+  point.position = {x, y, z};
+  point.kind = kind;
+  point.target_speed_mps = target_speed_mps;
+  point.confidence = 1.0;
+  return point;
+}
 
-  for (int y = -1; y <= 1; ++y) {
-    snapshot.surface.traversable_cells.erase({3, y, 0});
-    snapshot.surface.surface_cells.erase({3, y, 0});
+double wrapTestAngle(double angle_rad)
+{
+  constexpr double kPi = 3.14159265358979323846;
+  while (angle_rad > kPi) {
+    angle_rad -= 2.0 * kPi;
   }
-  connectivity.build(snapshot, validator);
+  while (angle_rad <= -kPi) {
+    angle_rad += 2.0 * kPi;
+  }
+  return angle_rad;
+}
+
+void testGlobalPathTrackerFollowsStraightPath()
+{
+  GlobalPathTrackerOptions options;
+  options.lookahead_m = 0.80;
+  options.projection_window_m = 2.0;
+  options.max_yaw_rate_radps = 2.0;
+  options.goal_tolerance_m = 0.25;
+  GlobalPathTracker tracker(options);
+  std::vector<GlobalPathPoint> path{
+    makeGlobalPathPoint(0.0, 0.0, 0.0, PathPointKind::Surface, 0.5),
+    makeGlobalPathPoint(5.0, 0.0, 0.0, PathPointKind::Surface, 0.5)};
+  std::string error;
+  require(tracker.setPath(path, &error), "global path tracker should accept a simple path");
+
+  TrackerPose2D pose;
+  constexpr double dt = 0.05;
+  bool reached = false;
+  for (int i = 0; i < 400; ++i) {
+    const auto command = tracker.computeCommand(pose, dt);
+    require(command.valid, "global path tracker command should be valid");
+    pose.yaw_rad = wrapTestAngle(pose.yaw_rad + command.yaw_rate_radps * dt);
+    pose.x += command.linear_speed_mps * dt * std::cos(pose.yaw_rad);
+    pose.y += command.linear_speed_mps * dt * std::sin(pose.yaw_rad);
+    if (command.goal_reached) {
+      reached = true;
+      break;
+    }
+  }
+  require(reached, "global path tracker should reach the end of a straight path");
   require(
-    !connectivity.sameComponent({1, 0, 0}, {5, 0, 0}),
-    "planner connectivity should reflect transition-level disconnection");
+    std::hypot(pose.x - 5.0, pose.y) < 0.35,
+    "global path tracker final pose should remain near the goal");
+}
+
+void testGlobalPathTrackerConsumesSegmentSpeed()
+{
+  GlobalPathTracker tracker;
+  std::vector<GlobalPathPoint> path{
+    makeGlobalPathPoint(0.0, 0.0, 0.0, PathPointKind::Surface, 0.6),
+    makeGlobalPathPoint(1.0, 0.0, 0.0, PathPointKind::Portal, 0.1),
+    makeGlobalPathPoint(2.0, 0.0, 0.0, PathPointKind::Backbone, 0.3)};
+  require(tracker.setPath(path), "global path tracker should accept segment-kind path");
+  tracker.resetProgress(0.90);
+  const auto command = tracker.computeCommand({0.95, 0.0, 0.0}, 0.05);
+  require(command.valid, "segment-speed command should be valid");
+  require(
+    command.segment_kind == PathPointKind::Portal,
+    "tracker should expose portal segment kind near portal transition");
+  require(
+    command.linear_speed_mps <= 0.20,
+    "tracker should slow down near portal transition");
+}
+
+void testGlobalPathTrackerUsesForwardProjectionWindow()
+{
+  GlobalPathTrackerOptions options;
+  options.lookahead_m = 0.80;
+  options.projection_window_m = 2.0;
+  GlobalPathTracker tracker(options);
+  std::vector<GlobalPathPoint> path{
+    makeGlobalPathPoint(0.0, 0.0, 0.0, PathPointKind::Surface, 0.6),
+    makeGlobalPathPoint(10.0, 0.0, 0.0, PathPointKind::Surface, 0.6),
+    makeGlobalPathPoint(10.0, 0.0, 8.0, PathPointKind::Portal, 0.15),
+    makeGlobalPathPoint(0.0, 0.0, 8.0, PathPointKind::Surface, 0.6),
+    makeGlobalPathPoint(20.0, 0.0, 8.0, PathPointKind::Surface, 0.6)};
+  require(tracker.setPath(path), "global path tracker should accept overlapping XY layers");
+  const auto command = tracker.computeCommand({0.10, 0.0, 0.0}, 0.05);
+  require(command.valid, "overlapping-layer command should be valid");
+  require(
+    command.progress_m < 1.0,
+    "tracker should not snap progress to a later overlapping XY layer");
+  require(
+    command.expected_surface_z_m < 1.0,
+    "tracker should keep the local lower-layer surface height");
+}
+
+void testRouteProgressTrackerBuildsLocalWindowWithoutLayerJump()
+{
+  RouteProgressTrackerOptions options;
+  options.projection_window_m = 2.0;
+  options.local_route_length_m = 3.0;
+  RouteProgressTracker tracker(options);
+  std::vector<GlobalPathPoint> path{
+    makeGlobalPathPoint(0.0, 0.0, 0.0, PathPointKind::Surface, 0.0),
+    makeGlobalPathPoint(10.0, 0.0, 0.0, PathPointKind::Surface, 0.0),
+    makeGlobalPathPoint(10.0, 0.0, 8.0, PathPointKind::Portal, 0.0),
+    makeGlobalPathPoint(0.0, 0.0, 8.0, PathPointKind::Surface, 0.0)};
+  require(tracker.setPath(path), "route progress tracker should accept overlapping XY path");
+
+  const RouteProgressState state = tracker.update({0.10, 0.0, 0.0});
+  require(state.valid, "route progress tracker state should be valid");
+  require(state.progress_m < 1.0, "route progress should stay near the start");
+  require(
+    state.projected_point.position.z < 1.0,
+    "route progress should not jump to a later overlapping height layer");
+  require(state.local_route.size() >= 2U, "route progress should expose a local route window");
+}
+
+void testLocalPathSmootherBuildsShortSmoothPath()
+{
+  RouteProgressTracker tracker;
+  std::vector<GlobalPathPoint> path{
+    makeGlobalPathPoint(0.0, 0.0, 0.0, PathPointKind::Surface, 0.0),
+    makeGlobalPathPoint(1.0, 0.0, 0.0, PathPointKind::Surface, 0.0),
+    makeGlobalPathPoint(1.0, 1.0, 0.0, PathPointKind::Surface, 0.0),
+    makeGlobalPathPoint(2.0, 1.0, 0.0, PathPointKind::Surface, 0.0)};
+  require(tracker.setPath(path), "route tracker should accept corner path");
+  const RouteProgressState route = tracker.update({0.0, 0.0, 0.0});
+
+  LocalPathSmootherOptions options;
+  options.enable_collision_check = true;
+  LocalPathSmoother smoother(options);
+  RollingLocalMap local_map;
+  const LocalPathResult local_path = smoother.build({0.0, 0.0, 0.0}, route, local_map);
+  require(local_path.success, "local path smoother should build a no-obstacle local path");
+  require(local_path.path.size() > route.local_route.size(), "local path should be smoothed/resampled");
+  require(
+    local_path.smoothness_rad_per_m <= options.max_smoothness_rad_per_m,
+    "local path smoothness should be bounded");
+  require(
+    local_path.max_turn_angle_rad <= options.max_turn_angle_rad,
+    "local path max turn should be bounded");
+}
+
+void testLocalPathSmootherDoesNotCutAcrossCorner()
+{
+  RouteProgressTrackerOptions tracker_options;
+  tracker_options.local_route_length_m = 5.0;
+  RouteProgressTracker tracker(tracker_options);
+  std::vector<GlobalPathPoint> path{
+    makeGlobalPathPoint(0.0, 0.0, 0.0, PathPointKind::Surface, 0.0),
+    makeGlobalPathPoint(1.0, 0.0, 0.0, PathPointKind::Surface, 0.0),
+    makeGlobalPathPoint(1.0, 2.0, 0.0, PathPointKind::Surface, 0.0),
+    makeGlobalPathPoint(3.0, 2.0, 0.0, PathPointKind::Surface, 0.0)};
+  require(tracker.setPath(path), "route tracker should accept L-shaped path");
+  const RouteProgressState route = tracker.update({0.0, 0.0, 0.0});
+
+  LocalPathSmootherOptions options;
+  options.corner_cut_turn_angle_rad = 0.50;
+  options.max_route_deviation_m = 0.30;
+  LocalPathSmoother smoother(options);
+  const LocalPathResult local_path = smoother.build({0.0, 0.0, 0.0}, route, RollingLocalMap());
+
+  require(local_path.success, "corner-constrained local path should be valid");
+  require(!local_path.path.empty(), "corner-constrained local path should contain points");
+  const Point3 & end = local_path.path.back();
+  require(end.x > 0.80 && end.x < 1.20, "local target should stop at the first corner x");
+  require(std::abs(end.y) < 0.20, "local target should not cut past the first corner y");
+  for (const Point3 & point : local_path.path) {
+    require(
+      point.y < 0.35,
+      "local path should stay inside the validated corridor before the first corner");
+  }
+}
+
+void testRegulatedPurePursuitCruisesOnStraightPath()
+{
+  RegulatedPurePursuitOptions options;
+  options.desired_linear_speed_mps = 0.60;
+  options.max_linear_speed_mps = 0.80;
+  options.max_linear_accel_mps2 = 10.0;
+  RegulatedPurePursuitController controller(options);
+  const std::vector<Point3> local_path{{0.0, 0.0, 0.0}, {3.0, 0.0, 0.0}};
+  const auto command = controller.computeCommand(
+    {0.0, 0.0, 0.0}, local_path, 5.0, 0.1, RollingLocalMap());
+  require(command.valid, "RPP command should be valid on a straight path");
+  require(std::abs(command.linear_speed_mps - 0.60) < 1.0e-6, "RPP should cruise at desired speed");
+  require(std::abs(command.yaw_rate_radps) < 1.0e-6, "RPP should not turn on a straight path");
+}
+
+void testRegulatedPurePursuitSlowsForCurvature()
+{
+  RegulatedPurePursuitOptions options;
+  options.desired_linear_speed_mps = 1.00;
+  options.max_linear_speed_mps = 1.00;
+  options.max_lateral_accel_mps2 = 0.10;
+  options.max_linear_accel_mps2 = 10.0;
+  RegulatedPurePursuitController controller(options);
+  const std::vector<Point3> local_path{{0.0, 0.0, 0.0}, {0.6, 0.6, 0.0}, {1.0, 1.0, 0.0}};
+  const auto command = controller.computeCommand(
+    {0.0, 0.0, 0.0}, local_path, 5.0, 0.1, RollingLocalMap());
+  require(command.valid, "RPP command should be valid on a curved path");
+  require(command.linear_speed_mps < 1.0, "RPP should regulate speed on high curvature");
+  require(std::abs(command.yaw_rate_radps) > 1.0e-3, "RPP should turn on a curved path");
+}
+
+void testRegulatedPurePursuitSlowsNearGoal()
+{
+  RegulatedPurePursuitOptions options;
+  options.desired_linear_speed_mps = 0.80;
+  options.max_linear_speed_mps = 0.80;
+  options.goal_slowdown_distance_m = 1.0;
+  options.max_linear_accel_mps2 = 10.0;
+  RegulatedPurePursuitController controller(options);
+  const std::vector<Point3> local_path{{0.0, 0.0, 0.0}, {0.8, 0.0, 0.0}};
+  const auto command = controller.computeCommand(
+    {0.0, 0.0, 0.0}, local_path, 0.25, 0.1, RollingLocalMap());
+  require(command.valid, "RPP command should be valid near the goal");
+  require(command.linear_speed_mps < 0.30, "RPP should slow down near the goal");
+}
+
+void testRegulatedPurePursuitStopsForLocalObstacle()
+{
+  RegulatedPurePursuitOptions options;
+  options.desired_linear_speed_mps = 0.50;
+  options.max_linear_accel_mps2 = 10.0;
+  RegulatedPurePursuitController controller(options);
+  RollingLocalMap local_map;
+  local_map.setObstaclePoints({{0.4, 0.0, 0.0}});
+  const std::vector<Point3> local_path{{0.0, 0.0, 0.0}, {2.0, 0.0, 0.0}};
+  const auto command = controller.computeCommand(
+    {0.0, 0.0, 0.0}, local_path, 5.0, 0.1, local_map);
+  require(command.valid, "RPP command should remain valid when blocked");
+  require(command.linear_speed_mps == 0.0, "RPP should stop when the local collision arc is blocked");
+  require(command.status == "collision_arc_blocked", "RPP should expose the collision stop reason");
+}
+
+void testRollingLocalMapExpiresOldObstacles()
+{
+  tgw_planner::core::RollingLocalMapOptions options;
+  options.time_window_s = 1.0;
+  options.max_obstacle_points = 10;
+  RollingLocalMap local_map(options);
+  local_map.addObstaclePoints({{0.4, 0.0, 0.0}}, 0.0);
+  require(local_map.obstacleCount() == 1U, "rolling local map should store obstacle points");
+  require(
+    !local_map.checkPoint({0.4, 0.0, 0.0}).collision_free,
+    "rolling local map should report a current obstacle collision");
+  local_map.prune(2.0);
+  require(local_map.obstacleCount() == 0U, "rolling local map should expire old obstacle points");
+  require(
+    local_map.checkPoint({0.4, 0.0, 0.0}).collision_free,
+    "expired obstacle should not block collision checks");
 }
 
 void testLayeredSurfaceGraph()
@@ -207,6 +461,7 @@ void testLayeredSurfaceGraph()
       surface_cell.label = SurfaceLabel::Expanded;
       surface_cell.reachability = ReachabilityLabel::InferredReachable;
       surface_cell.support_component_id = 2;
+      surface_cell.surface_layer_id = 2;
       surface_cell.height_m = 2.0;
       surface_cell.confidence = 1.0;
       snapshot.surface.surface_cells[cell] = surface_cell;
@@ -259,6 +514,7 @@ void testSurfaceGraphRejectsLayerJump()
   lower.label = SurfaceLabel::Expanded;
   lower.reachability = ReachabilityLabel::InferredReachable;
   lower.support_component_id = 1;
+  lower.surface_layer_id = 1;
   lower.height_m = 0.0;
   lower.confidence = 1.0;
   snapshot.surface.surface_cells[lower.cell] = lower;
@@ -355,6 +611,7 @@ void testLowConfidenceIsNotBridge()
   a.label = SurfaceLabel::Expanded;
   a.reachability = ReachabilityLabel::LowConfidenceReachable;
   a.support_component_id = 1;
+  a.surface_layer_id = 9;
   a.height_m = 0.0;
   a.confidence = 0.35;
   snapshot.surface.surface_cells[a.cell] = a;
@@ -364,6 +621,7 @@ void testLowConfidenceIsNotBridge()
   SurfaceCell b = a;
   b.cell = {1, 0, 0};
   b.support_component_id = 2;
+  b.surface_layer_id = 9;
   snapshot.surface.surface_cells[b.cell] = b;
   snapshot.surface.traversable_cells.insert(b.cell);
   snapshot.reachability[b.cell] = b.reachability;
@@ -386,7 +644,17 @@ void testLowConfidenceIsNotBridge()
   require(!graph.node(b_node)->bridge, "low confidence node should not become a bridge");
   require(
     graph.sameComponent(a_node, b_node),
-    "layer-safe normal edges should allow valid transitions across support lineage ids");
+    "normal surface edges should use surface layer ids, not support lineage ids");
+  bool found_penalized_edge = false;
+  for (const auto & edge : graph.adjacency()[a_node.id]) {
+    if (edge.to == b_node && edge.cost > edge.length_xy_m + 2.0) {
+      found_penalized_edge = true;
+      break;
+    }
+  }
+  require(
+    found_penalized_edge,
+    "surface graph edge cost should include low-confidence safety penalties");
 }
 
 void testSurfaceGraphRejectsMissingSupportLineage()
@@ -400,6 +668,7 @@ void testSurfaceGraphRejectsMissingSupportLineage()
   anchored.label = SurfaceLabel::Expanded;
   anchored.reachability = ReachabilityLabel::InferredReachable;
   anchored.support_component_id = 1;
+  anchored.surface_layer_id = 1;
   anchored.height_m = 0.0;
   anchored.confidence = 1.0;
   snapshot.surface.surface_cells[anchored.cell] = anchored;
@@ -409,6 +678,7 @@ void testSurfaceGraphRejectsMissingSupportLineage()
   SurfaceCell unanchored = anchored;
   unanchored.cell = {1, 0, 0};
   unanchored.support_component_id = -1;
+  unanchored.surface_layer_id = -1;
   snapshot.surface.surface_cells[unanchored.cell] = unanchored;
   snapshot.surface.traversable_cells.insert(unanchored.cell);
   snapshot.reachability[unanchored.cell] = unanchored.reachability;
@@ -444,6 +714,7 @@ void testBridgeEndpointAttachesOnlyToIntendedComponent()
     surface_cell.label = SurfaceLabel::Expanded;
     surface_cell.reachability = ReachabilityLabel::InferredReachable;
     surface_cell.support_component_id = component_id;
+    surface_cell.surface_layer_id = component_id;
     surface_cell.height_m = 0.0;
     surface_cell.confidence = 1.0;
     snapshot.surface.surface_cells[cell] = surface_cell;
@@ -518,6 +789,7 @@ void testHybridPlannerUsesDenseTrajectoryBackboneAcrossIslands()
     surface_cell.label = SurfaceLabel::Expanded;
     surface_cell.reachability = ReachabilityLabel::InferredReachable;
     surface_cell.support_component_id = support_component_id;
+    surface_cell.surface_layer_id = support_component_id;
     surface_cell.height_m = height_m;
     surface_cell.confidence = 1.0;
     snapshot.surface.surface_cells[cell] = surface_cell;
@@ -609,6 +881,7 @@ void testHybridPlannerOptimizesPortalPairCost()
     surface_cell.label = SurfaceLabel::Expanded;
     surface_cell.reachability = ReachabilityLabel::InferredReachable;
     surface_cell.support_component_id = support_component_id;
+    surface_cell.surface_layer_id = support_component_id;
     surface_cell.height_m = height_m;
     surface_cell.confidence = 1.0;
     snapshot.surface.surface_cells[cell] = surface_cell;
@@ -698,6 +971,154 @@ void testHybridPlannerOptimizesPortalPairCost()
   require(
     plan.metrics.selected_backbone_length_m < 10.0,
     "selected backbone leg should be the short unified-graph route");
+}
+
+void testHybridPlannerRejectsInvalidBackboneEdge()
+{
+  ExperienceSnapshot snapshot;
+  snapshot.map_frame = "map";
+  snapshot.resolution_m = 1.0;
+
+  auto add_surface_cell = [&](const GridIndex & cell, int support_component_id) {
+    SurfaceCell surface_cell;
+    surface_cell.cell = cell;
+    surface_cell.label = SurfaceLabel::Expanded;
+    surface_cell.reachability = ReachabilityLabel::InferredReachable;
+    surface_cell.support_component_id = support_component_id;
+    surface_cell.surface_layer_id = support_component_id;
+    surface_cell.height_m = 0.0;
+    surface_cell.confidence = 1.0;
+    snapshot.surface.surface_cells[cell] = surface_cell;
+    snapshot.surface.traversable_cells.insert(cell);
+    snapshot.reachability[cell] = surface_cell.reachability;
+  };
+
+  add_surface_cell({0, 0, 0}, 1);
+  add_surface_cell({10, 0, 0}, 2);
+  snapshot.clearance.compute(
+    snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, snapshot.resolution_m);
+  snapshot.risk.compute(snapshot.surface, snapshot.clearance);
+
+  SurfacePlannerOptions planner_options;
+  planner_options.require_footprint_support = false;
+  ExperienceSurfaceGraph surface_graph;
+  surface_graph.build(snapshot, SurfaceTransitionValidator(planner_options));
+
+  const SurfaceNodeId start = surface_graph.nodeIdForCell({0, 0, 0});
+  const SurfaceNodeId goal = surface_graph.nodeIdForCell({10, 0, 0});
+  require(surface_graph.isValid(start), "invalid backbone test start node should exist");
+  require(surface_graph.isValid(goal), "invalid backbone test goal node should exist");
+  require(
+    !surface_graph.sameComponent(start, goal),
+    "invalid backbone test surface nodes should remain disconnected");
+
+  N3NavResource resource;
+  resource.map_frame = "map";
+  resource.body_frame = "base";
+  resource.has_native_dense_trajectory = true;
+  resource.dense_trajectory_source = "native";
+  TrajectoryProjectionResult projection;
+
+  auto add_backbone_sample = [&](int seq, const Point3 & support) {
+    N3TrajectoryPose pose;
+    pose.seq = static_cast<std::uint64_t>(seq);
+    pose.timestamp = static_cast<double>(seq);
+    pose.pose_world_lidar.translation = {support.x, support.y, support.z + 0.50};
+    resource.dense_trajectory.push_back(pose);
+
+    ProjectedSupportSample sample;
+    sample.seq = pose.seq;
+    sample.timestamp = pose.timestamp;
+    sample.trajectory_position = pose.pose_world_lidar.translation;
+    sample.support_position = support;
+    projection.accepted_projected_support_samples.push_back(sample);
+  };
+
+  add_backbone_sample(0, {0.5, 0.5, 0.0});
+  add_backbone_sample(1, {10.5, 0.5, 0.0});
+
+  ExperienceBackboneOptions backbone_options;
+  backbone_options.min_node_spacing_m = 0.0;
+  backbone_options.max_portal_xy_distance_m = 0.75;
+  backbone_options.max_portal_height_error_m = 0.20;
+  ExperienceBackboneGraph backbone;
+  backbone.build(resource, projection, surface_graph, backbone_options);
+  require(backbone.portals().size() == 2U, "invalid backbone test should expose two portals");
+
+  HybridExperiencePlannerOptions hybrid_options;
+  hybrid_options.max_backbone_edge_xy_gap_m = 1.0;
+  const auto plan = HybridExperiencePlanner(planner_options, hybrid_options).plan(
+    surface_graph, backbone, start, goal);
+  require(
+    !plan.success,
+    "hybrid planner should not use an over-limit backbone edge as a valid connector");
+}
+
+void testBackboneCreatesComponentDiversePortals()
+{
+  ExperienceSnapshot snapshot;
+  snapshot.map_frame = "map";
+  snapshot.resolution_m = 1.0;
+
+  auto add_surface_cell = [&](const GridIndex & cell, double height_m, int layer_id) {
+    SurfaceCell surface_cell;
+    surface_cell.cell = cell;
+    surface_cell.label = SurfaceLabel::Expanded;
+    surface_cell.reachability = ReachabilityLabel::InferredReachable;
+    surface_cell.support_component_id = layer_id;
+    surface_cell.surface_layer_id = layer_id;
+    surface_cell.height_m = height_m;
+    surface_cell.confidence = 1.0;
+    snapshot.surface.surface_cells[cell] = surface_cell;
+    snapshot.surface.traversable_cells.insert(cell);
+    snapshot.reachability[cell] = surface_cell.reachability;
+  };
+
+  add_surface_cell({0, 0, 0}, 0.0, 1);
+  add_surface_cell({0, 0, 2}, 1.0, 2);
+  snapshot.clearance.compute(
+    snapshot.surface.traversable_cells, snapshot.surface.boundary_cells, snapshot.resolution_m);
+  snapshot.risk.compute(snapshot.surface, snapshot.clearance);
+
+  SurfacePlannerOptions planner_options;
+  planner_options.require_footprint_support = false;
+  ExperienceSurfaceGraph surface_graph;
+  surface_graph.build(snapshot, SurfaceTransitionValidator(planner_options), planner_options);
+
+  N3NavResource resource;
+  resource.map_frame = "map";
+  resource.body_frame = "base";
+  resource.has_native_dense_trajectory = true;
+  resource.dense_trajectory_source = "native";
+  N3TrajectoryPose pose;
+  pose.seq = 1;
+  pose.timestamp = 1.0;
+  pose.pose_world_lidar.translation = {0.5, 0.5, 1.0};
+  resource.dense_trajectory.push_back(pose);
+
+  TrajectoryProjectionResult projection;
+  ProjectedSupportSample sample;
+  sample.seq = pose.seq;
+  sample.timestamp = pose.timestamp;
+  sample.trajectory_position = pose.pose_world_lidar.translation;
+  sample.support_position = {0.5, 0.5, 0.5};
+  projection.accepted_projected_support_samples.push_back(sample);
+
+  ExperienceBackboneOptions options;
+  options.min_node_spacing_m = 0.0;
+  options.max_portal_xy_distance_m = 0.25;
+  options.max_portal_height_error_m = 0.60;
+  options.max_portals_per_node = 2;
+  ExperienceBackboneGraph backbone;
+  backbone.build(resource, projection, surface_graph, options);
+
+  require(backbone.nodes().size() == 1U, "single trajectory sample should create one backbone node");
+  require(
+    backbone.portals().size() == 2U,
+    "one backbone node should retain component-diverse portals");
+  require(
+    backbone.portals()[0].surface_component_id != backbone.portals()[1].surface_component_id,
+    "component-diverse portals should attach to different surface components");
 }
 
 void testExperienceBuilderSkeleton()
@@ -1064,7 +1485,17 @@ int main()
   testClearanceAndRisk();
   testFootprintPlannerAndValidator();
   testFootprintSupportRatio();
-  testPlannerConnectivityLayer();
+  testGlobalPathTrackerFollowsStraightPath();
+  testGlobalPathTrackerConsumesSegmentSpeed();
+  testGlobalPathTrackerUsesForwardProjectionWindow();
+  testRouteProgressTrackerBuildsLocalWindowWithoutLayerJump();
+  testLocalPathSmootherBuildsShortSmoothPath();
+  testLocalPathSmootherDoesNotCutAcrossCorner();
+  testRegulatedPurePursuitCruisesOnStraightPath();
+  testRegulatedPurePursuitSlowsForCurvature();
+  testRegulatedPurePursuitSlowsNearGoal();
+  testRegulatedPurePursuitStopsForLocalObstacle();
+  testRollingLocalMapExpiresOldObstacles();
   testLayeredSurfaceGraph();
   testSurfaceGraphRejectsLayerJump();
   testSurfaceGraphBridgeHeightPolicy();
@@ -1073,6 +1504,8 @@ int main()
   testBridgeEndpointAttachesOnlyToIntendedComponent();
   testHybridPlannerUsesDenseTrajectoryBackboneAcrossIslands();
   testHybridPlannerOptimizesPortalPairCost();
+  testHybridPlannerRejectsInvalidBackboneEdge();
+  testBackboneCreatesComponentDiversePortals();
   testExperienceBuilderSkeleton();
   testReachableExpansionHeightGate();
   testReachableExpansionRejectsBodyObstruction();

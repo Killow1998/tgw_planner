@@ -34,6 +34,7 @@ struct SurfaceCell
   SurfaceLabel label{SurfaceLabel::Unknown};
   ReachabilityLabel reachability{ReachabilityLabel::Unknown};
   int support_component_id{-1};
+  int surface_layer_id{-1};
   int bridge_id{-1};
   int bridge_order{-1};
   double height_m{0.0};

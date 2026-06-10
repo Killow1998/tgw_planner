@@ -1,6 +1,7 @@
 #include "tgw_planner/core/n3map_reader.hpp"
 
 #include <cstddef>
+#include <fstream>
 #include <string>
 #include <utility>
 
@@ -29,7 +30,12 @@ std::string normalizeReaderError(const std::string & error)
   if (error == "pbstream_missing_dense_trajectory") {
     return error;
   }
-  if (error.find("open") != std::string::npos) {
+  if (
+    error.find("open") != std::string::npos ||
+    error.find("stat") != std::string::npos ||
+    error.find("not found") != std::string::npos ||
+    error.find("No such") != std::string::npos)
+  {
     return "pbstream_open_failed";
   }
   if (error.find("parse") != std::string::npos) {
@@ -87,6 +93,17 @@ N3NavResource convertResource(const n3mapping::N3NavResource & n3_resource)
 
 N3MapReadResult N3MapReader::readPbstream(const std::string & pbstream_path) const
 {
+  {
+    std::ifstream input(pbstream_path, std::ios::binary);
+    if (!input.good()) {
+      N3MapReadResult result;
+      result.error_code = "pbstream_open_failed";
+      result.message = pbstream_path.empty() ? "pbstream_path is required" :
+        "failed to open pbstream";
+      return result;
+    }
+  }
+
   n3mapping::N3NavReaderOptions options;
   options.allow_keyframe_fallback = false;
 

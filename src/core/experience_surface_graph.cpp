@@ -31,6 +31,7 @@ void ExperienceSurfaceGraph::build(
   component_id_.clear();
   components_.clear();
   metrics_ = {};
+  options_ = options;
   resolution_m_ = snapshot.resolution_m;
   buildBridgeAttachments(snapshot);
 
@@ -51,6 +52,7 @@ void ExperienceSurfaceGraph::build(
       node.z = surface_cell.height_m;
       node.reachability = surface_cell.reachability;
       node.support_component_id = surface_cell.support_component_id;
+      node.surface_layer_id = surface_cell.surface_layer_id;
       node.bridge_id = surface_cell.bridge_id;
       node.bridge_order = surface_cell.bridge_order;
       node.bridge_endpoint = surface_cell.bridge_endpoint;
@@ -100,6 +102,20 @@ void ExperienceSurfaceGraph::build(
   }
 
   computeComponents();
+}
+
+void ExperienceSurfaceGraph::build(
+  const NavigationSnapshot & snapshot,
+  const SurfaceTransitionValidator & validator,
+  const SurfacePlannerOptions & planner_options,
+  SurfaceGraphBuildOptions options)
+{
+  options.w_clearance = planner_options.w_clearance;
+  options.w_risk = planner_options.w_risk;
+  options.w_slope = planner_options.w_slope;
+  options.w_unknown = planner_options.w_unknown;
+  options.w_bridge = planner_options.w_bridge;
+  build(snapshot, validator, options);
 }
 
 bool ExperienceSurfaceGraph::empty() const
@@ -231,10 +247,10 @@ void ExperienceSurfaceGraph::buildBridgeAttachments(const NavigationSnapshot & s
       continue;
     }
     BridgeAttachment attachment;
-    attachment.entry_support_component_id =
-      supportComponentNearCell(snapshot, segment.entry_support_cell);
-    attachment.exit_support_component_id =
-      supportComponentNearCell(snapshot, segment.exit_support_cell);
+    attachment.entry_surface_layer_id =
+      surfaceLayerForCell(snapshot, segment.entry_support_cell);
+    attachment.exit_surface_layer_id =
+      surfaceLayerForCell(snapshot, segment.exit_support_cell);
     for (const auto & entry : segment.cell_order) {
       if (attachment.entry_order < 0 || entry.second < attachment.entry_order) {
         attachment.entry_order = entry.second;
@@ -247,29 +263,14 @@ void ExperienceSurfaceGraph::buildBridgeAttachments(const NavigationSnapshot & s
   }
 }
 
-int ExperienceSurfaceGraph::supportComponentNearCell(
+int ExperienceSurfaceGraph::surfaceLayerForCell(
   const NavigationSnapshot & snapshot, const GridIndex & cell) const
 {
   const auto exact_it = snapshot.surface.surface_cells.find(cell);
-  if (exact_it != snapshot.surface.surface_cells.end() &&
-    exact_it->second.support_component_id >= 0)
-  {
-    return exact_it->second.support_component_id;
+  if (exact_it == snapshot.surface.surface_cells.end()) {
+    return -1;
   }
-  for (int dx = -1; dx <= 1; ++dx) {
-    for (int dy = -1; dy <= 1; ++dy) {
-      for (int dz = -1; dz <= 1; ++dz) {
-        const auto it = snapshot.surface.surface_cells.find(
-          {cell.x + dx, cell.y + dy, cell.z + dz});
-        if (it != snapshot.surface.surface_cells.end() &&
-          it->second.support_component_id >= 0)
-        {
-          return it->second.support_component_id;
-        }
-      }
-    }
-  }
-  return -1;
+  return exact_it->second.surface_layer_id;
 }
 
 bool ExperienceSurfaceGraph::isBridgeCell(
@@ -356,8 +357,23 @@ std::optional<SurfaceEdge> ExperienceSurfaceGraph::makeContinuousSurfaceEdge(
   edge.dz_m = dz;
   edge.slope = slope;
   edge.kind = bridge_edge ? SurfaceEdgeKind::TrajectoryBridge : SurfaceEdgeKind::NormalSurface;
-  edge.cost = length_xy + 0.1 * abs_dz +
-    (edge.kind == SurfaceEdgeKind::TrajectoryBridge ? 1.0 : 0.0);
+  const double clearance_penalty =
+    options.w_clearance * snapshot.clearance.clearancePenalty(to.cell);
+  const double risk_penalty = options.w_risk * to.risk;
+  const double unknown_penalty =
+    options.w_unknown *
+    (!snapshot.observed_free_cells.empty() &&
+    snapshot.observed_free_cells.find(to.cell) == snapshot.observed_free_cells.end() ? 1.0 : 0.0);
+  const double slope_penalty = options.w_slope * abs_dz;
+  const double bridge_penalty =
+    options.w_bridge *
+    (edge.kind == SurfaceEdgeKind::TrajectoryBridge ||
+    to.reachability == ReachabilityLabel::LowConfidenceReachable ? 1.0 : 0.0);
+  const double safety_multiplier = std::clamp(
+    clearance_penalty + risk_penalty + unknown_penalty + slope_penalty,
+    0.0,
+    std::max(0.0, options.max_surface_safety_multiplier));
+  edge.cost = length_xy * (1.0 + safety_multiplier) + bridge_penalty;
   ++metrics_.graph_edges;
   metrics_.max_graph_edge_dz_m = std::max(metrics_.max_graph_edge_dz_m, abs_dz);
   metrics_.max_graph_edge_slope = std::max(metrics_.max_graph_edge_slope, slope);
@@ -379,7 +395,7 @@ bool ExperienceSurfaceGraph::isValidBridgeTransition(
   }
   const SurfaceNode & bridge_node = from.bridge ? from : to;
   const SurfaceNode & normal_node = from.bridge ? to : from;
-  if (!bridge_node.bridge_endpoint || normal_node.support_component_id < 0) {
+  if (!bridge_node.bridge_endpoint || normal_node.surface_layer_id < 0) {
     return false;
   }
   const auto attachment_it = bridge_attachments_.find(bridge_node.bridge_id);
@@ -388,12 +404,12 @@ bool ExperienceSurfaceGraph::isValidBridgeTransition(
   }
   const BridgeAttachment & attachment = attachment_it->second;
   const bool entry_match =
-    attachment.entry_support_component_id >= 0 &&
-    normal_node.support_component_id == attachment.entry_support_component_id &&
+    attachment.entry_surface_layer_id >= 0 &&
+    normal_node.surface_layer_id == attachment.entry_surface_layer_id &&
     bridge_node.bridge_order == attachment.entry_order;
   const bool exit_match =
-    attachment.exit_support_component_id >= 0 &&
-    normal_node.support_component_id == attachment.exit_support_component_id &&
+    attachment.exit_surface_layer_id >= 0 &&
+    normal_node.surface_layer_id == attachment.exit_surface_layer_id &&
     bridge_node.bridge_order == attachment.exit_order;
   return entry_match || exit_match;
 }
@@ -401,7 +417,8 @@ bool ExperienceSurfaceGraph::isValidBridgeTransition(
 bool ExperienceSurfaceGraph::isValidNormalTransition(
   const SurfaceNode & from, const SurfaceNode & to) const
 {
-  return from.support_component_id >= 0 && to.support_component_id >= 0;
+  return from.surface_layer_id >= 0 &&
+         from.surface_layer_id == to.surface_layer_id;
 }
 
 void ExperienceSurfaceGraph::computeComponents()

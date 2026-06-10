@@ -512,9 +512,13 @@ bool SurfaceAstarPlanner::validateGraphPath(
       return false;
     }
     if (path_edge->kind == SurfaceEdgeKind::NormalSurface) {
-      if (from_node->support_component_id < 0 || to_node->support_component_id < 0)
+      if (from_node->surface_layer_id < 0 || to_node->surface_layer_id < 0)
       {
-        failure_reason = "path_validation_failed_missing_support_component";
+        failure_reason = "path_validation_failed_missing_surface_layer";
+        return false;
+      }
+      if (from_node->surface_layer_id != to_node->surface_layer_id) {
+        failure_reason = "path_validation_failed_cross_surface_layer_edge";
         return false;
       }
     }
@@ -533,7 +537,7 @@ bool SurfaceAstarPlanner::validateGraphPath(
       } else {
         const SurfaceNode * bridge_node = from_node->bridge ? from_node : to_node;
         const SurfaceNode * normal_node = from_node->bridge ? to_node : from_node;
-        if (!bridge_node->bridge_endpoint || normal_node->support_component_id < 0) {
+        if (!bridge_node->bridge_endpoint || normal_node->surface_layer_id < 0) {
           failure_reason = "path_validation_failed_invalid_bridge_edge";
           return false;
         }

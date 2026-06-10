@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "tgw_planner/core/experience_backbone_graph.hpp"
+#include "tgw_planner/core/experience_planner_defaults.hpp"
 #include "tgw_planner/core/experience_surface_builder.hpp"
 #include "tgw_planner/core/experience_surface_graph.hpp"
 #include "tgw_planner/core/hybrid_experience_planner.hpp"
@@ -44,6 +45,13 @@ using tgw_planner::core::SurfaceTransitionValidator;
 using tgw_planner::core::TrajectoryProjectionResult;
 using tgw_planner::core::TrajectoryProjector;
 using tgw_planner::core::TrajectoryProjectorOptions;
+using tgw_planner::core::defaultExperienceBackboneOptions;
+using tgw_planner::core::defaultExperienceSurfaceBuilderOptions;
+using tgw_planner::core::defaultHybridExperiencePlannerOptions;
+using tgw_planner::core::defaultSurfaceGraphBuildOptions;
+using tgw_planner::core::defaultSurfacePlannerOptions;
+using tgw_planner::core::defaultTrajectoryProjectorOptions;
+using tgw_planner::core::isBackboneEdgeAllowedForHybrid;
 
 enum class QueryMode
 {
@@ -371,92 +379,32 @@ SweepOptions parseArgs(int argc, char ** argv)
 
 TrajectoryProjectorOptions projectorOptions()
 {
-  TrajectoryProjectorOptions options;
-  options.resolution_m = 0.10;
-  options.raw_resolution_m = 0.05;
-  options.search_below_min_m = 0.10;
-  options.search_below_max_m = 1.00;
-  options.max_support_jump_m = 0.35;
-  options.allow_support_reanchor_on_jump = true;
-  options.support_xy_search_radius_cells = 2;
-  options.support_xy_retry_radius_cells = 8;
-  options.max_trajectory_bridge_gap_m = 2.00;
-  options.max_trajectory_bridge_height_delta_m = 0.80;
-  options.trajectory_bridge_sample_step_m = 0.10;
-  options.footprint_length_m = 0.70;
-  options.footprint_width_m = 0.43;
-  options.footprint_base_to_front_m = 0.20;
-  options.min_footprint_support_ratio = 0.50;
-  options.footprint_support_height_tolerance_m = 0.20;
-  return options;
+  return defaultTrajectoryProjectorOptions();
 }
 
 ExperienceSurfaceBuilderOptions builderOptions()
 {
-  ExperienceSurfaceBuilderOptions options;
-  options.resolution_m = 0.10;
-  options.body_clearance_height_m = 0.65;
-  options.projector = projectorOptions();
-  options.expander.expansion_radius_cells = 2;
-  options.expander.max_expansion_steps = 12;
-  options.expander.vertical_tolerance_cells = 3;
-  options.expander.max_expansion_step_height_m = 0.28;
-  options.expander.experience_anchor_radius_cells = 24;
-  options.expander.experience_anchor_height_tolerance_m = 0.35;
-  options.expander.experience_anchor_vertical_tolerance_cells = 3;
-  options.expander.enable_hole_filling = true;
-  options.expander.hole_fill_iterations = 2;
-  options.expander.min_hole_fill_neighbors = 5;
-  options.expander.max_hole_fill_height_spread_m = 0.12;
-  return options;
+  return defaultExperienceSurfaceBuilderOptions();
 }
 
 SurfacePlannerOptions plannerOptions()
 {
-  SurfacePlannerOptions options;
-  options.max_step_height_m = 0.35;
-  options.max_iterations = 500000;
-  options.w_bridge = 2.5;
-  options.footprint.length_m = 0.70;
-  options.footprint.width_m = 0.43;
-  options.footprint.base_to_front_m = 0.20;
-  options.footprint.height_m = 0.65;
-  options.footprint.support_height_tolerance_m = 0.20;
-  options.footprint.min_support_ratio = 0.80;
-  options.require_footprint_support = true;
-  options.enable_shortcut = true;
-  return options;
+  return defaultSurfacePlannerOptions();
 }
 
 SurfaceGraphBuildOptions graphOptions()
 {
-  SurfaceGraphBuildOptions options;
-  options.max_edge_height_delta_m = 0.35;
-  options.max_bridge_edge_height_delta_m = 0.80;
-  options.max_bridge_attach_height_delta_m = 0.35;
-  options.max_edge_slope = 3.0;
-  options.max_bridge_edge_slope = 8.0;
-  return options;
+  return defaultSurfaceGraphBuildOptions();
 }
 
 ExperienceBackboneOptions backboneOptions()
 {
-  ExperienceBackboneOptions options;
-  options.min_node_spacing_m = 0.20;
-  options.max_portal_xy_distance_m = 1.20;
-  options.max_portal_height_error_m = 0.45;
-  options.min_portal_clearance_m = 0.0;
-  return options;
+  return defaultExperienceBackboneOptions();
 }
 
 HybridExperiencePlannerOptions hybridOptions()
 {
-  HybridExperiencePlannerOptions options;
-  options.backbone_cost_scale = 1.2;
-  options.portal_switch_cost = 0.5;
-  options.portal_height_error_weight = 0.25;
-  options.backbone_low_confidence_penalty = 0.5;
-  return options;
+  return defaultHybridExperiencePlannerOptions();
 }
 
 void chooseAutoBands(
@@ -483,7 +431,8 @@ void chooseAutoBands(
 
 HybridConnectivity buildHybridConnectivity(
   const ExperienceSurfaceGraph & surface_graph,
-  const ExperienceBackboneGraph & backbone_graph)
+  const ExperienceBackboneGraph & backbone_graph,
+  const HybridExperiencePlannerOptions & hybrid_options)
 {
   HybridConnectivity out;
   const std::size_t surface_count = surface_graph.nodes().size();
@@ -510,6 +459,9 @@ HybridConnectivity buildHybridConnectivity(
     }
   }
   for (const BackboneEdge & edge : backbone_graph.edges()) {
+    if (!isBackboneEdgeAllowedForHybrid(edge, hybrid_options)) {
+      continue;
+    }
     const std::uint32_t from = static_cast<std::uint32_t>(surface_count + edge.from.id);
     const std::uint32_t to = static_cast<std::uint32_t>(surface_count + edge.to.id);
     if (from >= total || to >= total) {
@@ -722,7 +674,7 @@ int main(int argc, char ** argv)
     const SurfacePlannerOptions surface_options = plannerOptions();
     ExperienceSurfaceGraph surface_graph;
     surface_graph.build(
-      build.snapshot, SurfaceTransitionValidator(surface_options), graphOptions());
+      build.snapshot, SurfaceTransitionValidator(surface_options), surface_options, graphOptions());
 
     ExperienceBackboneGraph backbone_graph;
     backbone_graph.build(read_result.resource, projection, surface_graph, backboneOptions());
@@ -758,7 +710,9 @@ int main(int argc, char ** argv)
       }
     }
 
-    const HybridConnectivity connectivity = buildHybridConnectivity(surface_graph, backbone_graph);
+    const HybridExperiencePlannerOptions hybrid_options = hybridOptions();
+    const HybridConnectivity connectivity =
+      buildHybridConnectivity(surface_graph, backbone_graph, hybrid_options);
     const auto low_components = countComponents(low_nodes, connectivity);
     const auto high_components = countComponents(high_nodes, connectivity);
     const auto same_band_components = countComponents(same_band_nodes, connectivity);
@@ -806,7 +760,7 @@ int main(int argc, char ** argv)
       static_cast<double>(dominant_same_band_nodes.size()) /
       static_cast<double>(same_band_nodes.size());
 
-    HybridExperiencePlanner planner(surface_options, hybridOptions());
+    HybridExperiencePlanner planner(surface_options, hybrid_options);
     std::vector<SurfaceNodeId> sampled_start;
     std::vector<SurfaceNodeId> sampled_goal;
     if (sweep_options.query_mode == QueryMode::SameBand) {

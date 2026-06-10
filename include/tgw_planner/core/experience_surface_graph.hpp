@@ -16,6 +16,7 @@ namespace tgw_planner::core
 {
 
 class SurfaceTransitionValidator;
+struct SurfacePlannerOptions;
 
 struct SurfaceNodeId
 {
@@ -44,6 +45,7 @@ struct SurfaceNode
   GridIndex cell;
   int surface_id{-1};
   int support_component_id{-1};
+  int surface_layer_id{-1};
   int bridge_id{-1};
   int bridge_order{-1};
   int x{0};
@@ -81,8 +83,14 @@ struct SurfaceGraphBuildOptions
   double max_edge_height_delta_m{0.30};
   double max_bridge_edge_height_delta_m{0.80};
   double max_bridge_attach_height_delta_m{0.35};
-  double max_edge_slope{std::numeric_limits<double>::infinity()};
-  double max_bridge_edge_slope{std::numeric_limits<double>::infinity()};
+  double max_edge_slope{3.0};
+  double max_bridge_edge_slope{8.0};
+  double w_clearance{0.8};
+  double w_risk{1.5};
+  double w_slope{0.3};
+  double w_unknown{2.0};
+  double w_bridge{2.5};
+  double max_surface_safety_multiplier{5.0};
 };
 
 struct SurfaceGraphBuildMetrics
@@ -104,6 +112,11 @@ public:
   void build(
     const NavigationSnapshot & snapshot,
     const SurfaceTransitionValidator & validator,
+    SurfaceGraphBuildOptions options = {});
+  void build(
+    const NavigationSnapshot & snapshot,
+    const SurfaceTransitionValidator & validator,
+    const SurfacePlannerOptions & planner_options,
     SurfaceGraphBuildOptions options = {});
 
   bool empty() const;
@@ -129,16 +142,15 @@ public:
 private:
   struct BridgeAttachment
   {
-    int entry_support_component_id{-1};
-    int exit_support_component_id{-1};
+    int entry_surface_layer_id{-1};
+    int exit_surface_layer_id{-1};
     int entry_order{-1};
     int exit_order{-1};
   };
 
   Point3 cellCenter(const GridIndex & cell, double resolution_m) const;
   void buildBridgeAttachments(const NavigationSnapshot & snapshot);
-  int supportComponentNearCell(
-    const NavigationSnapshot & snapshot, const GridIndex & cell) const;
+  int surfaceLayerForCell(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
   bool isBridgeCell(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
   bool isSurfaceGraphNode(
     const NavigationSnapshot & snapshot,
@@ -164,6 +176,7 @@ private:
   std::vector<int> component_id_;
   std::vector<SurfaceGraphComponentInfo> components_;
   SurfaceGraphBuildMetrics metrics_;
+  SurfaceGraphBuildOptions options_;
   double resolution_m_{0.10};
 };
 

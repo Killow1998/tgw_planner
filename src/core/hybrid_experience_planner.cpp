@@ -160,6 +160,53 @@ double edgeSlope(double length_xy_m, double dz_m)
          std::numeric_limits<double>::infinity();
 }
 
+}  // namespace
+
+HybridBackboneEdgeValidation validateBackboneEdgeForHybrid(
+  double length_xy_m,
+  double dz_m,
+  const HybridExperiencePlannerOptions & options)
+{
+  HybridBackboneEdgeValidation result;
+  result.slope = edgeSlope(length_xy_m, dz_m);
+  if (!std::isfinite(length_xy_m) || !std::isfinite(dz_m)) {
+    result.reason = "non_finite";
+    return result;
+  }
+  if (length_xy_m > options.max_backbone_edge_xy_gap_m) {
+    result.reason = "xy_gap";
+    return result;
+  }
+  if (std::abs(dz_m) > options.max_backbone_edge_dz_m) {
+    result.reason = "height_delta";
+    return result;
+  }
+  if (result.slope > options.max_backbone_edge_slope) {
+    result.reason = "slope";
+    return result;
+  }
+  result.allowed = true;
+  result.reason = "";
+  return result;
+}
+
+HybridBackboneEdgeValidation validateBackboneEdgeForHybrid(
+  const BackboneEdge & edge,
+  const HybridExperiencePlannerOptions & options)
+{
+  return validateBackboneEdgeForHybrid(edge.length_xy_m, edge.dz_m, options);
+}
+
+bool isBackboneEdgeAllowedForHybrid(
+  const BackboneEdge & edge,
+  const HybridExperiencePlannerOptions & options)
+{
+  return validateBackboneEdgeForHybrid(edge, options).allowed;
+}
+
+namespace
+{
+
 bool validateHybridPath(
   const HybridGraph & graph,
   const ExperienceBackboneGraph & backbone_graph,
@@ -200,19 +247,20 @@ bool validateHybridPath(
       continue;
     }
     if (edge->kind == HybridEdgeKind::Backbone) {
+      const HybridBackboneEdgeValidation edge_validation =
+        validateBackboneEdgeForHybrid(edge->length_xy_m, edge->dz_m, options);
       if (graph.nodes[from].kind != HybridNodeKind::Backbone ||
         graph.nodes[to].kind != HybridNodeKind::Backbone ||
-        edge->length_xy_m > options.max_backbone_edge_xy_gap_m ||
-        abs_dz > options.max_backbone_edge_dz_m ||
-        edgeSlope(edge->length_xy_m, edge->dz_m) > options.max_backbone_edge_slope)
+        !edge_validation.allowed)
       {
         std::ostringstream message;
         message << "path_validation_failed_invalid_backbone_edge"
+          << " reason=" << edge_validation.reason
           << " from=" << graph.nodes[from].backbone_id.id
           << " to=" << graph.nodes[to].backbone_id.id
           << " xy=" << edge->length_xy_m
           << " dz=" << abs_dz
-          << " slope=" << edgeSlope(edge->length_xy_m, edge->dz_m)
+          << " slope=" << edge_validation.slope
           << " max_xy=" << options.max_backbone_edge_xy_gap_m
           << " max_dz=" << options.max_backbone_edge_dz_m
           << " max_slope=" << options.max_backbone_edge_slope;
@@ -279,6 +327,9 @@ HybridGraph buildHybridGraph(
   }
 
   for (const BackboneEdge & backbone_edge : backbone_graph.edges()) {
+    if (!isBackboneEdgeAllowedForHybrid(backbone_edge, hybrid_options)) {
+      continue;
+    }
     const std::uint32_t from = graph.backbone_offset + backbone_edge.from.id;
     const std::uint32_t to = graph.backbone_offset + backbone_edge.to.id;
     if (!validHybridId(graph, from) || !validHybridId(graph, to)) {
@@ -383,10 +434,11 @@ SurfacePlanResult HybridExperiencePlanner::plan(
     return result;
   }
 
-  if (surface_graph.sameComponent(start, goal)) {
-    return SurfaceAstarPlanner(surface_options_).plan(surface_graph, start, goal);
-  }
+  const bool same_surface_component = surface_graph.sameComponent(start, goal);
   if (backbone_graph.empty() || backbone_graph.portals().empty()) {
+    if (same_surface_component) {
+      return SurfaceAstarPlanner(surface_options_).plan(surface_graph, start, goal);
+    }
     result.message = "no_backbone_portal_for_start_or_goal";
     result.metrics.failure_reason = result.message;
     return result;
@@ -497,6 +549,8 @@ SurfacePlanResult HybridExperiencePlanner::plan(
   result.raw_path.reserve(hybrid_path.size());
   result.path.reserve(hybrid_path.size());
   result.path_kinds.reserve(hybrid_path.size());
+  double clearance_sum = 0.0;
+  std::uint32_t clearance_samples = 0U;
   for (std::size_t i = 0U; i < hybrid_path.size(); ++i) {
     const std::uint32_t node_id = hybrid_path[i];
     const HybridNode & node = graph.nodes[node_id];
@@ -508,6 +562,24 @@ SurfacePlanResult HybridExperiencePlanner::plan(
       const SurfaceNode * surface_node = surface_graph.node(node.surface_id);
       if (surface_node != nullptr) {
         confidence = surface_node->confidence;
+        const double clearance = surface_node->clearance_m;
+        if (!result.metrics.has_min_path_clearance_cell ||
+          clearance < result.metrics.min_path_clearance_m)
+        {
+          result.metrics.min_path_clearance_m = clearance;
+          result.metrics.min_path_clearance_cell = surface_node->cell;
+          result.metrics.has_min_path_clearance_cell = true;
+        }
+        clearance_sum += clearance;
+        ++clearance_samples;
+        result.metrics.clearance_cost_sum +=
+          std::isfinite(clearance) ? 1.0 / (clearance + 0.05) : 0.0;
+        result.metrics.risk_cost_sum += surface_node->risk;
+        result.metrics.max_path_risk =
+          std::max(result.metrics.max_path_risk, surface_node->risk);
+        if (clearance < 0.30) {
+          ++result.metrics.low_clearance_samples;
+        }
       }
     } else if (node.kind == HybridNodeKind::Backbone) {
       const BackboneNode * backbone_node = backbone_graph.node(node.backbone_id);
@@ -527,6 +599,22 @@ SurfacePlanResult HybridExperiencePlanner::plan(
       }
     }
   }
+  if (clearance_samples > 0U) {
+    result.metrics.mean_path_clearance_m =
+      clearance_sum / static_cast<double>(clearance_samples);
+  }
+
+  std::size_t first_portal_edge_index = std::numeric_limits<std::size_t>::max();
+  std::size_t last_portal_edge_index = std::numeric_limits<std::size_t>::max();
+  for (std::size_t i = 1U; i < hybrid_path.size(); ++i) {
+    const HybridEdge * edge = findEdge(graph, hybrid_path[i - 1U], hybrid_path[i]);
+    if (edge != nullptr && edge->kind == HybridEdgeKind::Portal) {
+      if (first_portal_edge_index == std::numeric_limits<std::size_t>::max()) {
+        first_portal_edge_index = i;
+      }
+      last_portal_edge_index = i;
+    }
+  }
 
   for (std::size_t i = 1U; i < hybrid_path.size(); ++i) {
     const HybridEdge * edge = findEdge(graph, hybrid_path[i - 1U], hybrid_path[i]);
@@ -536,6 +624,13 @@ SurfacePlanResult HybridExperiencePlanner::plan(
     if (edge->kind == HybridEdgeKind::Surface) {
       ++result.metrics.used_surface_edges;
       result.metrics.surface_path_length_m += edge->length_xy_m;
+      if (first_portal_edge_index == std::numeric_limits<std::size_t>::max() ||
+        i < first_portal_edge_index)
+      {
+        result.metrics.selected_start_surface_leg_m += edge->length_xy_m;
+      } else if (i > last_portal_edge_index) {
+        result.metrics.selected_goal_surface_leg_m += edge->length_xy_m;
+      }
     } else if (edge->kind == HybridEdgeKind::Backbone) {
       ++result.metrics.used_backbone_edges;
       result.metrics.backbone_path_length_m += edge->length_xy_m;
@@ -571,7 +666,6 @@ SurfacePlanResult HybridExperiencePlanner::plan(
       result.metrics.selected_goal_backbone_node - result.metrics.selected_start_backbone_node;
   }
   result.metrics.selected_backbone_length_m = result.metrics.backbone_path_length_m;
-  result.metrics.selected_start_surface_leg_m = result.metrics.surface_path_length_m;
   result.metrics.selected_total_hybrid_cost = cost[goal_id];
   fillGlobalPathYaws(result);
   fillPathMetrics(result);
@@ -683,14 +777,16 @@ void HybridExperiencePlanner::fillPathMetrics(SurfacePlanResult & result) const
   result.metrics.path_length_m = pathLength(result.path);
   result.metrics.raw_path_length_m = result.metrics.path_length_m;
   result.metrics.raw_path_waypoints = static_cast<std::uint32_t>(result.raw_path.size());
-  result.metrics.min_path_clearance_m = 0.0;
-  result.metrics.mean_path_clearance_m = 0.0;
   result.metrics.final_path_validated = true;
   result.metrics.success = result.success;
   for (std::size_t i = 1U; i < result.path.size(); ++i) {
     const double edge_dz = std::abs(result.path[i].z - result.path[i - 1U].z);
     result.metrics.max_path_edge_dz_m =
       std::max(result.metrics.max_path_edge_dz_m, edge_dz);
+  }
+  if (!result.metrics.has_min_path_clearance_cell) {
+    result.metrics.min_path_clearance_m = 0.0;
+    result.metrics.mean_path_clearance_m = 0.0;
   }
 }
 

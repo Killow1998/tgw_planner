@@ -63,11 +63,25 @@ colcon build --packages-select tgw_planner --symlink-install
 
 ## Launch
 
+For RViz kinematic replay without a robot odom source:
+
 ```bash
 source $ROS_WS/install/setup.bash
-ros2 launch tgw_planner experience_planner.launch.py \
+ros2 launch tgw_planner experience_planner_sim.launch.py \
   pbstream_path:=/absolute/path/to/n3map.pbstream
 ```
+
+For real odom / command output wiring:
+
+```bash
+source $ROS_WS/install/setup.bash
+ros2 launch tgw_planner experience_planner_real.launch.py \
+  pbstream_path:=/absolute/path/to/n3map.pbstream
+```
+
+The real launch defaults to publishing velocity commands on
+`/tgw_experience/cmd_vel`; override `tracking_cmd_vel_topic:=/cmd_vel` only
+when the robot-side command path is ready.
 
 Optional RViz support remains available through:
 

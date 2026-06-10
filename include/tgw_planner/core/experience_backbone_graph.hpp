@@ -82,6 +82,7 @@ struct ExperienceBackboneOptions
   double max_portal_xy_distance_m{1.20};
   double max_portal_height_error_m{0.45};
   double min_portal_clearance_m{0.0};
+  std::size_t max_portals_per_node{3};
 };
 
 struct ExperienceBackboneMetrics

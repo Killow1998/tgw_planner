@@ -268,6 +268,76 @@ int supportComponentForCell(
   }
   return -1;
 }
+
+void assignSurfaceLayerIds(
+  ReachableExpansionResult & result,
+  const ReachableExpanderOptions & options)
+{
+  std::unordered_map<GridIndex, int, GridIndexHash> layer_ids;
+  int next_layer_id = 0;
+
+  for (const GridIndex & seed : result.traversable_cells) {
+    if (layer_ids.find(seed) != layer_ids.end()) {
+      continue;
+    }
+    const auto seed_it = result.surface_cells.find(seed);
+    if (seed_it == result.surface_cells.end() ||
+      seed_it->second.label == SurfaceLabel::TrajectoryBridge) {
+      continue;
+    }
+
+    const int layer_id = next_layer_id++;
+    std::queue<GridIndex> queue;
+    queue.push(seed);
+    layer_ids[seed] = layer_id;
+
+    while (!queue.empty()) {
+      const GridIndex current = queue.front();
+      queue.pop();
+      const double current_height = cellHeight(
+        result.surface_cells, current, options.resolution_m);
+
+      for (int dx = -1; dx <= 1; ++dx) {
+        for (int dy = -1; dy <= 1; ++dy) {
+          if (dx == 0 && dy == 0) {
+            continue;
+          }
+          for (int dz = -options.vertical_tolerance_cells;
+            dz <= options.vertical_tolerance_cells; ++dz)
+          {
+            const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
+            if (result.traversable_cells.find(neighbor) == result.traversable_cells.end() ||
+              layer_ids.find(neighbor) != layer_ids.end())
+            {
+              continue;
+            }
+            const auto neighbor_it = result.surface_cells.find(neighbor);
+            if (neighbor_it == result.surface_cells.end() ||
+              neighbor_it->second.label == SurfaceLabel::TrajectoryBridge) {
+              continue;
+            }
+            const double neighbor_height = cellHeight(
+              result.surface_cells, neighbor, options.resolution_m);
+            if (std::abs(neighbor_height - current_height) >
+              options.max_expansion_step_height_m)
+            {
+              continue;
+            }
+            layer_ids[neighbor] = layer_id;
+            queue.push(neighbor);
+          }
+        }
+      }
+    }
+  }
+
+  for (const auto & entry : layer_ids) {
+    const auto surface_it = result.surface_cells.find(entry.first);
+    if (surface_it != result.surface_cells.end()) {
+      surface_it->second.surface_layer_id = entry.second;
+    }
+  }
+}
 }  // namespace
 
 ReachableExpander::ReachableExpander(ReachableExpanderOptions options)
@@ -496,6 +566,8 @@ ReachableExpansionResult ReachableExpander::expand(
       }
     }
   }
+
+  assignSurfaceLayerIds(result, options_);
 
   for (const GridIndex & seed : bridge_seed_cells) {
     if (result.traversable_cells.find(seed) != result.traversable_cells.end()) {

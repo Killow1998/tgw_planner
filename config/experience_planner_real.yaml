@@ -1,0 +1,10 @@
+tgw_experience_planner_node:
+  ros__parameters:
+    enable_path_tracking: true
+    tracking_odom_topic: "/odom"
+    tracking_cmd_vel_topic: "/tgw_experience/cmd_vel"
+    enable_kinematic_replay: false
+    kinematic_replay_odom_topic: "/tgw_experience/fake_odom"
+    kinematic_replay_reset_on_plan: false
+    enable_local_obstacle_cloud: false
+    local_obstacle_cloud_topic: "/tgw_experience/local_cloud"

@@ -1,0 +1,439 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 78
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /Simulation1
+        - /Planning1
+      Splitter Ratio: 0.5
+    Tree Height: 719
+  - Class: rviz_common/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 160
+      Enabled: true
+      Name: Grid
+      Plane: XY
+      Plane Cell Count: 80
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_common/Group
+      Displays:
+        - Alpha: 0.75
+          Autocompute Intensity Bounds: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 40; 220; 80
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: true
+          Name: Expanded Reachable
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 4
+          Size (m): 0.08
+          Style: Flat Squares
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/expanded_reachable_cloud
+          Use Fixed Frame: true
+          Value: true
+        - Alpha: 0.55
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 130; 130; 130
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Min Color: 0; 0; 0
+          Name: Dense Trajectory
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.04
+          Style: Points
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/trajectory_cloud
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: true
+        - Alpha: 0.9
+          Autocompute Intensity Bounds: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz_default_plugins/PointCloud2
+          Color: 255; 255; 255
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: false
+          Name: Backbone
+          Position Transformer: XYZ
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.05
+          Style: Points
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/backbone_cloud
+          Use Fixed Frame: true
+          Value: false
+      Enabled: true
+      Name: Map
+    - Class: rviz_common/Group
+      Displays:
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz_default_plugins/Path
+          Color: 255; 255; 255
+          Enabled: true
+          Head Diameter: 0.12
+          Head Length: 0.20
+          Length: 0.20
+          Line Style: Lines
+          Line Width: 0.08
+          Name: Global Path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0.08
+          Pose Color: 255; 255; 255
+          Pose Style: None
+          Radius: 0.03
+          Shaft Diameter: 0.05
+          Shaft Length: 0.15
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/path
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz_default_plugins/Path
+          Color: 0; 220; 255
+          Enabled: true
+          Head Diameter: 0.12
+          Head Length: 0.20
+          Length: 0.20
+          Line Style: Lines
+          Line Width: 0.10
+          Name: Local Smoothed Path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0.16
+          Pose Color: 0; 220; 255
+          Pose Style: None
+          Radius: 0.03
+          Shaft Diameter: 0.05
+          Shaft Length: 0.15
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/local_path
+          Value: true
+        - Alpha: 0.9
+          Buffer Length: 1
+          Class: rviz_default_plugins/Path
+          Color: 255; 120; 0
+          Enabled: true
+          Head Diameter: 0.12
+          Head Length: 0.20
+          Length: 0.20
+          Line Style: Lines
+          Line Width: 0.06
+          Name: Used Backbone Segment
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0.20
+          Pose Color: 255; 120; 0
+          Pose Style: None
+          Radius: 0.03
+          Shaft Diameter: 0.05
+          Shaft Length: 0.15
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/hybrid_path
+          Value: true
+      Enabled: true
+      Name: Planning
+    - Class: rviz_common/Group
+      Displays:
+        - Angle Tolerance: 0.10000000149011612
+          Class: rviz_default_plugins/Odometry
+          Covariance:
+            Orientation:
+              Alpha: 0.5
+              Color: 255; 255; 127
+              Color Style: Unique
+              Frame: Local
+              Offset: 1
+              Scale: 1
+              Value: false
+            Position:
+              Alpha: 0.30000001192092896
+              Color: 204; 51; 204
+              Scale: 1
+              Value: false
+            Value: false
+          Enabled: true
+          Keep: 200
+          Name: Fake Odom Trail
+          Position Tolerance: 0.05000000074505806
+          Shape:
+            Alpha: 1
+            Axes Length: 0.55
+            Axes Radius: 0.05000000074505806
+            Color: 255; 80; 0
+            Head Length: 0.30000001192092896
+            Head Radius: 0.10000000149011612
+            Shaft Length: 0.65
+            Shaft Radius: 0.05000000074505806
+            Value: Arrow
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/fake_odom
+          Value: true
+        - Alpha: 0.95
+          Buffer Length: 1
+          Class: rviz_default_plugins/Path
+          Color: 255; 255; 255
+          Enabled: true
+          Head Diameter: 0.12
+          Head Length: 0.20
+          Length: 0.20
+          Line Style: Lines
+          Line Width: 0.08
+          Name: Sim Robot Path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0.28
+          Pose Color: 255; 255; 255
+          Pose Style: None
+          Radius: 0.03
+          Shaft Diameter: 0.05
+          Shaft Length: 0.15
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            Filter size: 10
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/sim_robot_path
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/sim_robot_marker
+          Name: Sim Robot
+          Namespaces:
+            tgw_kinematic_replay_robot: true
+          Queue Size: 100
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/tracker_lookahead_marker
+          Name: Lookahead Marker
+          Namespaces:
+            tgw_tracker_lookahead: true
+          Queue Size: 100
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/tracker_projected_marker
+          Name: Projected Route Marker
+          Namespaces:
+            tgw_tracker_projected: true
+          Queue Size: 100
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/tracking_status_marker
+          Name: Tracking Status
+          Namespaces:
+            tgw_tracking_status: true
+          Queue Size: 100
+          Value: true
+      Enabled: true
+      Name: Simulation
+    - Class: rviz_common/Group
+      Displays:
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/start_marker
+          Name: Start Marker
+          Namespaces:
+            tgw_start: true
+          Queue Size: 100
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/goal_marker
+          Name: Goal Marker
+          Namespaces:
+            tgw_goal: true
+          Queue Size: 100
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Topic:
+            Depth: 5
+            Durability Policy: Transient Local
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_experience/plan_status_marker
+          Name: Plan Status
+          Namespaces:
+            tgw_plan_status: true
+          Queue Size: 100
+          Value: true
+        - Class: rviz_default_plugins/Marker
+          Enabled: true
+          Topic:
+            Depth: 5
+            Durability Policy: Volatile
+            History Policy: Keep Last
+            Reliability Policy: Reliable
+            Value: /tgw_pose_tool_preview
+          Name: TGW Pose Tool Preview
+          Namespaces:
+            tgw_pose_preview: true
+          Queue Size: 100
+          Value: true
+      Enabled: true
+      Name: Click Markers
+  Enabled: true
+  Global Options:
+    Background Color: 25; 25; 25
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/Measure
+    - Class: rviz_default_plugins/SetInitialPose
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /goal_pose
+    - Class: tgw_planner/Tgw3DStartTool
+    - Class: tgw_planner/Tgw3DGoalTool
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 35
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.06
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 1.2
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Yaw: 0.8
+    Saved: ~
+Window Geometry:
+  Height: 1000
+  Width: 1500
+  X: 50
+  Y: 50

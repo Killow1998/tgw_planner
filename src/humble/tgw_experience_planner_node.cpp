@@ -16,6 +16,8 @@
 
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/twist.hpp"
+#include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
@@ -24,12 +26,17 @@
 #include "std_srvs/srv/trigger.hpp"
 #include "visualization_msgs/msg/marker.hpp"
 
+#include "tgw_planner/core/experience_planner_defaults.hpp"
 #include "tgw_planner/core/experience_surface_builder.hpp"
 #include "tgw_planner/core/experience_surface_graph.hpp"
 #include "tgw_planner/core/grid_index.hpp"
 #include "tgw_planner/core/experience_backbone_graph.hpp"
 #include "tgw_planner/core/hybrid_experience_planner.hpp"
+#include "tgw_planner/core/local_path_smoother.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
+#include "tgw_planner/core/regulated_pure_pursuit.hpp"
+#include "tgw_planner/core/rolling_local_map.hpp"
+#include "tgw_planner/core/route_progress_tracker.hpp"
 #include "tgw_planner/core/surface_astar_planner.hpp"
 #include "tgw_planner/core/trajectory_projector.hpp"
 #include "tgw_planner/msg/planner_stats.hpp"
@@ -55,15 +62,33 @@ using tgw_planner::core::GridIndex;
 using tgw_planner::core::SurfaceGraphBuildOptions;
 using tgw_planner::core::SurfaceNode;
 using tgw_planner::core::SurfaceNodeId;
+using tgw_planner::core::LocalPathResult;
+using tgw_planner::core::LocalPathSmoother;
+using tgw_planner::core::LocalPathSmootherOptions;
 using tgw_planner::core::SurfaceAstarPlanner;
 using tgw_planner::core::SurfacePlanResult;
 using tgw_planner::core::SurfacePlannerOptions;
 using tgw_planner::core::SurfaceTransitionValidator;
 using tgw_planner::core::HybridExperiencePlanner;
 using tgw_planner::core::HybridExperiencePlannerOptions;
+using tgw_planner::core::RegulatedPurePursuitCommand;
+using tgw_planner::core::RegulatedPurePursuitController;
+using tgw_planner::core::RegulatedPurePursuitOptions;
+using tgw_planner::core::RollingLocalMap;
+using tgw_planner::core::RollingLocalMapOptions;
+using tgw_planner::core::RoutePose2D;
+using tgw_planner::core::RouteProgressState;
+using tgw_planner::core::RouteProgressTracker;
+using tgw_planner::core::RouteProgressTrackerOptions;
 using tgw_planner::core::TrajectoryProjectionResult;
 using tgw_planner::core::TrajectoryProjector;
 using tgw_planner::core::TrajectoryProjectorOptions;
+using tgw_planner::core::defaultExperienceBackboneOptions;
+using tgw_planner::core::defaultExperienceSurfaceBuilderOptions;
+using tgw_planner::core::defaultHybridExperiencePlannerOptions;
+using tgw_planner::core::defaultSurfaceGraphBuildOptions;
+using tgw_planner::core::defaultSurfacePlannerOptions;
+using tgw_planner::core::defaultTrajectoryProjectorOptions;
 
 struct IntensityPoint
 {
@@ -465,6 +490,95 @@ Point3 stampedPoint(const geometry_msgs::msg::PointStamped & point)
   return {point.point.x, point.point.y, point.point.z};
 }
 
+geometry_msgs::msg::Quaternion quaternionFromYaw(const double yaw_rad)
+{
+  geometry_msgs::msg::Quaternion q;
+  q.w = std::cos(0.5 * yaw_rad);
+  q.z = std::sin(0.5 * yaw_rad);
+  return q;
+}
+
+double yawFromQuaternion(const geometry_msgs::msg::Quaternion & q)
+{
+  const double siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+  const double cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+  return std::atan2(siny_cosp, cosy_cosp);
+}
+
+std::string pathKindName(const tgw_planner::core::PathPointKind kind)
+{
+  switch (kind) {
+    case tgw_planner::core::PathPointKind::Surface:
+      return "surface";
+    case tgw_planner::core::PathPointKind::Backbone:
+      return "backbone";
+    case tgw_planner::core::PathPointKind::Portal:
+      return "portal";
+    case tgw_planner::core::PathPointKind::Unknown:
+    default:
+      return "unknown";
+  }
+}
+
+double xyDistance(const Point3 & a, const Point3 & b)
+{
+  return std::hypot(a.x - b.x, a.y - b.y);
+}
+
+double pointPathLength(const std::vector<Point3> & path)
+{
+  double length_m = 0.0;
+  for (std::size_t i = 1U; i < path.size(); ++i) {
+    length_m += xyDistance(path[i - 1U], path[i]);
+  }
+  return length_m;
+}
+
+double wrapAngle(const double angle_rad)
+{
+  constexpr double kPi = 3.14159265358979323846;
+  double wrapped = angle_rad;
+  while (wrapped > kPi) {
+    wrapped -= 2.0 * kPi;
+  }
+  while (wrapped <= -kPi) {
+    wrapped += 2.0 * kPi;
+  }
+  return wrapped;
+}
+
+std::pair<double, double> pointPathSmoothness(const std::vector<Point3> & path)
+{
+  if (path.size() < 3U) {
+    return {0.0, 0.0};
+  }
+  double total_turn_rad = 0.0;
+  double max_turn_rad = 0.0;
+  for (std::size_t i = 1U; i + 1U < path.size(); ++i) {
+    const Point3 & a = path[i - 1U];
+    const Point3 & b = path[i];
+    const Point3 & c = path[i + 1U];
+    if (xyDistance(a, b) <= 1.0e-9 || xyDistance(b, c) <= 1.0e-9) {
+      continue;
+    }
+    const double heading_ab = std::atan2(b.y - a.y, b.x - a.x);
+    const double heading_bc = std::atan2(c.y - b.y, c.x - b.x);
+    const double turn = std::abs(wrapAngle(heading_bc - heading_ab));
+    total_turn_rad += turn;
+    max_turn_rad = std::max(max_turn_rad, turn);
+  }
+  return {total_turn_rad / std::max(1.0e-9, pointPathLength(path)), max_turn_rad};
+}
+
+std::string metersText(const double value_m)
+{
+  std::ostringstream out;
+  out.setf(std::ios::fixed);
+  out.precision(2);
+  out << value_m << "m";
+  return out.str();
+}
+
 nav_msgs::msg::Path makePathMsg(
   const rclcpp::Time & stamp,
   const std::string & frame_id,
@@ -557,60 +671,162 @@ public:
   TgwExperiencePlannerNode()
   : Node("tgw_experience_planner_node")
   {
+    const TrajectoryProjectorOptions projector_defaults = defaultTrajectoryProjectorOptions();
+    const ExperienceSurfaceBuilderOptions builder_defaults =
+      defaultExperienceSurfaceBuilderOptions();
+    const SurfacePlannerOptions planner_defaults = defaultSurfacePlannerOptions();
+    const SurfaceGraphBuildOptions graph_defaults = defaultSurfaceGraphBuildOptions();
+    const ExperienceBackboneOptions backbone_defaults = defaultExperienceBackboneOptions();
+    const HybridExperiencePlannerOptions hybrid_defaults = defaultHybridExperiencePlannerOptions();
+
     declare_parameter<std::string>("pbstream_path", "");
     declare_parameter<std::string>("map_frame", "map");
-    declare_parameter<double>("nav_resolution_m", 0.10);
-    declare_parameter<double>("raw_resolution_m", 0.05);
-    declare_parameter<double>("lidar_to_footprint_x_m", 0.0);
-    declare_parameter<double>("lidar_to_footprint_y_m", 0.0);
-    declare_parameter<double>("support_search_below_min_m", 0.10);
-    declare_parameter<double>("support_search_below_max_m", 1.00);
-    declare_parameter<double>("support_max_jump_m", 0.35);
-    declare_parameter<bool>("allow_support_reanchor_on_jump", true);
-    declare_parameter<int>("support_xy_search_radius_cells", 2);
-    declare_parameter<int>("support_xy_retry_radius_cells", 8);
-    declare_parameter<double>("max_trajectory_bridge_gap_m", 2.00);
-    declare_parameter<double>("max_trajectory_bridge_height_delta_m", 0.80);
-    declare_parameter<double>("trajectory_bridge_sample_step_m", 0.10);
-    declare_parameter<double>("robot_length_m", 0.70);
-    declare_parameter<double>("robot_width_m", 0.43);
-    declare_parameter<double>("body_clearance_height_m", 0.65);
-    declare_parameter<double>("base_to_front_m", 0.20);
-    declare_parameter<double>("min_footprint_support_ratio", 0.50);
-    declare_parameter<double>("footprint_support_height_tolerance_m", 0.20);
-    declare_parameter<int>("expansion_radius_cells", 2);
-    declare_parameter<int>("max_expansion_steps", 12);
-    declare_parameter<int>("vertical_tolerance_cells", 3);
-    declare_parameter<double>("max_expansion_step_height_m", 0.28);
-    declare_parameter<int>("experience_anchor_radius_cells", 24);
-    declare_parameter<double>("experience_anchor_height_tolerance_m", 0.35);
-    declare_parameter<int>("experience_anchor_vertical_tolerance_cells", 3);
-    declare_parameter<bool>("enable_hole_filling", true);
-    declare_parameter<int>("hole_fill_iterations", 2);
-    declare_parameter<int>("min_hole_fill_neighbors", 5);
-    declare_parameter<double>("max_hole_fill_height_spread_m", 0.12);
-    declare_parameter<double>("plan_max_step_height_m", 0.35);
-    declare_parameter<int>("plan_max_iterations", 500000);
-    declare_parameter<double>("plan_bridge_cost", 2.5);
+    declare_parameter<double>("nav_resolution_m", projector_defaults.resolution_m);
+    declare_parameter<double>("raw_resolution_m", projector_defaults.raw_resolution_m);
+    declare_parameter<double>("lidar_to_footprint_x_m", projector_defaults.lidar_to_footprint_x_m);
+    declare_parameter<double>("lidar_to_footprint_y_m", projector_defaults.lidar_to_footprint_y_m);
+    declare_parameter<double>("support_search_below_min_m", projector_defaults.search_below_min_m);
+    declare_parameter<double>("support_search_below_max_m", projector_defaults.search_below_max_m);
+    declare_parameter<double>("support_max_jump_m", projector_defaults.max_support_jump_m);
+    declare_parameter<bool>(
+      "allow_support_reanchor_on_jump", projector_defaults.allow_support_reanchor_on_jump);
+    declare_parameter<int>(
+      "support_xy_search_radius_cells", projector_defaults.support_xy_search_radius_cells);
+    declare_parameter<int>(
+      "support_xy_retry_radius_cells", projector_defaults.support_xy_retry_radius_cells);
+    declare_parameter<double>(
+      "max_trajectory_bridge_gap_m", projector_defaults.max_trajectory_bridge_gap_m);
+    declare_parameter<double>(
+      "max_trajectory_bridge_height_delta_m",
+      projector_defaults.max_trajectory_bridge_height_delta_m);
+    declare_parameter<double>(
+      "trajectory_bridge_sample_step_m", projector_defaults.trajectory_bridge_sample_step_m);
+    declare_parameter<double>("robot_length_m", projector_defaults.footprint_length_m);
+    declare_parameter<double>("robot_width_m", projector_defaults.footprint_width_m);
+    declare_parameter<double>("body_clearance_height_m", builder_defaults.body_clearance_height_m);
+    declare_parameter<double>("base_to_front_m", projector_defaults.footprint_base_to_front_m);
+    declare_parameter<double>(
+      "min_footprint_support_ratio", projector_defaults.min_footprint_support_ratio);
+    declare_parameter<double>(
+      "footprint_support_height_tolerance_m",
+      projector_defaults.footprint_support_height_tolerance_m);
+    declare_parameter<int>(
+      "expansion_radius_cells", builder_defaults.expander.expansion_radius_cells);
+    declare_parameter<int>("max_expansion_steps", builder_defaults.expander.max_expansion_steps);
+    declare_parameter<int>(
+      "vertical_tolerance_cells", builder_defaults.expander.vertical_tolerance_cells);
+    declare_parameter<double>(
+      "max_expansion_step_height_m", builder_defaults.expander.max_expansion_step_height_m);
+    declare_parameter<int>(
+      "experience_anchor_radius_cells",
+      builder_defaults.expander.experience_anchor_radius_cells);
+    declare_parameter<double>(
+      "experience_anchor_height_tolerance_m",
+      builder_defaults.expander.experience_anchor_height_tolerance_m);
+    declare_parameter<int>(
+      "experience_anchor_vertical_tolerance_cells",
+      builder_defaults.expander.experience_anchor_vertical_tolerance_cells);
+    declare_parameter<bool>("enable_hole_filling", builder_defaults.expander.enable_hole_filling);
+    declare_parameter<int>("hole_fill_iterations", builder_defaults.expander.hole_fill_iterations);
+    declare_parameter<int>(
+      "min_hole_fill_neighbors", builder_defaults.expander.min_hole_fill_neighbors);
+    declare_parameter<double>(
+      "max_hole_fill_height_spread_m",
+      builder_defaults.expander.max_hole_fill_height_spread_m);
+    declare_parameter<double>("plan_max_step_height_m", planner_defaults.max_step_height_m);
+    declare_parameter<int>("plan_max_iterations", static_cast<int>(planner_defaults.max_iterations));
+    declare_parameter<double>("plan_bridge_cost", planner_defaults.w_bridge);
     declare_parameter<double>("max_start_snap_distance_m", 1.50);
     declare_parameter<double>("max_goal_snap_distance_m", 1.50);
-    declare_parameter<double>("graph_max_normal_edge_slope", 3.0);
-    declare_parameter<double>("graph_max_bridge_edge_slope", 8.0);
-    declare_parameter<double>("graph_bridge_attach_max_dz_m", 0.35);
-    declare_parameter<double>("planner_footprint_min_support_ratio", 0.80);
-    declare_parameter<double>("backbone_min_node_spacing_m", 0.20);
-    declare_parameter<double>("backbone_max_portal_xy_distance_m", 1.20);
-    declare_parameter<double>("backbone_max_portal_height_error_m", 0.45);
-    declare_parameter<double>("backbone_min_portal_clearance_m", 0.0);
-    declare_parameter<double>("hybrid_backbone_cost_scale", 1.2);
-    declare_parameter<double>("hybrid_portal_switch_cost", 0.5);
-    declare_parameter<double>("hybrid_portal_height_error_weight", 0.25);
-    declare_parameter<double>("hybrid_backbone_low_confidence_penalty", 0.5);
+    declare_parameter<double>("graph_max_normal_edge_slope", graph_defaults.max_edge_slope);
+    declare_parameter<double>("graph_max_bridge_edge_slope", graph_defaults.max_bridge_edge_slope);
+    declare_parameter<double>(
+      "graph_bridge_attach_max_dz_m", graph_defaults.max_bridge_attach_height_delta_m);
+    declare_parameter<double>(
+      "planner_footprint_min_support_ratio", planner_defaults.footprint.min_support_ratio);
+    declare_parameter<double>(
+      "backbone_min_node_spacing_m", backbone_defaults.min_node_spacing_m);
+    declare_parameter<double>(
+      "backbone_max_portal_xy_distance_m", backbone_defaults.max_portal_xy_distance_m);
+    declare_parameter<double>(
+      "backbone_max_portal_height_error_m", backbone_defaults.max_portal_height_error_m);
+    declare_parameter<double>(
+      "backbone_min_portal_clearance_m", backbone_defaults.min_portal_clearance_m);
+    declare_parameter<int>(
+      "backbone_max_portals_per_node",
+      static_cast<int>(backbone_defaults.max_portals_per_node));
+    declare_parameter<double>("hybrid_backbone_cost_scale", hybrid_defaults.backbone_cost_scale);
+    declare_parameter<double>("hybrid_portal_switch_cost", hybrid_defaults.portal_switch_cost);
+    declare_parameter<double>(
+      "hybrid_portal_height_error_weight", hybrid_defaults.portal_height_error_weight);
+    declare_parameter<double>(
+      "hybrid_backbone_low_confidence_penalty",
+      hybrid_defaults.backbone_low_confidence_penalty);
+    declare_parameter<double>(
+      "hybrid_max_backbone_edge_xy_gap_m", hybrid_defaults.max_backbone_edge_xy_gap_m);
+    declare_parameter<double>(
+      "hybrid_max_backbone_edge_dz_m", hybrid_defaults.max_backbone_edge_dz_m);
+    declare_parameter<double>(
+      "hybrid_max_backbone_edge_slope", hybrid_defaults.max_backbone_edge_slope);
+    declare_parameter<double>(
+      "hybrid_max_portal_xy_distance_m", hybrid_defaults.max_portal_xy_distance_m);
+    declare_parameter<double>(
+      "hybrid_max_portal_height_error_m", hybrid_defaults.max_portal_height_error_m);
+    declare_parameter<double>(
+      "hybrid_surface_target_speed_mps", hybrid_defaults.surface_target_speed_mps);
+    declare_parameter<double>(
+      "hybrid_backbone_target_speed_mps", hybrid_defaults.backbone_target_speed_mps);
+    declare_parameter<double>(
+      "hybrid_portal_target_speed_mps", hybrid_defaults.portal_target_speed_mps);
     declare_parameter<double>("planner_multifloor_z_range_m", 1.50);
     declare_parameter<int>("max_trajectory_points", 200000);
     declare_parameter<int>("max_geometry_debug_points", 400000);
     declare_parameter<std::string>("planner_log_dir", "logs");
     declare_parameter<int>("planner_log_retention_days", 7);
+    declare_parameter<bool>("enable_path_tracking", false);
+    declare_parameter<std::string>("tracking_odom_topic", "/odom");
+    declare_parameter<std::string>("tracking_cmd_vel_topic", "/tgw_experience/cmd_vel");
+    declare_parameter<bool>("enable_kinematic_replay", false);
+    declare_parameter<std::string>(
+      "kinematic_replay_odom_topic", "/tgw_experience/fake_odom");
+    declare_parameter<bool>("kinematic_replay_reset_on_plan", true);
+    declare_parameter<int>("kinematic_replay_trace_max_points", 5000);
+    declare_parameter<double>("tracking_frequency_hz", 20.0);
+    declare_parameter<double>("tracking_odom_timeout_s", 0.50);
+    declare_parameter<double>("tracking_lookahead_m", 0.80);
+    declare_parameter<double>("tracking_projection_window_m", 5.0);
+    declare_parameter<double>("tracking_local_route_length_m", 4.0);
+    declare_parameter<double>("tracking_max_yaw_rate_radps", 1.20);
+    declare_parameter<double>("tracking_goal_tolerance_m", 0.35);
+    declare_parameter<double>("tracking_desired_linear_speed_mps", 0.60);
+    declare_parameter<double>("tracking_max_linear_speed_mps", 0.80);
+    declare_parameter<double>("tracking_min_linear_speed_mps", 0.02);
+    declare_parameter<double>("tracking_max_lateral_accel_mps2", 0.80);
+    declare_parameter<double>("tracking_goal_slowdown_distance_m", 1.00);
+    declare_parameter<double>("tracking_max_linear_accel_mps2", 0.80);
+    declare_parameter<double>("local_path_min_point_spacing_m", 0.20);
+    declare_parameter<double>("local_path_max_point_spacing_m", 0.20);
+    declare_parameter<bool>("local_path_enable_collision_check", true);
+    declare_parameter<double>("local_path_bezier_handle_ratio", 0.35);
+    declare_parameter<double>("local_path_max_smoothness_rad_per_m", 2.50);
+    declare_parameter<double>("local_path_max_turn_angle_rad", 1.20);
+    declare_parameter<double>("local_path_max_route_deviation_m", 0.45);
+    declare_parameter<double>("local_path_corner_cut_turn_angle_rad", 0.75);
+    declare_parameter<double>("local_path_min_corner_target_distance_m", 0.60);
+    declare_parameter<double>("local_map_robot_radius_m", 0.35);
+    declare_parameter<double>("local_map_inflation_radius_m", 0.10);
+    declare_parameter<bool>("enable_local_obstacle_cloud", false);
+    declare_parameter<std::string>("local_obstacle_cloud_topic", "/tgw_experience/local_cloud");
+    declare_parameter<double>("local_map_time_window_s", 1.50);
+    declare_parameter<int>("local_map_max_obstacle_points", 50000);
+    declare_parameter<int>("local_obstacle_max_points_per_cloud", 20000);
+    declare_parameter<double>("local_obstacle_max_range_m", 5.0);
+    declare_parameter<double>("local_obstacle_min_height_above_surface_m", 0.15);
+    declare_parameter<double>("local_obstacle_max_height_above_surface_m", 1.20);
+    declare_parameter<bool>("local_obstacle_requires_map_frame", true);
+    declare_parameter<int>("local_obstacle_debug_max_points", 50000);
+    declare_parameter<double>("local_collision_time_horizon_s", 1.50);
+    declare_parameter<double>("local_collision_sample_time_s", 0.10);
 
     configurePlannerFileLogging(
       get_parameter("planner_log_dir").as_string(),
@@ -662,6 +878,8 @@ public:
     path_pub_ = create_publisher<nav_msgs::msg::Path>("/tgw_experience/path", latched_qos);
     hybrid_path_pub_ = create_publisher<nav_msgs::msg::Path>(
       "/tgw_experience/hybrid_path", latched_qos);
+    local_path_pub_ = create_publisher<nav_msgs::msg::Path>(
+      "/tgw_experience/local_path", rclcpp::QoS(10));
     used_backbone_segment_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/tgw_experience/used_backbone_segment", latched_qos);
     used_portals_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
@@ -674,8 +892,26 @@ public:
       "/tgw_experience/goal_marker", latched_qos);
     plan_status_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
       "/tgw_experience/plan_status_marker", latched_qos);
+    tracker_lookahead_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/tgw_experience/tracker_lookahead_marker", rclcpp::QoS(10));
+    tracker_projected_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/tgw_experience/tracker_projected_marker", rclcpp::QoS(10));
+    tracking_status_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/tgw_experience/tracking_status_marker", rclcpp::QoS(10));
+    local_obstacle_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "/tgw_experience/local_obstacle_cloud", rclcpp::QoS(10));
     stats_json_pub_ = create_publisher<std_msgs::msg::String>(
       "/tgw_experience/stats_json", latched_qos);
+    tracking_status_json_pub_ = create_publisher<std_msgs::msg::String>(
+      "/tgw_experience/tracking_status_json", rclcpp::QoS(10));
+    cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>(
+      get_parameter("tracking_cmd_vel_topic").as_string(), rclcpp::QoS(10));
+    fake_odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(
+      get_parameter("kinematic_replay_odom_topic").as_string(), rclcpp::QoS(10));
+    sim_robot_path_pub_ = create_publisher<nav_msgs::msg::Path>(
+      "/tgw_experience/sim_robot_path", rclcpp::QoS(10));
+    sim_robot_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/tgw_experience/sim_robot_marker", rclcpp::QoS(10));
     plan_path_srv_ = create_service<tgw_planner::srv::PlanPath>(
       "/tgw_experience/plan_path",
       std::bind(
@@ -698,6 +934,22 @@ public:
     goal_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
       "/goal_pose", rclcpp::QoS(10),
       std::bind(&TgwExperiencePlannerNode::onGoalPose, this, std::placeholders::_1));
+    odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+      get_parameter("tracking_odom_topic").as_string(), rclcpp::QoS(20),
+      std::bind(&TgwExperiencePlannerNode::onOdom, this, std::placeholders::_1));
+    local_obstacle_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+      get_parameter("local_obstacle_cloud_topic").as_string(), rclcpp::QoS(10),
+      std::bind(&TgwExperiencePlannerNode::onLocalObstacleCloud, this, std::placeholders::_1));
+
+    route_tracker_ = RouteProgressTracker(routeTrackerOptions());
+    local_path_smoother_ = LocalPathSmoother(localPathSmootherOptions());
+    rolling_local_map_ = RollingLocalMap(rollingLocalMapOptions());
+    rpp_controller_ = RegulatedPurePursuitController(rppOptions());
+    const double tracking_hz = std::max(1.0, get_parameter("tracking_frequency_hz").as_double());
+    tracking_timer_ = create_wall_timer(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::duration<double>(1.0 / tracking_hz)),
+      std::bind(&TgwExperiencePlannerNode::onTrackingTimer, this));
 
     loadResource();
   }
@@ -730,7 +982,7 @@ private:
       snapshot_ = build.snapshot;
       has_snapshot_ = true;
       const SurfacePlannerOptions planner_options = plannerOptions();
-      SurfaceGraphBuildOptions graph_options;
+      SurfaceGraphBuildOptions graph_options = defaultSurfaceGraphBuildOptions();
       graph_options.max_edge_height_delta_m = planner_options.max_step_height_m;
       graph_options.max_bridge_edge_height_delta_m =
         get_parameter("max_trajectory_bridge_height_delta_m").as_double();
@@ -739,7 +991,8 @@ private:
       graph_options.max_edge_slope = get_parameter("graph_max_normal_edge_slope").as_double();
       graph_options.max_bridge_edge_slope =
         get_parameter("graph_max_bridge_edge_slope").as_double();
-      surface_graph_.build(snapshot_, SurfaceTransitionValidator(planner_options), graph_options);
+      surface_graph_.build(
+        snapshot_, SurfaceTransitionValidator(planner_options), planner_options, graph_options);
       has_surface_graph_ = true;
       backbone_graph_.build(result.resource, projection, surface_graph_, backboneOptions());
       has_backbone_graph_ = true;
@@ -805,7 +1058,7 @@ private:
 
   ExperienceBackboneOptions backboneOptions() const
   {
-    ExperienceBackboneOptions options;
+    ExperienceBackboneOptions options = defaultExperienceBackboneOptions();
     options.min_node_spacing_m = get_parameter("backbone_min_node_spacing_m").as_double();
     options.max_portal_xy_distance_m =
       get_parameter("backbone_max_portal_xy_distance_m").as_double();
@@ -813,12 +1066,14 @@ private:
       get_parameter("backbone_max_portal_height_error_m").as_double();
     options.min_portal_clearance_m =
       get_parameter("backbone_min_portal_clearance_m").as_double();
+    options.max_portals_per_node = static_cast<std::size_t>(
+      std::max<std::int64_t>(1, get_parameter("backbone_max_portals_per_node").as_int()));
     return options;
   }
 
   TrajectoryProjectorOptions projectorOptions() const
   {
-    TrajectoryProjectorOptions options;
+    TrajectoryProjectorOptions options = defaultTrajectoryProjectorOptions();
     options.resolution_m = get_parameter("nav_resolution_m").as_double();
     options.raw_resolution_m = get_parameter("raw_resolution_m").as_double();
     options.lidar_to_footprint_x_m = get_parameter("lidar_to_footprint_x_m").as_double();
@@ -883,7 +1138,7 @@ private:
 
   ExperienceSurfaceBuilderOptions builderOptions() const
   {
-    ExperienceSurfaceBuilderOptions options;
+    ExperienceSurfaceBuilderOptions options = defaultExperienceSurfaceBuilderOptions();
     options.resolution_m = get_parameter("nav_resolution_m").as_double();
     options.body_clearance_height_m = get_parameter("body_clearance_height_m").as_double();
     options.projector = projectorOptions();
@@ -928,7 +1183,7 @@ private:
 
   SurfacePlannerOptions plannerOptions() const
   {
-    SurfacePlannerOptions options;
+    SurfacePlannerOptions options = defaultSurfacePlannerOptions();
     options.max_step_height_m = get_parameter("plan_max_step_height_m").as_double();
     options.max_iterations = static_cast<std::uint32_t>(
       std::max<std::int64_t>(1, get_parameter("plan_max_iterations").as_int()));
@@ -1184,7 +1439,9 @@ private:
     const double max_start_snap_distance_m =
       get_parameter("max_start_snap_distance_m").as_double();
     if (start_snap_distance > max_start_snap_distance_m) {
-      plan.message = "start_not_on_reachable_surface";
+      plan.message =
+        "start_snap_distance_too_far " + metersText(start_snap_distance) +
+        " > " + metersText(max_start_snap_distance_m);
       const Point3 snapped_start = surfaceNodePoint(start_node);
       LOG(WARNING)
         << "PlanPath rejected before search"
@@ -1229,7 +1486,9 @@ private:
     const double max_goal_snap_distance_m =
       get_parameter("max_goal_snap_distance_m").as_double();
     if (goal_snap_distance > max_goal_snap_distance_m) {
-      plan.message = "goal_unreachable_outside_experience_surface";
+      plan.message =
+        "goal_snap_distance_too_far " + metersText(goal_snap_distance) +
+        " > " + metersText(max_goal_snap_distance_m);
       const Point3 snapped_start = surfaceNodePoint(start_node);
       const Point3 snapped_goal = surfaceNodePoint(goal_node);
       LOG(WARNING)
@@ -1276,13 +1535,29 @@ private:
       << " backbone_portals=" << (has_backbone_graph_ ? backbone_graph_.portals().size() : 0U);
 
     const auto t0 = std::chrono::steady_clock::now();
-    HybridExperiencePlannerOptions hybrid_options;
+    HybridExperiencePlannerOptions hybrid_options = defaultHybridExperiencePlannerOptions();
     hybrid_options.backbone_cost_scale = get_parameter("hybrid_backbone_cost_scale").as_double();
     hybrid_options.portal_switch_cost = get_parameter("hybrid_portal_switch_cost").as_double();
     hybrid_options.portal_height_error_weight =
       get_parameter("hybrid_portal_height_error_weight").as_double();
     hybrid_options.backbone_low_confidence_penalty =
       get_parameter("hybrid_backbone_low_confidence_penalty").as_double();
+    hybrid_options.max_backbone_edge_xy_gap_m =
+      get_parameter("hybrid_max_backbone_edge_xy_gap_m").as_double();
+    hybrid_options.max_backbone_edge_dz_m =
+      get_parameter("hybrid_max_backbone_edge_dz_m").as_double();
+    hybrid_options.max_backbone_edge_slope =
+      get_parameter("hybrid_max_backbone_edge_slope").as_double();
+    hybrid_options.max_portal_xy_distance_m =
+      get_parameter("hybrid_max_portal_xy_distance_m").as_double();
+    hybrid_options.max_portal_height_error_m =
+      get_parameter("hybrid_max_portal_height_error_m").as_double();
+    hybrid_options.surface_target_speed_mps =
+      get_parameter("hybrid_surface_target_speed_mps").as_double();
+    hybrid_options.backbone_target_speed_mps =
+      get_parameter("hybrid_backbone_target_speed_mps").as_double();
+    hybrid_options.portal_target_speed_mps =
+      get_parameter("hybrid_portal_target_speed_mps").as_double();
     plan = HybridExperiencePlanner(plannerOptions(), hybrid_options).plan(
       surface_graph_, backbone_graph_, start_node, goal_node);
     const auto t1 = std::chrono::steady_clock::now();
@@ -1295,6 +1570,543 @@ private:
       *search_time_ms_out = search_time_ms;
     }
     return plan;
+  }
+
+  RouteProgressTrackerOptions routeTrackerOptions() const
+  {
+    RouteProgressTrackerOptions options;
+    options.projection_window_m = get_parameter("tracking_projection_window_m").as_double();
+    options.local_route_length_m = get_parameter("tracking_local_route_length_m").as_double();
+    options.goal_tolerance_m = get_parameter("tracking_goal_tolerance_m").as_double();
+    return options;
+  }
+
+  LocalPathSmootherOptions localPathSmootherOptions() const
+  {
+    LocalPathSmootherOptions options;
+    options.min_point_spacing_m = get_parameter("local_path_min_point_spacing_m").as_double();
+    options.max_point_spacing_m = get_parameter("local_path_max_point_spacing_m").as_double();
+    options.enable_collision_check = get_parameter("local_path_enable_collision_check").as_bool();
+    options.bezier_handle_ratio = get_parameter("local_path_bezier_handle_ratio").as_double();
+    options.max_smoothness_rad_per_m =
+      get_parameter("local_path_max_smoothness_rad_per_m").as_double();
+    options.max_turn_angle_rad = get_parameter("local_path_max_turn_angle_rad").as_double();
+    options.max_route_deviation_m = get_parameter("local_path_max_route_deviation_m").as_double();
+    options.corner_cut_turn_angle_rad =
+      get_parameter("local_path_corner_cut_turn_angle_rad").as_double();
+    options.min_corner_target_distance_m =
+      get_parameter("local_path_min_corner_target_distance_m").as_double();
+    return options;
+  }
+
+  RollingLocalMapOptions rollingLocalMapOptions() const
+  {
+    RollingLocalMapOptions options;
+    options.robot_radius_m = get_parameter("local_map_robot_radius_m").as_double();
+    options.inflation_radius_m = get_parameter("local_map_inflation_radius_m").as_double();
+    options.time_window_s = get_parameter("local_map_time_window_s").as_double();
+    options.max_obstacle_points = static_cast<std::size_t>(
+      std::max<std::int64_t>(1, get_parameter("local_map_max_obstacle_points").as_int()));
+    return options;
+  }
+
+  RegulatedPurePursuitOptions rppOptions() const
+  {
+    RegulatedPurePursuitOptions options;
+    options.desired_linear_speed_mps =
+      get_parameter("tracking_desired_linear_speed_mps").as_double();
+    options.max_linear_speed_mps = get_parameter("tracking_max_linear_speed_mps").as_double();
+    options.min_linear_speed_mps = get_parameter("tracking_min_linear_speed_mps").as_double();
+    options.max_angular_speed_radps = get_parameter("tracking_max_yaw_rate_radps").as_double();
+    options.lookahead_m = get_parameter("tracking_lookahead_m").as_double();
+    options.max_lateral_accel_mps2 =
+      get_parameter("tracking_max_lateral_accel_mps2").as_double();
+    options.goal_slowdown_distance_m =
+      get_parameter("tracking_goal_slowdown_distance_m").as_double();
+    options.collision_time_horizon_s =
+      get_parameter("local_collision_time_horizon_s").as_double();
+    options.collision_sample_time_s =
+      get_parameter("local_collision_sample_time_s").as_double();
+    options.max_linear_accel_mps2 =
+      get_parameter("tracking_max_linear_accel_mps2").as_double();
+    return options;
+  }
+
+  void setTrackerPath(const SurfacePlanResult & plan)
+  {
+    has_tracking_path_ = false;
+    if (!plan.success) {
+      route_tracker_ = RouteProgressTracker(routeTrackerOptions());
+      local_path_smoother_ = LocalPathSmoother(localPathSmootherOptions());
+      rolling_local_map_ = RollingLocalMap(rollingLocalMapOptions());
+      rpp_controller_ = RegulatedPurePursuitController(rppOptions());
+      has_expected_surface_z_ = false;
+      local_obstacle_last_accepted_points_ = 0U;
+      sim_replay_trace_.clear();
+      publishZeroVelocity();
+      return;
+    }
+    std::string error;
+    route_tracker_ = RouteProgressTracker(routeTrackerOptions());
+    local_path_smoother_ = LocalPathSmoother(localPathSmootherOptions());
+    rolling_local_map_ = RollingLocalMap(rollingLocalMapOptions());
+    rpp_controller_ = RegulatedPurePursuitController(rppOptions());
+    has_expected_surface_z_ = false;
+    local_obstacle_last_accepted_points_ = 0U;
+    sim_replay_trace_.clear();
+    if (!route_tracker_.setPath(plan.global_path, &error)) {
+      LOG(WARNING) << "RouteProgressTracker rejected planned path: " << error;
+      publishZeroVelocity();
+      return;
+    }
+    route_tracker_.resetProgress();
+    rpp_controller_.reset();
+    has_tracking_path_ = true;
+    if (get_parameter("kinematic_replay_reset_on_plan").as_bool()) {
+      initializeKinematicReplay(plan);
+    }
+    LOG(INFO)
+      << "local route tracker loaded path"
+      << " points=" << plan.global_path.size()
+      << " length_m=" << route_tracker_.pathLength();
+  }
+
+  void clearTrackerPath()
+  {
+    has_tracking_path_ = false;
+    route_tracker_ = RouteProgressTracker(routeTrackerOptions());
+    local_path_smoother_ = LocalPathSmoother(localPathSmootherOptions());
+    rolling_local_map_ = RollingLocalMap(rollingLocalMapOptions());
+    rpp_controller_ = RegulatedPurePursuitController(rppOptions());
+    has_expected_surface_z_ = false;
+    local_obstacle_last_accepted_points_ = 0U;
+    sim_replay_trace_.clear();
+    publishZeroVelocity();
+  }
+
+  void publishZeroVelocity()
+  {
+    if (!cmd_vel_pub_) {
+      return;
+    }
+    geometry_msgs::msg::Twist twist;
+    cmd_vel_pub_->publish(twist);
+  }
+
+  bool kinematicReplayEnabled() const
+  {
+    return get_parameter("enable_kinematic_replay").as_bool();
+  }
+
+  void initializeKinematicReplay(const SurfacePlanResult & plan)
+  {
+    if (!kinematicReplayEnabled() || plan.global_path.empty()) {
+      return;
+    }
+    sim_replay_trace_.clear();
+    latest_pose_.x = plan.global_path.front().position.x;
+    latest_pose_.y = plan.global_path.front().position.y;
+    latest_pose_.yaw_rad = plan.global_path.front().yaw_hint_rad;
+    if (!std::isfinite(latest_pose_.yaw_rad) && plan.global_path.size() > 1U) {
+      const Point3 & a = plan.global_path.front().position;
+      const Point3 & b = plan.global_path[1U].position;
+      latest_pose_.yaw_rad = std::atan2(b.y - a.y, b.x - a.x);
+    }
+    if (!std::isfinite(latest_pose_.yaw_rad)) {
+      latest_pose_.yaw_rad = 0.0;
+    }
+    latest_expected_surface_z_m_ = plan.global_path.front().position.z;
+    has_expected_surface_z_ = true;
+    latest_odom_time_ = now();
+    has_odom_ = true;
+    last_tracking_tick_valid_ = false;
+    publishKinematicReplayState(0.0, 0.0);
+  }
+
+  void integrateKinematicReplay(const RegulatedPurePursuitCommand & command, const double dt_s)
+  {
+    if (!kinematicReplayEnabled() || !command.valid) {
+      return;
+    }
+    latest_pose_.yaw_rad += command.yaw_rate_radps * dt_s;
+    latest_pose_.x += command.linear_speed_mps * dt_s * std::cos(latest_pose_.yaw_rad);
+    latest_pose_.y += command.linear_speed_mps * dt_s * std::sin(latest_pose_.yaw_rad);
+    latest_odom_time_ = now();
+    has_odom_ = true;
+    publishKinematicReplayState(command.linear_speed_mps, command.yaw_rate_radps);
+  }
+
+  void publishKinematicReplayState(const double linear_speed_mps, const double yaw_rate_radps)
+  {
+    if (!kinematicReplayEnabled()) {
+      return;
+    }
+    const rclcpp::Time stamp = now();
+    const std::string frame_id = markerFrameId();
+    nav_msgs::msg::Odometry odom;
+    odom.header.stamp = stamp;
+    odom.header.frame_id = frame_id;
+    odom.child_frame_id = "tgw_kinematic_replay_base";
+    odom.pose.pose.position.x = latest_pose_.x;
+    odom.pose.pose.position.y = latest_pose_.y;
+    odom.pose.pose.position.z = has_expected_surface_z_ ? latest_expected_surface_z_m_ : 0.0;
+    odom.pose.pose.orientation = quaternionFromYaw(latest_pose_.yaw_rad);
+    odom.twist.twist.linear.x = linear_speed_mps;
+    odom.twist.twist.angular.z = yaw_rate_radps;
+    fake_odom_pub_->publish(odom);
+
+    Point3 trace_point{
+      odom.pose.pose.position.x,
+      odom.pose.pose.position.y,
+      odom.pose.pose.position.z};
+    if (sim_replay_trace_.empty() || xyDistance(sim_replay_trace_.back(), trace_point) > 0.02) {
+      sim_replay_trace_.push_back(trace_point);
+      const auto max_points = static_cast<std::size_t>(
+        std::max<std::int64_t>(
+          2, get_parameter("kinematic_replay_trace_max_points").as_int()));
+      if (sim_replay_trace_.size() > max_points) {
+        sim_replay_trace_.erase(
+          sim_replay_trace_.begin(),
+          sim_replay_trace_.begin() +
+          static_cast<std::ptrdiff_t>(sim_replay_trace_.size() - max_points));
+      }
+    }
+    if (sim_robot_path_pub_) {
+      sim_robot_path_pub_->publish(makePathMsg(stamp, frame_id, sim_replay_trace_));
+    }
+
+    visualization_msgs::msg::Marker marker;
+    marker.header.stamp = stamp;
+    marker.header.frame_id = frame_id;
+    marker.ns = "tgw_kinematic_replay_robot";
+    marker.id = 0;
+    marker.type = visualization_msgs::msg::Marker::ARROW;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.pose.position = odom.pose.pose.position;
+    marker.pose.position.z += 0.25;
+    marker.pose.orientation = odom.pose.pose.orientation;
+    marker.scale.x = 0.70;
+    marker.scale.y = 0.18;
+    marker.scale.z = 0.18;
+    marker.color.r = 0.1F;
+    marker.color.g = 0.8F;
+    marker.color.b = 1.0F;
+    marker.color.a = 1.0F;
+    sim_robot_marker_pub_->publish(marker);
+  }
+
+  std::string trackingStatusJson(
+    const RegulatedPurePursuitCommand & command,
+    const RouteProgressState & route,
+    const LocalPathResult & local_path,
+    const std::string & reason,
+    const double odom_age_s) const
+  {
+    std::ostringstream json;
+    json << "{";
+    json << "\"kind\":\"tracking_status\"";
+    json << ",\"enabled\":" <<
+      (get_parameter("enable_path_tracking").as_bool() ? "true" : "false");
+    json << ",\"has_path\":" << (has_tracking_path_ ? "true" : "false");
+    json << ",\"has_odom\":" << (has_odom_ ? "true" : "false");
+    json << ",\"valid\":" << (command.valid ? "true" : "false");
+    json << ",\"goal_reached\":" << (command.goal_reached ? "true" : "false");
+    json << ",\"reason\":\"" << jsonEscape(reason) << "\"";
+    json << ",\"status\":\"" << jsonEscape(command.status) << "\"";
+    json << ",\"route_status\":\"" << jsonEscape(route.status) << "\"";
+    json << ",\"local_path_status\":\"" << jsonEscape(local_path.message) << "\"";
+    json << ",\"progress_m\":" << route.progress_m;
+    json << ",\"remaining_m\":" << route.remaining_m;
+    json << ",\"lateral_error_m\":" << route.lateral_error_m;
+    json << ",\"linear_speed_mps\":" << command.linear_speed_mps;
+    json << ",\"yaw_rate_radps\":" << command.yaw_rate_radps;
+    json << ",\"curvature\":" << command.curvature;
+    json << ",\"expected_surface_z_m\":" << route.projected_point.position.z;
+    json << ",\"segment_kind\":\"" << pathKindName(route.projected_point.kind) << "\"";
+    json << ",\"confidence\":" << route.projected_point.confidence;
+    json << ",\"local_path_points\":" << local_path.path.size();
+    json << ",\"local_path_length_m\":" << local_path.length_m;
+    json << ",\"local_path_smoothness_rad_per_m\":" << local_path.smoothness_rad_per_m;
+    json << ",\"local_path_max_turn_angle_rad\":" << local_path.max_turn_angle_rad;
+    const auto [trace_smoothness, trace_max_turn] = pointPathSmoothness(sim_replay_trace_);
+    json << ",\"sim_trace_points\":" << sim_replay_trace_.size();
+    json << ",\"sim_trace_length_m\":" << pointPathLength(sim_replay_trace_);
+    json << ",\"sim_trace_smoothness_rad_per_m\":" << trace_smoothness;
+    json << ",\"sim_trace_max_turn_angle_rad\":" << trace_max_turn;
+    json << ",\"local_obstacle_points\":" << rolling_local_map_.obstacleCount();
+    json << ",\"local_obstacle_last_accepted_points\":" << local_obstacle_last_accepted_points_;
+    json << ",\"local_obstacle_clouds_received\":" << local_obstacle_clouds_received_;
+    json << ",\"local_obstacle_clouds_rejected\":" << local_obstacle_clouds_rejected_;
+    json << ",\"odom_age_s\":" << odom_age_s;
+    json << "}";
+    return json.str();
+  }
+
+  void publishTrackingStatus(
+    const RegulatedPurePursuitCommand & command,
+    const RouteProgressState & route,
+    const LocalPathResult & local_path,
+    const std::string & reason,
+    const double odom_age_s)
+  {
+    if (!tracking_status_json_pub_) {
+      return;
+    }
+    std_msgs::msg::String msg;
+    msg.data = trackingStatusJson(command, route, local_path, reason, odom_age_s);
+    tracking_status_json_pub_->publish(msg);
+    publishTrackingStatusMarker(command, local_path, reason);
+  }
+
+  void publishTrackingStatusMarker(
+    const RegulatedPurePursuitCommand & command,
+    const LocalPathResult & local_path,
+    const std::string & reason)
+  {
+    if (!tracking_status_marker_pub_) {
+      return;
+    }
+    const rclcpp::Time stamp = now();
+    const std::string frame_id = markerFrameId();
+    Point3 point{
+      latest_pose_.x,
+      latest_pose_.y,
+      has_expected_surface_z_ ? latest_expected_surface_z_m_ : 0.0};
+    point.z += 0.85;
+    std::ostringstream text;
+    float r = 1.0F;
+    float g = 0.1F;
+    float b = 0.1F;
+    if (command.status == "tracking_path_not_set") {
+      text << "TRACK IDLE: no path";
+      r = 0.65F;
+      g = 0.65F;
+      b = 0.65F;
+    } else if (command.valid && command.goal_reached) {
+      text << "TRACK GOAL REACHED";
+      r = 0.1F;
+      g = 0.9F;
+      b = 0.2F;
+    } else if (command.valid && command.status == "tracking") {
+      text << "TRACK  v=" << metersText(command.linear_speed_mps) << "/s";
+      r = 0.1F;
+      g = 0.9F;
+      b = 0.2F;
+    } else {
+      const std::string status = !reason.empty() ? reason :
+        (!command.status.empty() ? command.status : local_path.message);
+      text << "TRACK FAIL: " << status;
+    }
+    if (local_path.path.size() >= 2U) {
+      text << "  local_smooth=" << local_path.smoothness_rad_per_m;
+    }
+    tracking_status_marker_pub_->publish(makeTextMarker(
+      stamp,
+      frame_id,
+      "tgw_tracking_status",
+      0,
+      point,
+      text.str(),
+      0.32,
+      r,
+      g,
+      b));
+  }
+
+  void publishTrackerMarkers(
+    const RegulatedPurePursuitCommand & command,
+    const RouteProgressState & route)
+  {
+    if (!command.valid || !route.valid) {
+      return;
+    }
+    const rclcpp::Time stamp = now();
+    const std::string frame_id = markerFrameId();
+    tracker_lookahead_marker_pub_->publish(makeSphereMarker(
+      stamp,
+      frame_id,
+      "tgw_tracker_lookahead",
+      0,
+      command.lookahead_point,
+      0.28,
+      0.1F,
+      0.7F,
+      1.0F));
+    tracker_projected_marker_pub_->publish(makeSphereMarker(
+      stamp,
+      frame_id,
+      "tgw_tracker_projected",
+      0,
+      route.projected_point.position,
+      0.22,
+      1.0F,
+      0.8F,
+      0.1F));
+  }
+
+  void onOdom(const nav_msgs::msg::Odometry::SharedPtr msg)
+  {
+    latest_pose_.x = msg->pose.pose.position.x;
+    latest_pose_.y = msg->pose.pose.position.y;
+    latest_pose_.yaw_rad = yawFromQuaternion(msg->pose.pose.orientation);
+    latest_odom_time_ = now();
+    has_odom_ = true;
+  }
+
+  void onLocalObstacleCloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+  {
+    if (!get_parameter("enable_local_obstacle_cloud").as_bool()) {
+      return;
+    }
+    ++local_obstacle_clouds_received_;
+    if (!has_odom_ || !has_expected_surface_z_) {
+      ++local_obstacle_clouds_rejected_;
+      return;
+    }
+    const std::string frame_id = markerFrameId();
+    if (get_parameter("local_obstacle_requires_map_frame").as_bool() &&
+      !msg->header.frame_id.empty() && msg->header.frame_id != frame_id)
+    {
+      ++local_obstacle_clouds_rejected_;
+      return;
+    }
+
+    const double max_range_m = get_parameter("local_obstacle_max_range_m").as_double();
+    const double max_range_sq = max_range_m * max_range_m;
+    const double min_height =
+      get_parameter("local_obstacle_min_height_above_surface_m").as_double();
+    const double max_height =
+      get_parameter("local_obstacle_max_height_above_surface_m").as_double();
+    const auto max_points = static_cast<std::size_t>(
+      std::max<std::int64_t>(1, get_parameter("local_obstacle_max_points_per_cloud").as_int()));
+
+    std::vector<Point3> obstacles;
+    obstacles.reserve(std::min<std::size_t>(msg->width * msg->height, max_points));
+    sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_y(*msg, "y");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_z(*msg, "z");
+    for (; iter_x != iter_x.end() && obstacles.size() < max_points; ++iter_x, ++iter_y, ++iter_z) {
+      const double x = *iter_x;
+      const double y = *iter_y;
+      const double z = *iter_z;
+      if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+        continue;
+      }
+      const double dx = x - latest_pose_.x;
+      const double dy = y - latest_pose_.y;
+      if (dx * dx + dy * dy > max_range_sq) {
+        continue;
+      }
+      const double height_above_surface = z - latest_expected_surface_z_m_;
+      if (height_above_surface < min_height || height_above_surface > max_height) {
+        continue;
+      }
+      obstacles.push_back({x, y, z});
+    }
+
+    local_obstacle_last_accepted_points_ = obstacles.size();
+    rolling_local_map_.addObstaclePoints(obstacles, now().seconds());
+    publishLocalObstacleDebug(frame_id);
+  }
+
+  void publishLocalObstacleDebug(const std::string & frame_id)
+  {
+    if (!local_obstacle_pub_) {
+      return;
+    }
+    std::vector<Point3> points = rolling_local_map_.obstaclePoints();
+    const auto max_points = static_cast<std::size_t>(
+      std::max<std::int64_t>(1, get_parameter("local_obstacle_debug_max_points").as_int()));
+    if (points.size() > max_points) {
+      points.erase(points.begin(), points.begin() + static_cast<std::ptrdiff_t>(points.size() - max_points));
+    }
+    local_obstacle_pub_->publish(makePointCloud(now(), frame_id, points));
+  }
+
+  void onTrackingTimer()
+  {
+    const bool publish_cmd_vel = get_parameter("enable_path_tracking").as_bool();
+    const bool replay_enabled = kinematicReplayEnabled();
+    if (!publish_cmd_vel && !replay_enabled) {
+      return;
+    }
+
+    RegulatedPurePursuitCommand command;
+    RouteProgressState route;
+    LocalPathResult local_path;
+    const rclcpp::Time tick = now();
+    const double odom_age_s = has_odom_ ? (tick - latest_odom_time_).seconds() :
+      std::numeric_limits<double>::infinity();
+    if (!has_tracking_path_) {
+      command.status = "tracking_path_not_set";
+      publishZeroVelocity();
+      publishTrackingStatus(command, route, local_path, command.status, odom_age_s);
+      return;
+    }
+    if (!has_odom_) {
+      command.status = "tracking_odom_not_received";
+      publishZeroVelocity();
+      publishTrackingStatus(command, route, local_path, command.status, odom_age_s);
+      return;
+    }
+    const double odom_timeout_s = get_parameter("tracking_odom_timeout_s").as_double();
+    if (odom_age_s > odom_timeout_s) {
+      command.status = "tracking_odom_stale";
+      publishZeroVelocity();
+      publishTrackingStatus(command, route, local_path, command.status, odom_age_s);
+      return;
+    }
+
+    const double dt_s = last_tracking_tick_valid_ ?
+      std::max(1.0e-3, (tick - last_tracking_tick_).seconds()) :
+      1.0 / std::max(1.0, get_parameter("tracking_frequency_hz").as_double());
+    last_tracking_tick_ = tick;
+    last_tracking_tick_valid_ = true;
+
+    route = route_tracker_.update(latest_pose_);
+    if (!route.valid) {
+      command.status = route.status;
+      publishZeroVelocity();
+      publishTrackingStatus(command, route, local_path, command.status, odom_age_s);
+      return;
+    }
+    latest_expected_surface_z_m_ = route.projected_point.position.z;
+    has_expected_surface_z_ = true;
+    rolling_local_map_.prune(tick.seconds());
+    if (route.goal_reached) {
+      command.valid = true;
+      command.goal_reached = true;
+      command.status = "goal_reached";
+      command.remaining_m = route.remaining_m;
+      publishZeroVelocity();
+      if (replay_enabled) {
+        publishKinematicReplayState(0.0, 0.0);
+      }
+      publishTrackerMarkers(command, route);
+      publishTrackingStatus(command, route, local_path, command.status, odom_age_s);
+      return;
+    }
+    local_path = local_path_smoother_.build(latest_pose_, route, rolling_local_map_);
+    if (!local_path.success) {
+      command.status = local_path.message;
+      publishZeroVelocity();
+      publishTrackingStatus(command, route, local_path, command.status, odom_age_s);
+      return;
+    }
+    command = rpp_controller_.computeCommand(
+      latest_pose_, local_path.path, route.remaining_m, dt_s, rolling_local_map_);
+    geometry_msgs::msg::Twist twist;
+    if (command.valid) {
+      twist.linear.x = command.linear_speed_mps;
+      twist.angular.z = command.yaw_rate_radps;
+    }
+    if (publish_cmd_vel || replay_enabled) {
+      cmd_vel_pub_->publish(twist);
+    }
+    local_path_pub_->publish(makePathMsg(tick, markerFrameId(), local_path.path));
+    integrateKinematicReplay(command, dt_s);
+    publishTrackerMarkers(command, route);
+    publishTrackingStatus(command, route, local_path, command.status, odom_age_s);
   }
 
   void publishPlanDebug(const SurfacePlanResult & plan)
@@ -1451,6 +2263,7 @@ private:
     publishPlanDebug(plan);
     publishPlanRouteStatsJson(
       plan, search_time_ms, stats.start_snap_distance_m, stats.goal_snap_distance_m);
+    setTrackerPath(plan);
     LOG(INFO)
       << "PlanPath"
       << " success=" << (plan.success ? "true" : "false")
@@ -1475,6 +2288,8 @@ private:
     const std::string frame_id = markerFrameId();
     path_pub_->publish(makePathMsg(stamp, frame_id, {}));
     hybrid_path_pub_->publish(makePathMsg(stamp, frame_id, {}));
+    local_path_pub_->publish(makePathMsg(stamp, frame_id, {}));
+    sim_robot_path_pub_->publish(makePathMsg(stamp, frame_id, {}));
     raw_path_pub_->publish(makePathMsg(stamp, frame_id, {}));
     start_portal_candidates_pub_->publish(makePointCloud(stamp, frame_id, {}));
     goal_portal_candidates_pub_->publish(makePointCloud(stamp, frame_id, {}));
@@ -1486,9 +2301,15 @@ private:
     start_marker_pub_->publish(makeDeleteAllMarker(frame_id));
     goal_marker_pub_->publish(makeDeleteAllMarker(frame_id));
     plan_status_marker_pub_->publish(makeDeleteAllMarker(frame_id));
+    tracker_lookahead_marker_pub_->publish(makeDeleteAllMarker(frame_id));
+    tracker_projected_marker_pub_->publish(makeDeleteAllMarker(frame_id));
+    tracking_status_marker_pub_->publish(makeDeleteAllMarker(frame_id));
+    sim_robot_marker_pub_->publish(makeDeleteAllMarker(frame_id));
+    sim_replay_trace_.clear();
+    clearTrackerPath();
 
     response->success = true;
-    response->message = "cleared TGW start, goal, and planned path";
+    response->message = "cleared TGW start, goal, planned path, and tracking path";
     LOG(INFO) << response->message;
   }
 
@@ -1537,6 +2358,7 @@ private:
     publishPlanRouteStatsJson(
       plan, search_time_ms, stats.start_snap_distance_m, stats.goal_snap_distance_m);
     publishPlanStatusMarker(plan);
+    setTrackerPath(plan);
     LOG(INFO)
       << "clicked PlanPath"
       << " success=" << (plan.success ? "true" : "false")
@@ -1772,25 +2594,54 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr selected_backbone_segment_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr hybrid_path_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr local_path_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr used_backbone_segment_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr used_portals_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr raw_path_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr start_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr goal_marker_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr plan_status_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr tracker_lookahead_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr tracker_projected_marker_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr tracking_status_marker_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr local_obstacle_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr stats_json_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr tracking_status_json_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr fake_odom_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr sim_robot_path_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr sim_robot_marker_pub_;
   rclcpp::Service<tgw_planner::srv::PlanPath>::SharedPtr plan_path_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_plan_srv_;
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr start_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr goal_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr start_pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pose_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr local_obstacle_sub_;
+  rclcpp::TimerBase::SharedPtr tracking_timer_;
+  RouteProgressTracker route_tracker_;
+  LocalPathSmoother local_path_smoother_;
+  RollingLocalMap rolling_local_map_;
+  RegulatedPurePursuitController rpp_controller_;
+  RoutePose2D latest_pose_;
+  rclcpp::Time latest_odom_time_;
+  rclcpp::Time last_tracking_tick_;
+  double latest_expected_surface_z_m_{0.0};
   tgw_planner::core::ExperienceSnapshot snapshot_;
   ExperienceSurfaceGraph surface_graph_;
   ExperienceBackboneGraph backbone_graph_;
   bool has_snapshot_{false};
   bool has_surface_graph_{false};
   bool has_backbone_graph_{false};
+  bool has_tracking_path_{false};
+  bool has_odom_{false};
+  bool has_expected_surface_z_{false};
+  bool last_tracking_tick_valid_{false};
+  std::size_t local_obstacle_last_accepted_points_{0U};
+  std::size_t local_obstacle_clouds_received_{0U};
+  std::size_t local_obstacle_clouds_rejected_{0U};
+  std::vector<Point3> sim_replay_trace_;
   Point3 clicked_start_;
   Point3 clicked_goal_;
   bool has_clicked_start_{false};
