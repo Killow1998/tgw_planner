@@ -400,6 +400,34 @@ SurfacePlanResult SurfaceAstarPlanner::plan(
     }
   }
   result.path = result.raw_path;
+  result.path_kinds.assign(result.path.size(), PathPointKind::Surface);
+  result.global_path.clear();
+  result.global_path.reserve(result.path.size());
+  for (std::size_t i = 0; i < result.path.size(); ++i) {
+    double yaw = 0.0;
+    if (result.path.size() > 1U) {
+      const Point3 & from = i + 1U < result.path.size() ? result.path[i] : result.path[i - 1U];
+      const Point3 & to = i + 1U < result.path.size() ? result.path[i + 1U] : result.path[i];
+      yaw = std::atan2(to.y - from.y, to.x - from.x);
+    }
+    int component_id = -1;
+    double confidence = 1.0;
+    if (i < result.cells.size()) {
+      const SurfaceNodeId node_id = graph.nodeIdForCell(result.cells[i]);
+      const SurfaceNode * node = graph.node(node_id);
+      if (node != nullptr) {
+        component_id = graph.componentId(node_id);
+        confidence = node->confidence;
+      }
+    }
+    result.global_path.push_back({
+        result.path[i],
+        yaw,
+        PathPointKind::Surface,
+        0.6,
+        confidence,
+        component_id});
+  }
   result.metrics.final_path_validated = true;
   result.success = true;
   result.message = "path found";

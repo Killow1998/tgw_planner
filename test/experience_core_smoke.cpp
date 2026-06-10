@@ -619,7 +619,7 @@ void testHybridPlannerOptimizesPortalPairCost()
   for (int x = 0; x <= 2; ++x) {
     add_surface_cell({x, 0, 0}, 0.0, 1);
   }
-  for (int x = 10; x <= 12; ++x) {
+  for (int x = 4; x <= 6; ++x) {
     add_surface_cell({x, 0, 0}, 0.0, 2);
   }
 
@@ -634,7 +634,7 @@ void testHybridPlannerOptimizesPortalPairCost()
   surface_graph.build(snapshot, validator);
 
   const SurfaceNodeId start = surface_graph.nodeIdForCell({0, 0, 0});
-  const SurfaceNodeId goal = surface_graph.nodeIdForCell({12, 0, 0});
+  const SurfaceNodeId goal = surface_graph.nodeIdForCell({6, 0, 0});
   require(surface_graph.isValid(start), "portal pair test start node should exist");
   require(surface_graph.isValid(goal), "portal pair test goal node should exist");
   require(
@@ -667,12 +667,15 @@ void testHybridPlannerOptimizesPortalPairCost()
   for (int i = 1; i < 49; ++i) {
     add_backbone_sample(i, {100.0 + static_cast<double>(i), 20.0, 0.0});
   }
-  add_backbone_sample(49, {10.5, 0.5, 0.0});
-  add_backbone_sample(50, {2.5, 0.5, 0.0});
-  for (int i = 51; i < 99; ++i) {
+  add_backbone_sample(49, {4.5, 0.5, 0.0});
+  add_backbone_sample(50, {4.0, 0.5, 0.0});
+  add_backbone_sample(51, {3.5, 0.5, 0.0});
+  add_backbone_sample(52, {3.0, 0.5, 0.0});
+  add_backbone_sample(53, {2.5, 0.5, 0.0});
+  for (int i = 54; i < 99; ++i) {
     add_backbone_sample(i, {200.0 + static_cast<double>(i), -20.0, 0.0});
   }
-  add_backbone_sample(99, {12.5, 0.5, 0.0});
+  add_backbone_sample(99, {6.5, 0.5, 0.0});
 
   ExperienceBackboneOptions backbone_options;
   backbone_options.min_node_spacing_m = 0.0;
@@ -690,7 +693,7 @@ void testHybridPlannerOptimizesPortalPairCost()
     plan.metrics.used_portal_edges >= 2U,
     "hybrid graph search should use portal edges to change graph layers");
   require(
-    plan.metrics.selected_backbone_index_delta <= 2U,
+    plan.metrics.selected_backbone_index_delta <= 5U,
     "hybrid graph search should choose the short backbone interval, not the locally nearest endpoints");
   require(
     plan.metrics.selected_backbone_length_m < 10.0,

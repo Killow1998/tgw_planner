@@ -28,6 +28,7 @@ using tgw_planner::core::ExperienceSurfaceBuilder;
 using tgw_planner::core::ExperienceSurfaceBuilderOptions;
 using tgw_planner::core::ExperienceSurfaceGraph;
 using tgw_planner::core::GridIndex;
+using tgw_planner::core::GlobalPathPoint;
 using tgw_planner::core::HybridExperiencePlanner;
 using tgw_planner::core::HybridExperiencePlannerOptions;
 using tgw_planner::core::N3MapReader;
@@ -189,6 +190,30 @@ void writePathJson(
   out << "]";
 }
 
+void writeGlobalPathJson(std::ostream & out, const SurfacePlanResult & plan)
+{
+  if (plan.global_path.empty()) {
+    writePathJson(out, plan.path, plan.path_kinds);
+    return;
+  }
+  out << "[";
+  for (std::size_t i = 0U; i < plan.global_path.size(); ++i) {
+    if (i > 0U) {
+      out << ",";
+    }
+    const GlobalPathPoint & point = plan.global_path[i];
+    out << "{\"x\":" << point.position.x <<
+      ",\"y\":" << point.position.y <<
+      ",\"z\":" << point.position.z <<
+      ",\"kind\":\"" << pathKindName(point.kind) <<
+      "\",\"yaw_hint_rad\":" << point.yaw_hint_rad <<
+      ",\"target_speed_mps\":" << point.target_speed_mps <<
+      ",\"confidence\":" << point.confidence <<
+      ",\"surface_component_id\":" << point.surface_component_id << "}";
+  }
+  out << "]";
+}
+
 void writeQueryJsonl(
   std::ostream & out,
   std::size_t query_id,
@@ -213,7 +238,7 @@ void writeQueryJsonl(
   out << ",\"snapped_goal\":";
   writePointJson(out, goal);
   out << ",\"path\":";
-  writePathJson(out, plan.path, plan.path_kinds);
+  writeGlobalPathJson(out, plan);
   out << ",\"used_backbone\":";
   writePointArrayJson(out, plan.debug_selected_backbone_segment);
   std::vector<Point3> backbone_points;
@@ -230,8 +255,12 @@ void writeQueryJsonl(
   out << ",\"metrics\":{";
   out << "\"path_length_m\":" << plan.metrics.path_length_m <<
     ",\"xy_start_goal_distance_m\":" << xy_distance <<
+    ",\"detour_xy\":" << detour_ratio <<
     ",\"detour_ratio\":" << detour_ratio <<
     ",\"backbone_ratio\":" << backbone_ratio <<
+    ",\"surface_ratio\":" <<
+    (plan.metrics.path_length_m > 1.0e-6 ?
+    plan.metrics.surface_path_length_m / plan.metrics.path_length_m : 0.0) <<
     ",\"backbone_path_length_m\":" << plan.metrics.backbone_path_length_m <<
     ",\"surface_path_length_m\":" << plan.metrics.surface_path_length_m <<
     ",\"portal_switch_count\":" << plan.metrics.portal_switch_count <<

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <queue>
+#include <sstream>
 
 namespace tgw_planner::core
 {
@@ -152,6 +153,88 @@ PathPointKind nodePathKind(
   return node.kind == HybridNodeKind::Backbone ? PathPointKind::Backbone : PathPointKind::Surface;
 }
 
+double edgeSlope(double length_xy_m, double dz_m)
+{
+  return length_xy_m > 1.0e-9 ? std::abs(dz_m) / length_xy_m :
+         std::numeric_limits<double>::infinity();
+}
+
+bool validateHybridPath(
+  const HybridGraph & graph,
+  const ExperienceBackboneGraph & backbone_graph,
+  const std::vector<std::uint32_t> & path,
+  const HybridExperiencePlannerOptions & options,
+  std::string & failure_reason,
+  SurfacePlanMetrics & metrics)
+{
+  if (path.empty()) {
+    failure_reason = "path_validation_failed_empty_hybrid_path";
+    return false;
+  }
+  for (std::size_t i = 1U; i < path.size(); ++i) {
+    const std::uint32_t from = path[i - 1U];
+    const std::uint32_t to = path[i];
+    if (!validHybridId(graph, from) || !validHybridId(graph, to)) {
+      failure_reason = "path_validation_failed_invalid_hybrid_node";
+      return false;
+    }
+    const HybridEdge * edge = findEdge(graph, from, to);
+    if (edge == nullptr) {
+      failure_reason = "path_validation_failed_missing_hybrid_edge";
+      return false;
+    }
+    const double abs_dz = std::abs(edge->dz_m);
+    metrics.max_path_edge_dz_m = std::max(metrics.max_path_edge_dz_m, abs_dz);
+    if (!std::isfinite(edge->cost) || edge->cost < 0.0) {
+      failure_reason = "path_validation_failed_invalid_hybrid_edge_cost";
+      return false;
+    }
+    if (edge->kind == HybridEdgeKind::Surface) {
+      if (graph.nodes[from].kind != HybridNodeKind::Surface ||
+        graph.nodes[to].kind != HybridNodeKind::Surface)
+      {
+        failure_reason = "path_validation_failed_invalid_surface_edge";
+        return false;
+      }
+      continue;
+    }
+    if (edge->kind == HybridEdgeKind::Backbone) {
+      if (graph.nodes[from].kind != HybridNodeKind::Backbone ||
+        graph.nodes[to].kind != HybridNodeKind::Backbone ||
+        edge->length_xy_m > options.max_backbone_edge_xy_gap_m ||
+        abs_dz > options.max_backbone_edge_dz_m ||
+        edgeSlope(edge->length_xy_m, edge->dz_m) > options.max_backbone_edge_slope)
+      {
+        std::ostringstream message;
+        message << "path_validation_failed_invalid_backbone_edge"
+          << " from=" << graph.nodes[from].backbone_id.id
+          << " to=" << graph.nodes[to].backbone_id.id
+          << " xy=" << edge->length_xy_m
+          << " dz=" << abs_dz
+          << " slope=" << edgeSlope(edge->length_xy_m, edge->dz_m)
+          << " max_xy=" << options.max_backbone_edge_xy_gap_m
+          << " max_dz=" << options.max_backbone_edge_dz_m
+          << " max_slope=" << options.max_backbone_edge_slope;
+        failure_reason = message.str();
+        return false;
+      }
+      continue;
+    }
+    if (edge->kind == HybridEdgeKind::Portal) {
+      const ExperiencePortal * portal = backbone_graph.portal(edge->portal_id);
+      if (portal == nullptr ||
+        portal->distance_xy_m > options.max_portal_xy_distance_m ||
+        portal->height_error_m > options.max_portal_height_error_m)
+      {
+        failure_reason = "path_validation_failed_invalid_portal_edge";
+        return false;
+      }
+      continue;
+    }
+  }
+  return true;
+}
+
 HybridGraph buildHybridGraph(
   const ExperienceSurfaceGraph & surface_graph,
   const ExperienceBackboneGraph & backbone_graph,
@@ -263,6 +346,22 @@ HybridExperiencePlanner::HybridExperiencePlanner(
 {
   hybrid_options_.backbone_cost_scale = std::max(0.1, hybrid_options_.backbone_cost_scale);
   hybrid_options_.portal_switch_cost = std::max(0.0, hybrid_options_.portal_switch_cost);
+  hybrid_options_.max_backbone_edge_xy_gap_m =
+    std::max(0.05, hybrid_options_.max_backbone_edge_xy_gap_m);
+  hybrid_options_.max_backbone_edge_dz_m =
+    std::max(0.05, hybrid_options_.max_backbone_edge_dz_m);
+  hybrid_options_.max_backbone_edge_slope =
+    std::max(0.1, hybrid_options_.max_backbone_edge_slope);
+  hybrid_options_.max_portal_xy_distance_m =
+    std::max(0.0, hybrid_options_.max_portal_xy_distance_m);
+  hybrid_options_.max_portal_height_error_m =
+    std::max(0.0, hybrid_options_.max_portal_height_error_m);
+  hybrid_options_.surface_target_speed_mps =
+    std::max(0.0, hybrid_options_.surface_target_speed_mps);
+  hybrid_options_.backbone_target_speed_mps =
+    std::max(0.0, hybrid_options_.backbone_target_speed_mps);
+  hybrid_options_.portal_target_speed_mps =
+    std::max(0.0, hybrid_options_.portal_target_speed_mps);
 }
 
 SurfacePlanResult HybridExperiencePlanner::plan(
@@ -376,6 +475,16 @@ SurfacePlanResult HybridExperiencePlanner::plan(
     return result;
   }
 
+  std::string validation_failure;
+  if (!validateHybridPath(
+      graph, backbone_graph, hybrid_path, hybrid_options_, validation_failure, result.metrics))
+  {
+    result.message = validation_failure;
+    result.metrics.failure_reason = result.message;
+    result.metrics.final_path_validation_failure = validation_failure;
+    return result;
+  }
+
   result.success = true;
   result.message = "path found on hybrid experience graph";
   result.metrics.success = true;
@@ -387,7 +496,24 @@ SurfacePlanResult HybridExperiencePlanner::plan(
   for (std::size_t i = 0U; i < hybrid_path.size(); ++i) {
     const std::uint32_t node_id = hybrid_path[i];
     const HybridNode & node = graph.nodes[node_id];
-    appendPathPoint(result, node.point, nodePathKind(graph, hybrid_path, i));
+    const PathPointKind kind = nodePathKind(graph, hybrid_path, i);
+    int component_id = -1;
+    double confidence = 1.0;
+    if (node.kind == HybridNodeKind::Surface) {
+      component_id = surface_graph.componentId(node.surface_id);
+      const SurfaceNode * surface_node = surface_graph.node(node.surface_id);
+      if (surface_node != nullptr) {
+        confidence = surface_node->confidence;
+      }
+    } else if (node.kind == HybridNodeKind::Backbone) {
+      const BackboneNode * backbone_node = backbone_graph.node(node.backbone_id);
+      if (backbone_node != nullptr) {
+        confidence = backbone_node->low_confidence ? 0.5 : 1.0;
+        component_id = backbone_node->nearest_surface_component_id;
+      }
+    }
+    appendPathPoint(result, node.point, kind);
+    appendGlobalPathPoint(result, node.point, kind, component_id, confidence);
     appendPoint(result.raw_path, node.point);
     if (node.kind == HybridNodeKind::Surface) {
       const SurfaceNode * surface_node = surface_graph.node(node.surface_id);
@@ -443,6 +569,7 @@ SurfacePlanResult HybridExperiencePlanner::plan(
   result.metrics.selected_backbone_length_m = result.metrics.backbone_path_length_m;
   result.metrics.selected_start_surface_leg_m = result.metrics.surface_path_length_m;
   result.metrics.selected_total_hybrid_cost = cost[goal_id];
+  fillGlobalPathYaws(result);
   fillPathMetrics(result);
   return result;
 }
@@ -486,6 +613,56 @@ void HybridExperiencePlanner::appendPathPoint(
   }
   result.path.push_back(point);
   result.path_kinds.push_back(kind);
+}
+
+void HybridExperiencePlanner::appendGlobalPathPoint(
+  SurfacePlanResult & result,
+  const Point3 & point,
+  PathPointKind kind,
+  int surface_component_id,
+  double confidence) const
+{
+  if (!result.global_path.empty() && xyDistance(result.global_path.back().position, point) < 1.0e-6 &&
+    std::abs(result.global_path.back().position.z - point.z) < 1.0e-6)
+  {
+    if (result.global_path.back().kind != PathPointKind::Portal &&
+      kind == PathPointKind::Portal)
+    {
+      result.global_path.back().kind = kind;
+      result.global_path.back().target_speed_mps = hybrid_options_.portal_target_speed_mps;
+    }
+    return;
+  }
+  double target_speed = hybrid_options_.surface_target_speed_mps;
+  if (kind == PathPointKind::Backbone) {
+    target_speed = hybrid_options_.backbone_target_speed_mps;
+  } else if (kind == PathPointKind::Portal) {
+    target_speed = hybrid_options_.portal_target_speed_mps;
+  }
+  result.global_path.push_back({
+      point,
+      0.0,
+      kind,
+      target_speed,
+      confidence,
+      surface_component_id});
+}
+
+void HybridExperiencePlanner::fillGlobalPathYaws(SurfacePlanResult & result) const
+{
+  for (std::size_t i = 0U; i < result.global_path.size(); ++i) {
+    if (result.global_path.size() == 1U) {
+      result.global_path[i].yaw_hint_rad = 0.0;
+      continue;
+    }
+    const Point3 & from =
+      i + 1U < result.global_path.size() ? result.global_path[i].position :
+      result.global_path[i - 1U].position;
+    const Point3 & to =
+      i + 1U < result.global_path.size() ? result.global_path[i + 1U].position :
+      result.global_path[i].position;
+    result.global_path[i].yaw_hint_rad = std::atan2(to.y - from.y, to.x - from.x);
+  }
 }
 
 double HybridExperiencePlanner::pathLength(const std::vector<Point3> & path) const

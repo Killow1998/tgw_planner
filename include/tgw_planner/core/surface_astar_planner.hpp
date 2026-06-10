@@ -96,6 +96,16 @@ enum class PathPointKind
   Portal
 };
 
+struct GlobalPathPoint
+{
+  Point3 position;
+  double yaw_hint_rad{0.0};
+  PathPointKind kind{PathPointKind::Unknown};
+  double target_speed_mps{0.0};
+  double confidence{1.0};
+  int surface_component_id{-1};
+};
+
 struct SurfacePlanResult
 {
   bool success{false};
@@ -105,6 +115,7 @@ struct SurfacePlanResult
   std::vector<GridIndex> cells;
   std::vector<Point3> path;
   std::vector<PathPointKind> path_kinds;
+  std::vector<GlobalPathPoint> global_path;
   std::vector<Point3> debug_start_portal_candidates;
   std::vector<Point3> debug_goal_portal_candidates;
   std::vector<Point3> debug_selected_start_portal;
