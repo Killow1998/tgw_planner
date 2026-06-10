@@ -13,3 +13,4 @@ CURRENT_NAVIGATION_ISSUES.md
 
 # Local large reference maps. Keep ignored; upload externally when needed.
 /test_data/pcd/*.pcd
+/docs/data/*.pbstream
