@@ -8,7 +8,6 @@
 #include "tgw_planner/core/experience_surface_builder.hpp"
 #include "tgw_planner/core/experience_backbone_graph.hpp"
 #include "tgw_planner/core/experience_surface_graph.hpp"
-#include "tgw_planner/core/global_path_tracker.hpp"
 #include "tgw_planner/core/hybrid_experience_planner.hpp"
 #include "tgw_planner/core/local_path_smoother.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
@@ -31,8 +30,6 @@ using tgw_planner::core::ExperienceSurfaceBuilder;
 using tgw_planner::core::ExperienceSurfaceBuilderOptions;
 using tgw_planner::core::GridIndex;
 using tgw_planner::core::GlobalPathPoint;
-using tgw_planner::core::GlobalPathTracker;
-using tgw_planner::core::GlobalPathTrackerOptions;
 using tgw_planner::core::HybridExperiencePlanner;
 using tgw_planner::core::HybridExperiencePlannerOptions;
 using tgw_planner::core::LocalPathResult;
@@ -74,7 +71,6 @@ using tgw_planner::core::TrajectoryBridgeSegment;
 using tgw_planner::core::TrajectoryProjectionResult;
 using tgw_planner::core::TrajectoryProjector;
 using tgw_planner::core::TrajectoryProjectorOptions;
-using tgw_planner::core::TrackerPose2D;
 
 void require(bool condition, const std::string & message)
 {
@@ -202,94 +198,6 @@ GlobalPathPoint makeGlobalPathPoint(
   return point;
 }
 
-double wrapTestAngle(double angle_rad)
-{
-  constexpr double kPi = 3.14159265358979323846;
-  while (angle_rad > kPi) {
-    angle_rad -= 2.0 * kPi;
-  }
-  while (angle_rad <= -kPi) {
-    angle_rad += 2.0 * kPi;
-  }
-  return angle_rad;
-}
-
-void testGlobalPathTrackerFollowsStraightPath()
-{
-  GlobalPathTrackerOptions options;
-  options.lookahead_m = 0.80;
-  options.projection_window_m = 2.0;
-  options.max_yaw_rate_radps = 2.0;
-  options.goal_tolerance_m = 0.25;
-  GlobalPathTracker tracker(options);
-  std::vector<GlobalPathPoint> path{
-    makeGlobalPathPoint(0.0, 0.0, 0.0, PathPointKind::Surface, 0.5),
-    makeGlobalPathPoint(5.0, 0.0, 0.0, PathPointKind::Surface, 0.5)};
-  std::string error;
-  require(tracker.setPath(path, &error), "global path tracker should accept a simple path");
-
-  TrackerPose2D pose;
-  constexpr double dt = 0.05;
-  bool reached = false;
-  for (int i = 0; i < 400; ++i) {
-    const auto command = tracker.computeCommand(pose, dt);
-    require(command.valid, "global path tracker command should be valid");
-    pose.yaw_rad = wrapTestAngle(pose.yaw_rad + command.yaw_rate_radps * dt);
-    pose.x += command.linear_speed_mps * dt * std::cos(pose.yaw_rad);
-    pose.y += command.linear_speed_mps * dt * std::sin(pose.yaw_rad);
-    if (command.goal_reached) {
-      reached = true;
-      break;
-    }
-  }
-  require(reached, "global path tracker should reach the end of a straight path");
-  require(
-    std::hypot(pose.x - 5.0, pose.y) < 0.35,
-    "global path tracker final pose should remain near the goal");
-}
-
-void testGlobalPathTrackerConsumesSegmentSpeed()
-{
-  GlobalPathTracker tracker;
-  std::vector<GlobalPathPoint> path{
-    makeGlobalPathPoint(0.0, 0.0, 0.0, PathPointKind::Surface, 0.6),
-    makeGlobalPathPoint(1.0, 0.0, 0.0, PathPointKind::Portal, 0.1),
-    makeGlobalPathPoint(2.0, 0.0, 0.0, PathPointKind::Backbone, 0.3)};
-  require(tracker.setPath(path), "global path tracker should accept segment-kind path");
-  tracker.resetProgress(0.90);
-  const auto command = tracker.computeCommand({0.95, 0.0, 0.0}, 0.05);
-  require(command.valid, "segment-speed command should be valid");
-  require(
-    command.segment_kind == PathPointKind::Portal,
-    "tracker should expose portal segment kind near portal transition");
-  require(
-    command.linear_speed_mps <= 0.20,
-    "tracker should slow down near portal transition");
-}
-
-void testGlobalPathTrackerUsesForwardProjectionWindow()
-{
-  GlobalPathTrackerOptions options;
-  options.lookahead_m = 0.80;
-  options.projection_window_m = 2.0;
-  GlobalPathTracker tracker(options);
-  std::vector<GlobalPathPoint> path{
-    makeGlobalPathPoint(0.0, 0.0, 0.0, PathPointKind::Surface, 0.6),
-    makeGlobalPathPoint(10.0, 0.0, 0.0, PathPointKind::Surface, 0.6),
-    makeGlobalPathPoint(10.0, 0.0, 8.0, PathPointKind::Portal, 0.15),
-    makeGlobalPathPoint(0.0, 0.0, 8.0, PathPointKind::Surface, 0.6),
-    makeGlobalPathPoint(20.0, 0.0, 8.0, PathPointKind::Surface, 0.6)};
-  require(tracker.setPath(path), "global path tracker should accept overlapping XY layers");
-  const auto command = tracker.computeCommand({0.10, 0.0, 0.0}, 0.05);
-  require(command.valid, "overlapping-layer command should be valid");
-  require(
-    command.progress_m < 1.0,
-    "tracker should not snap progress to a later overlapping XY layer");
-  require(
-    command.expected_surface_z_m < 1.0,
-    "tracker should keep the local lower-layer surface height");
-}
-
 void testRouteProgressTrackerBuildsLocalWindowWithoutLayerJump()
 {
   RouteProgressTrackerOptions options;
@@ -310,6 +218,24 @@ void testRouteProgressTrackerBuildsLocalWindowWithoutLayerJump()
     state.projected_point.position.z < 1.0,
     "route progress should not jump to a later overlapping height layer");
   require(state.local_route.size() >= 2U, "route progress should expose a local route window");
+}
+
+void testRouteProgressTrackerRejectsFarProjection()
+{
+  RouteProgressTrackerOptions options;
+  options.projection_window_m = 3.0;
+  options.max_projection_lateral_error_m = 0.75;
+  RouteProgressTracker tracker(options);
+  std::vector<GlobalPathPoint> path{
+    makeGlobalPathPoint(0.0, 0.0, 0.0, PathPointKind::Surface, 0.0),
+    makeGlobalPathPoint(5.0, 0.0, 0.0, PathPointKind::Surface, 0.0)};
+  require(tracker.setPath(path), "route tracker should accept straight path");
+
+  const RouteProgressState state = tracker.update({1.0, 2.0, 0.0});
+  require(!state.valid, "route tracker should reject poses far from the route");
+  require(
+    state.status == "route_projection_failed",
+    "route tracker should expose projection failure as the stop reason");
 }
 
 void testLocalPathSmootherBuildsShortSmoothPath()
@@ -413,6 +339,23 @@ void testRegulatedPurePursuitSlowsNearGoal()
     {0.0, 0.0, 0.0}, local_path, 0.25, 0.1, RollingLocalMap());
   require(command.valid, "RPP command should be valid near the goal");
   require(command.linear_speed_mps < 0.30, "RPP should slow down near the goal");
+}
+
+void testRegulatedPurePursuitGoalToleranceIsDistance()
+{
+  RegulatedPurePursuitOptions options;
+  options.desired_linear_speed_mps = 0.60;
+  options.max_linear_speed_mps = 0.80;
+  options.min_linear_speed_mps = 0.50;
+  options.goal_tolerance_m = 0.05;
+  options.goal_slowdown_distance_m = 1.0;
+  options.max_linear_accel_mps2 = 10.0;
+  RegulatedPurePursuitController controller(options);
+  const std::vector<Point3> local_path{{0.0, 0.0, 0.0}, {0.8, 0.0, 0.0}};
+  const auto command = controller.computeCommand(
+    {0.0, 0.0, 0.0}, local_path, 0.20, 0.1, RollingLocalMap());
+  require(command.valid, "RPP command should remain valid above goal tolerance");
+  require(!command.goal_reached, "RPP should not use min speed as a goal distance threshold");
 }
 
 void testRegulatedPurePursuitStopsForLocalObstacle()
@@ -1485,15 +1428,14 @@ int main()
   testClearanceAndRisk();
   testFootprintPlannerAndValidator();
   testFootprintSupportRatio();
-  testGlobalPathTrackerFollowsStraightPath();
-  testGlobalPathTrackerConsumesSegmentSpeed();
-  testGlobalPathTrackerUsesForwardProjectionWindow();
   testRouteProgressTrackerBuildsLocalWindowWithoutLayerJump();
+  testRouteProgressTrackerRejectsFarProjection();
   testLocalPathSmootherBuildsShortSmoothPath();
   testLocalPathSmootherDoesNotCutAcrossCorner();
   testRegulatedPurePursuitCruisesOnStraightPath();
   testRegulatedPurePursuitSlowsForCurvature();
   testRegulatedPurePursuitSlowsNearGoal();
+  testRegulatedPurePursuitGoalToleranceIsDistance();
   testRegulatedPurePursuitStopsForLocalObstacle();
   testRollingLocalMapExpiresOldObstacles();
   testLayeredSurfaceGraph();

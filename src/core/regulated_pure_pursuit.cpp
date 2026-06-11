@@ -23,6 +23,7 @@ RegulatedPurePursuitController::RegulatedPurePursuitController(
   options_.max_angular_speed_radps = std::max(0.05, options_.max_angular_speed_radps);
   options_.lookahead_m = std::max(0.05, options_.lookahead_m);
   options_.max_lateral_accel_mps2 = std::max(0.05, options_.max_lateral_accel_mps2);
+  options_.goal_tolerance_m = std::max(0.01, options_.goal_tolerance_m);
   options_.goal_slowdown_distance_m = std::max(0.05, options_.goal_slowdown_distance_m);
   options_.collision_time_horizon_s = std::max(0.0, options_.collision_time_horizon_s);
   options_.collision_sample_time_s = std::max(0.02, options_.collision_sample_time_s);
@@ -55,7 +56,7 @@ RegulatedPurePursuitCommand RegulatedPurePursuitController::computeCommand(
 
   const double local_length = pathLength(local_path);
   const double remaining_m = std::max(0.0, remaining_global_path_m);
-  if (remaining_m <= options_.min_linear_speed_mps) {
+  if (remaining_m <= options_.goal_tolerance_m) {
     command.valid = true;
     command.goal_reached = true;
     command.status = "goal_reached";

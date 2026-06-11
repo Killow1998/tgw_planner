@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,7 @@ struct RoutePose2D
 struct RouteProgressTrackerOptions
 {
   double projection_window_m{5.0};
+  double max_projection_lateral_error_m{2.0};
   double local_route_length_m{4.0};
   double min_local_route_length_m{0.8};
   double goal_tolerance_m{0.35};
@@ -53,8 +55,9 @@ public:
 private:
   struct Projection
   {
+    bool found{false};
     double progress_m{0.0};
-    double distance_m{0.0};
+    double distance_m{std::numeric_limits<double>::infinity()};
   };
 
   static double xyDistance(const Point3 & a, const Point3 & b);

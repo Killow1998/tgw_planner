@@ -156,6 +156,7 @@ Status colors:
 
 ```text
 gray  = idle / no path
+yellow = path ready but not armed
 green = tracking or goal reached
 red   = real tracking failure
 ```
@@ -168,6 +169,54 @@ Fix:
 1. no path is TRACK IDLE, not a failure
 2. on simulated goal reached, fake odom continues publishing zero velocity
 3. goal reached remains green instead of becoming stale
+```
+
+### 6. Safety gates before real command output
+
+Implemented after the 2026-06-11 review:
+
+```text
+RouteProgressTracker:
+  - projection now has an explicit found flag
+  - poses outside the allowed lateral projection error fail with:
+    route_projection_failed
+  - tracking stops instead of treating the lateral error as zero
+
+RegulatedPurePursuitController:
+  - goal reached uses goal_tolerance_m
+  - min_linear_speed_mps is no longer used as a distance threshold
+
+ROS wrapper:
+  - real cmd_vel output is gated by /tgw_experience/set_tracking_armed
+  - kinematic replay no longer publishes command twists; it only updates fake odom / replay status
+  - require_tracking_arm is true in real config and false in sim config
+  - arm requests are rejected unless a path exists and odom is current in the expected frame
+  - odom frame must match the map frame by default
+  - mismatched odom frame fails with:
+    tracking_odom_frame_mismatch
+  - odom frame mismatch clears local tracking state, publishes zero velocity,
+    and disarms tracking; a later valid odom frame still requires re-arming
+  - local obstacle height filtering uses nearest local path height, not one cached surface z
+```
+
+Relevant parameters:
+
+```yaml
+require_tracking_arm: true
+tracking_odom_must_be_in_map_frame: true
+tracking_max_projection_lateral_error_m: 2.0
+```
+
+Arm command for real tracking:
+
+```bash
+ros2 service call /tgw_experience/set_tracking_armed std_srvs/srv/SetBool "{data: true}"
+```
+
+Disarm:
+
+```bash
+ros2 service call /tgw_experience/set_tracking_armed std_srvs/srv/SetBool "{data: false}"
 ```
 
 ## Current Known Boundary
@@ -213,6 +262,33 @@ Specific questions:
 
 ## Suggested Next Proof Point
 
+The next core-only proof point is now captured by:
+
+```text
+docs/exp/golden_scenes.md
+scripts/run_tgw_golden_regression.py
+```
+
+The regression runner supports scene-scoped runs:
+
+```bash
+python3 src/tgw_planner/scripts/run_tgw_golden_regression.py --scene 20260610
+python3 src/tgw_planner/scripts/run_tgw_golden_regression.py --scene all
+```
+
+The regression runner also exposes path-quality gates:
+
+```text
+--max-detour
+--max-same-floor-detour
+--max-backbone-ratio
+--max-portal-switch-count
+--max-path-edge-dz-m
+--max-tracking-final-error-m
+--max-tracking-lateral-error-m
+--max-tracking-z-step-m
+```
+
 Run multiple start/goal pairs in the two existing pbstream scenes and verify:
 
 ```text
@@ -224,3 +300,32 @@ Run multiple start/goal pairs in the two existing pbstream scenes and verify:
 ```
 
 If this holds, TGW can move from kinematic replay toward a real local obstacle input and then hardware-in-the-loop testing.
+
+## Hardware TODO
+
+The remaining production-facing tasks need to happen in the robot deployment
+environment rather than this development workstation:
+
+```text
+1. Verify odom/map frame contract against the robot localization stack.
+2. Keep TGW command output behind a robot-side mux / safety supervisor.
+3. Add e-stop / deadman before forwarding to /cmd_vel.
+4. Run low-speed supervised tracking on one known route.
+5. Enable local obstacle stop-only mode only after odom and command forwarding are stable.
+```
+
+## Cleanup Decision
+
+The old `GlobalPathTracker` is no longer part of the default core build or smoke
+test path, and its header/source have been removed. The current mainline tracker
+contract is:
+
+```text
+RouteProgressTracker
+  -> LocalPathSmoother
+  -> RegulatedPurePursuitController
+```
+
+Do not reintroduce a second tracker lifecycle unless there is a concrete
+behavioral gap that cannot be handled by the current progress/smoothing/RPP
+pipeline.

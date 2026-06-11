@@ -44,7 +44,6 @@ add_library(tgw_planner_core SHARED
   src/core/experience_planner_defaults.cpp
   src/core/experience_surface_graph.cpp
   src/core/experience_surface_builder.cpp
-  src/core/global_path_tracker.cpp
   src/core/hybrid_experience_planner.cpp
   src/core/local_path_smoother.cpp
   src/core/n3map_reader.cpp

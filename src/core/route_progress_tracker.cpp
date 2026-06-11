@@ -16,6 +16,8 @@ RouteProgressTracker::RouteProgressTracker(RouteProgressTrackerOptions options)
 : options_(options)
 {
   options_.projection_window_m = std::max(0.20, options_.projection_window_m);
+  options_.max_projection_lateral_error_m =
+    std::max(0.05, options_.max_projection_lateral_error_m);
   options_.local_route_length_m = std::max(0.20, options_.local_route_length_m);
   options_.min_local_route_length_m = std::max(0.05, options_.min_local_route_length_m);
   options_.goal_tolerance_m = std::max(0.01, options_.goal_tolerance_m);
@@ -104,6 +106,15 @@ RouteProgressState RouteProgressTracker::update(const RoutePose2D & pose)
   const double length = pathLength();
   const double max_projection = std::min(length, progress_m_ + options_.projection_window_m);
   const Projection projection = projectPose(pose, progress_m_, max_projection);
+  if (!projection.found) {
+    state.status = "route_projection_failed";
+    state.progress_m = progress_m_;
+    state.remaining_m = std::max(0.0, length - progress_m_);
+    state.lateral_error_m = std::isfinite(projection.distance_m) ? projection.distance_m : -1.0;
+    state.projected_point = interpolate(progress_m_);
+    state.ahead_point = state.projected_point;
+    return state;
+  }
   progress_m_ = std::max(progress_m_, projection.progress_m);
 
   const double end_progress = std::min(length, progress_m_ + options_.local_route_length_m);
@@ -212,13 +223,14 @@ RouteProgressTracker::Projection RouteProgressTracker::projectPose(
     const double py = a.y + t * vy;
     const double distance = std::hypot(pose.x - px, pose.y - py);
     if (distance < best.distance_m) {
+      best.found = true;
       best.distance_m = distance;
       best.progress_m = progress;
     }
   }
 
-  if (!std::isfinite(best.distance_m)) {
-    best.distance_m = 0.0;
+  if (!best.found || best.distance_m > options_.max_projection_lateral_error_m) {
+    best.found = false;
   }
   return best;
 }

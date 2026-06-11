@@ -17,6 +17,7 @@ struct RegulatedPurePursuitOptions
   double max_angular_speed_radps{1.20};
   double lookahead_m{0.80};
   double max_lateral_accel_mps2{0.80};
+  double goal_tolerance_m{0.10};
   double goal_slowdown_distance_m{1.00};
   double collision_time_horizon_s{1.50};
   double collision_sample_time_s{0.10};

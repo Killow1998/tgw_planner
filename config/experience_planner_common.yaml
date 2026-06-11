@@ -49,6 +49,9 @@ tgw_experience_planner_node:
     tracking_odom_timeout_s: 0.50
     tracking_lookahead_m: 0.80
     tracking_projection_window_m: 5.0
+    tracking_max_projection_lateral_error_m: 2.0
+    tracking_odom_must_be_in_map_frame: true
+    require_tracking_arm: true
     tracking_local_route_length_m: 4.0
     tracking_max_yaw_rate_radps: 1.20
     tracking_goal_tolerance_m: 0.35

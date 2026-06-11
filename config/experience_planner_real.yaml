@@ -3,6 +3,8 @@ tgw_experience_planner_node:
     enable_path_tracking: true
     tracking_odom_topic: "/odom"
     tracking_cmd_vel_topic: "/tgw_experience/cmd_vel"
+    require_tracking_arm: true
+    tracking_odom_must_be_in_map_frame: true
     enable_kinematic_replay: false
     kinematic_replay_odom_topic: "/tgw_experience/fake_odom"
     kinematic_replay_reset_on_plan: false

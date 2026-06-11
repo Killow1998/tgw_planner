@@ -23,6 +23,7 @@
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_srvs/srv/set_bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "visualization_msgs/msg/marker.hpp"
 
@@ -534,6 +535,47 @@ double pointPathLength(const std::vector<Point3> & path)
   return length_m;
 }
 
+bool nearestPathHeight(
+  const std::vector<Point3> & path,
+  const double x,
+  const double y,
+  double * z_out)
+{
+  if (z_out == nullptr || path.empty()) {
+    return false;
+  }
+  if (path.size() == 1U) {
+    *z_out = path.front().z;
+    return std::isfinite(*z_out);
+  }
+
+  double best_distance_sq = std::numeric_limits<double>::infinity();
+  double best_z = 0.0;
+  for (std::size_t i = 1U; i < path.size(); ++i) {
+    const Point3 & a = path[i - 1U];
+    const Point3 & b = path[i];
+    const double vx = b.x - a.x;
+    const double vy = b.y - a.y;
+    const double segment_length_sq = vx * vx + vy * vy;
+    double t = 0.0;
+    if (segment_length_sq > 1.0e-9) {
+      t = std::clamp(((x - a.x) * vx + (y - a.y) * vy) / segment_length_sq, 0.0, 1.0);
+    }
+    const double px = a.x + t * vx;
+    const double py = a.y + t * vy;
+    const double distance_sq = (x - px) * (x - px) + (y - py) * (y - py);
+    if (distance_sq < best_distance_sq) {
+      best_distance_sq = distance_sq;
+      best_z = a.z + t * (b.z - a.z);
+    }
+  }
+  if (!std::isfinite(best_z)) {
+    return false;
+  }
+  *z_out = best_z;
+  return true;
+}
+
 double wrapAngle(const double angle_rad)
 {
   constexpr double kPi = 3.14159265358979323846;
@@ -786,6 +828,8 @@ public:
     declare_parameter<bool>("enable_path_tracking", false);
     declare_parameter<std::string>("tracking_odom_topic", "/odom");
     declare_parameter<std::string>("tracking_cmd_vel_topic", "/tgw_experience/cmd_vel");
+    declare_parameter<bool>("require_tracking_arm", true);
+    declare_parameter<bool>("tracking_odom_must_be_in_map_frame", true);
     declare_parameter<bool>("enable_kinematic_replay", false);
     declare_parameter<std::string>(
       "kinematic_replay_odom_topic", "/tgw_experience/fake_odom");
@@ -795,6 +839,7 @@ public:
     declare_parameter<double>("tracking_odom_timeout_s", 0.50);
     declare_parameter<double>("tracking_lookahead_m", 0.80);
     declare_parameter<double>("tracking_projection_window_m", 5.0);
+    declare_parameter<double>("tracking_max_projection_lateral_error_m", 2.0);
     declare_parameter<double>("tracking_local_route_length_m", 4.0);
     declare_parameter<double>("tracking_max_yaw_rate_radps", 1.20);
     declare_parameter<double>("tracking_goal_tolerance_m", 0.35);
@@ -921,6 +966,11 @@ public:
       "/tgw_experience/clear_plan",
       std::bind(
         &TgwExperiencePlannerNode::handleClearPlan, this, std::placeholders::_1,
+        std::placeholders::_2));
+    set_tracking_armed_srv_ = create_service<std_srvs::srv::SetBool>(
+      "/tgw_experience/set_tracking_armed",
+      std::bind(
+        &TgwExperiencePlannerNode::handleSetTrackingArmed, this, std::placeholders::_1,
         std::placeholders::_2));
     start_sub_ = create_subscription<geometry_msgs::msg::PointStamped>(
       "/start_point", rclcpp::QoS(10),
@@ -1576,6 +1626,8 @@ private:
   {
     RouteProgressTrackerOptions options;
     options.projection_window_m = get_parameter("tracking_projection_window_m").as_double();
+    options.max_projection_lateral_error_m =
+      get_parameter("tracking_max_projection_lateral_error_m").as_double();
     options.local_route_length_m = get_parameter("tracking_local_route_length_m").as_double();
     options.goal_tolerance_m = get_parameter("tracking_goal_tolerance_m").as_double();
     return options;
@@ -1621,6 +1673,7 @@ private:
     options.lookahead_m = get_parameter("tracking_lookahead_m").as_double();
     options.max_lateral_accel_mps2 =
       get_parameter("tracking_max_lateral_accel_mps2").as_double();
+    options.goal_tolerance_m = get_parameter("tracking_goal_tolerance_m").as_double();
     options.goal_slowdown_distance_m =
       get_parameter("tracking_goal_slowdown_distance_m").as_double();
     options.collision_time_horizon_s =
@@ -1632,15 +1685,75 @@ private:
     return options;
   }
 
+  bool realCommandOutputEnabled() const
+  {
+    return get_parameter("enable_path_tracking").as_bool();
+  }
+
+  bool trackingArmRequired() const
+  {
+    return realCommandOutputEnabled() && get_parameter("require_tracking_arm").as_bool();
+  }
+
+  bool trackingArmSatisfied() const
+  {
+    return !trackingArmRequired() || tracking_armed_;
+  }
+
+  bool canArmTracking(std::string * reason)
+  {
+    if (!realCommandOutputEnabled()) {
+      if (reason != nullptr) {
+        *reason = "tracking_command_output_disabled";
+      }
+      return false;
+    }
+    if (!has_tracking_path_) {
+      if (reason != nullptr) {
+        *reason = "tracking_path_not_set";
+      }
+      return false;
+    }
+    if (!has_odom_) {
+      if (reason != nullptr) {
+        *reason = tracking_odom_reject_reason_.empty() ?
+          "tracking_odom_not_received" : tracking_odom_reject_reason_;
+      }
+      return false;
+    }
+    const double odom_age_s = (now() - latest_odom_time_).seconds();
+    if (odom_age_s > get_parameter("tracking_odom_timeout_s").as_double()) {
+      if (reason != nullptr) {
+        *reason = "tracking_odom_stale";
+      }
+      return false;
+    }
+    if (reason != nullptr) {
+      reason->clear();
+    }
+    return true;
+  }
+
+  void disarmTracking(const std::string & reason)
+  {
+    if (tracking_armed_) {
+      LOG(WARNING) << "tracking disarmed: " << reason;
+    }
+    tracking_armed_ = false;
+  }
+
   void setTrackerPath(const SurfacePlanResult & plan)
   {
     has_tracking_path_ = false;
+    disarmTracking("new_plan");
+    latest_local_path_.clear();
     if (!plan.success) {
       route_tracker_ = RouteProgressTracker(routeTrackerOptions());
       local_path_smoother_ = LocalPathSmoother(localPathSmootherOptions());
       rolling_local_map_ = RollingLocalMap(rollingLocalMapOptions());
       rpp_controller_ = RegulatedPurePursuitController(rppOptions());
       has_expected_surface_z_ = false;
+      tracking_odom_reject_reason_.clear();
       local_obstacle_last_accepted_points_ = 0U;
       sim_replay_trace_.clear();
       publishZeroVelocity();
@@ -1652,8 +1765,10 @@ private:
     rolling_local_map_ = RollingLocalMap(rollingLocalMapOptions());
     rpp_controller_ = RegulatedPurePursuitController(rppOptions());
     has_expected_surface_z_ = false;
+    tracking_odom_reject_reason_.clear();
     local_obstacle_last_accepted_points_ = 0U;
     sim_replay_trace_.clear();
+    latest_local_path_.clear();
     if (!route_tracker_.setPath(plan.global_path, &error)) {
       LOG(WARNING) << "RouteProgressTracker rejected planned path: " << error;
       publishZeroVelocity();
@@ -1674,19 +1789,22 @@ private:
   void clearTrackerPath()
   {
     has_tracking_path_ = false;
+    disarmTracking("clear_plan");
     route_tracker_ = RouteProgressTracker(routeTrackerOptions());
     local_path_smoother_ = LocalPathSmoother(localPathSmootherOptions());
     rolling_local_map_ = RollingLocalMap(rollingLocalMapOptions());
     rpp_controller_ = RegulatedPurePursuitController(rppOptions());
     has_expected_surface_z_ = false;
+    tracking_odom_reject_reason_.clear();
     local_obstacle_last_accepted_points_ = 0U;
     sim_replay_trace_.clear();
+    latest_local_path_.clear();
     publishZeroVelocity();
   }
 
   void publishZeroVelocity()
   {
-    if (!cmd_vel_pub_) {
+    if (!realCommandOutputEnabled() || !cmd_vel_pub_) {
       return;
     }
     geometry_msgs::msg::Twist twist;
@@ -1719,6 +1837,7 @@ private:
     has_expected_surface_z_ = true;
     latest_odom_time_ = now();
     has_odom_ = true;
+    tracking_odom_reject_reason_.clear();
     last_tracking_tick_valid_ = false;
     publishKinematicReplayState(0.0, 0.0);
   }
@@ -1733,6 +1852,7 @@ private:
     latest_pose_.y += command.linear_speed_mps * dt_s * std::sin(latest_pose_.yaw_rad);
     latest_odom_time_ = now();
     has_odom_ = true;
+    tracking_odom_reject_reason_.clear();
     publishKinematicReplayState(command.linear_speed_mps, command.yaw_rate_radps);
   }
 
@@ -1807,8 +1927,12 @@ private:
     json << "\"kind\":\"tracking_status\"";
     json << ",\"enabled\":" <<
       (get_parameter("enable_path_tracking").as_bool() ? "true" : "false");
+    json << ",\"require_arm\":" <<
+      (get_parameter("require_tracking_arm").as_bool() ? "true" : "false");
+    json << ",\"armed\":" << (tracking_armed_ ? "true" : "false");
     json << ",\"has_path\":" << (has_tracking_path_ ? "true" : "false");
     json << ",\"has_odom\":" << (has_odom_ ? "true" : "false");
+    json << ",\"odom_reject_reason\":\"" << jsonEscape(tracking_odom_reject_reason_) << "\"";
     json << ",\"valid\":" << (command.valid ? "true" : "false");
     json << ",\"goal_reached\":" << (command.goal_reached ? "true" : "false");
     json << ",\"reason\":\"" << jsonEscape(reason) << "\"";
@@ -1882,6 +2006,11 @@ private:
       r = 0.65F;
       g = 0.65F;
       b = 0.65F;
+    } else if (command.status == "tracking_not_armed") {
+      text << "TRACK READY: not armed";
+      r = 1.0F;
+      g = 0.78F;
+      b = 0.15F;
     } else if (command.valid && command.goal_reached) {
       text << "TRACK GOAL REACHED";
       r = 0.1F;
@@ -1946,11 +2075,28 @@ private:
 
   void onOdom(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
+    const std::string expected_frame = markerFrameId();
+    if (get_parameter("tracking_odom_must_be_in_map_frame").as_bool() &&
+      msg->header.frame_id != expected_frame)
+    {
+      tracking_odom_reject_reason_ = "tracking_odom_frame_mismatch";
+      has_odom_ = false;
+      has_expected_surface_z_ = false;
+      latest_local_path_.clear();
+      last_tracking_tick_valid_ = false;
+      disarmTracking(tracking_odom_reject_reason_);
+      publishZeroVelocity();
+      LOG(WARNING)
+        << "rejected odom frame='" << msg->header.frame_id
+        << "' expected='" << expected_frame << "'";
+      return;
+    }
     latest_pose_.x = msg->pose.pose.position.x;
     latest_pose_.y = msg->pose.pose.position.y;
     latest_pose_.yaw_rad = yawFromQuaternion(msg->pose.pose.orientation);
     latest_odom_time_ = now();
     has_odom_ = true;
+    tracking_odom_reject_reason_.clear();
   }
 
   void onLocalObstacleCloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
@@ -1959,7 +2105,7 @@ private:
       return;
     }
     ++local_obstacle_clouds_received_;
-    if (!has_odom_ || !has_expected_surface_z_) {
+    if (!has_odom_ || latest_local_path_.size() < 2U) {
       ++local_obstacle_clouds_rejected_;
       return;
     }
@@ -1997,7 +2143,11 @@ private:
       if (dx * dx + dy * dy > max_range_sq) {
         continue;
       }
-      const double height_above_surface = z - latest_expected_surface_z_m_;
+      double path_z = 0.0;
+      if (!nearestPathHeight(latest_local_path_, x, y, &path_z)) {
+        continue;
+      }
+      const double height_above_surface = z - path_z;
       if (height_above_surface < min_height || height_above_surface > max_height) {
         continue;
       }
@@ -2044,7 +2194,8 @@ private:
       return;
     }
     if (!has_odom_) {
-      command.status = "tracking_odom_not_received";
+      command.status = tracking_odom_reject_reason_.empty() ?
+        "tracking_odom_not_received" : tracking_odom_reject_reason_;
       publishZeroVelocity();
       publishTrackingStatus(command, route, local_path, command.status, odom_age_s);
       return;
@@ -2052,6 +2203,13 @@ private:
     const double odom_timeout_s = get_parameter("tracking_odom_timeout_s").as_double();
     if (odom_age_s > odom_timeout_s) {
       command.status = "tracking_odom_stale";
+      disarmTracking(command.status);
+      publishZeroVelocity();
+      publishTrackingStatus(command, route, local_path, command.status, odom_age_s);
+      return;
+    }
+    if (!trackingArmSatisfied()) {
+      command.status = "tracking_not_armed";
       publishZeroVelocity();
       publishTrackingStatus(command, route, local_path, command.status, odom_age_s);
       return;
@@ -2066,6 +2224,8 @@ private:
     route = route_tracker_.update(latest_pose_);
     if (!route.valid) {
       command.status = route.status;
+      disarmTracking(command.status);
+      latest_local_path_.clear();
       publishZeroVelocity();
       publishTrackingStatus(command, route, local_path, command.status, odom_age_s);
       return;
@@ -2078,6 +2238,8 @@ private:
       command.goal_reached = true;
       command.status = "goal_reached";
       command.remaining_m = route.remaining_m;
+      disarmTracking(command.status);
+      latest_local_path_.clear();
       publishZeroVelocity();
       if (replay_enabled) {
         publishKinematicReplayState(0.0, 0.0);
@@ -2089,18 +2251,24 @@ private:
     local_path = local_path_smoother_.build(latest_pose_, route, rolling_local_map_);
     if (!local_path.success) {
       command.status = local_path.message;
+      disarmTracking(command.status);
+      latest_local_path_.clear();
       publishZeroVelocity();
       publishTrackingStatus(command, route, local_path, command.status, odom_age_s);
       return;
     }
+    latest_local_path_ = local_path.path;
     command = rpp_controller_.computeCommand(
       latest_pose_, local_path.path, route.remaining_m, dt_s, rolling_local_map_);
+    if (!command.valid || command.status == "collision_arc_blocked") {
+      disarmTracking(command.status);
+    }
     geometry_msgs::msg::Twist twist;
     if (command.valid) {
       twist.linear.x = command.linear_speed_mps;
       twist.angular.z = command.yaw_rate_radps;
     }
-    if (publish_cmd_vel || replay_enabled) {
+    if (publish_cmd_vel) {
       cmd_vel_pub_->publish(twist);
     }
     local_path_pub_->publish(makePathMsg(tick, markerFrameId(), local_path.path));
@@ -2310,6 +2478,35 @@ private:
 
     response->success = true;
     response->message = "cleared TGW start, goal, planned path, and tracking path";
+    LOG(INFO) << response->message;
+  }
+
+  void handleSetTrackingArmed(
+    const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+  {
+    if (!request->data) {
+      disarmTracking("service_request");
+      publishZeroVelocity();
+      response->success = true;
+      response->message = "tracking disarmed";
+      LOG(INFO) << response->message;
+      return;
+    }
+
+    std::string reason;
+    if (!canArmTracking(&reason)) {
+      tracking_armed_ = false;
+      publishZeroVelocity();
+      response->success = false;
+      response->message = "tracking arm rejected: " + reason;
+      LOG(WARNING) << response->message;
+      return;
+    }
+
+    tracking_armed_ = true;
+    response->success = true;
+    response->message = "tracking armed";
     LOG(INFO) << response->message;
   }
 
@@ -2613,6 +2810,7 @@ private:
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr sim_robot_marker_pub_;
   rclcpp::Service<tgw_planner::srv::PlanPath>::SharedPtr plan_path_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_plan_srv_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_tracking_armed_srv_;
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr start_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr goal_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr start_pose_sub_;
@@ -2628,6 +2826,7 @@ private:
   rclcpp::Time latest_odom_time_;
   rclcpp::Time last_tracking_tick_;
   double latest_expected_surface_z_m_{0.0};
+  std::string tracking_odom_reject_reason_;
   tgw_planner::core::ExperienceSnapshot snapshot_;
   ExperienceSurfaceGraph surface_graph_;
   ExperienceBackboneGraph backbone_graph_;
@@ -2638,10 +2837,12 @@ private:
   bool has_odom_{false};
   bool has_expected_surface_z_{false};
   bool last_tracking_tick_valid_{false};
+  bool tracking_armed_{false};
   std::size_t local_obstacle_last_accepted_points_{0U};
   std::size_t local_obstacle_clouds_received_{0U};
   std::size_t local_obstacle_clouds_rejected_{0U};
   std::vector<Point3> sim_replay_trace_;
+  std::vector<Point3> latest_local_path_;
   Point3 clicked_start_;
   Point3 clicked_goal_;
   bool has_clicked_start_{false};
