@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <queue>
+#include <thread>
 
 #include "tgw_planner/core/surface_astar_planner.hpp"
 
@@ -82,6 +83,33 @@ bool hasDiagonalCornerSupport(
   return hasTraversableCellAtXY(snapshot, validator, to.x, from.y, min_z, max_z) &&
          hasTraversableCellAtXY(snapshot, validator, from.x, to.y, min_z, max_z);
 }
+
+std::size_t chooseWorkerCount(std::size_t item_count)
+{
+  if (item_count == 0U) {
+    return 1U;
+  }
+  constexpr std::size_t kMinItemsPerWorker = 4096U;
+  const unsigned int hardware_threads = std::max(1U, std::thread::hardware_concurrency());
+  return std::min<std::size_t>(
+    hardware_threads,
+    std::max<std::size_t>(1U, item_count / kMinItemsPerWorker));
+}
+
+void mergeSurfaceGraphMetrics(
+  SurfaceGraphBuildMetrics & out,
+  const SurfaceGraphBuildMetrics & in)
+{
+  out.graph_edges += in.graph_edges;
+  out.graph_normal_edges += in.graph_normal_edges;
+  out.graph_bridge_edges += in.graph_bridge_edges;
+  out.graph_rejected_cross_component_edges += in.graph_rejected_cross_component_edges;
+  out.graph_rejected_large_dz_edges += in.graph_rejected_large_dz_edges;
+  out.graph_rejected_large_slope_edges += in.graph_rejected_large_slope_edges;
+  out.graph_rejected_invalid_bridge_edges += in.graph_rejected_invalid_bridge_edges;
+  out.max_graph_edge_dz_m = std::max(out.max_graph_edge_dz_m, in.max_graph_edge_dz_m);
+  out.max_graph_edge_slope = std::max(out.max_graph_edge_slope, in.max_graph_edge_slope);
+}
 }
 
 void ExperienceSurfaceGraph::build(
@@ -100,87 +128,148 @@ void ExperienceSurfaceGraph::build(
   options_ = options;
   resolution_m_ = snapshot.resolution_m;
   buildBridgeAttachments(snapshot);
-  validator.reserveCellCenterFootprintCache(snapshot.surface.traversable_cells.size() * 8U);
 
-  nodes_.reserve(snapshot.surface.traversable_cells.size());
+  std::vector<GridIndex> traversable_cells;
+  traversable_cells.reserve(snapshot.surface.traversable_cells.size());
   for (const GridIndex & cell : snapshot.surface.traversable_cells) {
-    if (!isSurfaceGraphNode(snapshot, validator, cell)) {
+    traversable_cells.push_back(cell);
+  }
+
+  std::vector<SurfaceNode> candidate_nodes(traversable_cells.size());
+  std::vector<std::uint8_t> keep_node(traversable_cells.size(), 0U);
+  const std::size_t node_thread_count = chooseWorkerCount(traversable_cells.size());
+  std::vector<std::thread> node_workers;
+  node_workers.reserve(node_thread_count);
+  const std::size_t node_chunk_size =
+    (traversable_cells.size() + node_thread_count - 1U) / node_thread_count;
+  for (std::size_t thread_index = 0; thread_index < node_thread_count; ++thread_index) {
+    const std::size_t begin = thread_index * node_chunk_size;
+    const std::size_t end = std::min(traversable_cells.size(), begin + node_chunk_size);
+    if (begin >= end) {
       continue;
     }
+    node_workers.emplace_back([&, begin, end]() {
+      SurfaceTransitionValidator local_validator(validator.options());
+      local_validator.reserveCellCenterFootprintCache((end - begin) * 12U);
+      for (std::size_t cell_index = begin; cell_index < end; ++cell_index) {
+        const GridIndex & cell = traversable_cells[cell_index];
+        if (!isSurfaceGraphNode(snapshot, local_validator, cell)) {
+          continue;
+        }
 
-    SurfaceNode node;
-    node.id = {static_cast<std::uint32_t>(nodes_.size())};
-    node.cell = cell;
-    node.x = cell.x;
-    node.y = cell.y;
-    const auto surface_it = snapshot.surface.surface_cells.find(cell);
-    if (surface_it != snapshot.surface.surface_cells.end()) {
-      const SurfaceCell & surface_cell = surface_it->second;
-      node.z = surface_cell.height_m;
-      node.reachability = surface_cell.reachability;
-      node.support_component_id = surface_cell.support_component_id;
-      node.surface_layer_id = surface_cell.surface_layer_id;
-      node.bridge_id = surface_cell.bridge_id;
-      node.bridge_order = surface_cell.bridge_order;
-      node.bridge_endpoint = surface_cell.bridge_endpoint;
-      node.confidence = surface_cell.confidence;
-      node.bridge = isBridgeLabel(surface_cell);
-    } else {
-      node.z = cellCenter(cell, snapshot.resolution_m).z;
-    }
-    const auto reachability_it = snapshot.reachability.find(cell);
-    if (reachability_it != snapshot.reachability.end()) {
-      node.reachability = reachability_it->second;
-    }
-    node.clearance_m = snapshot.clearance.clearanceDistance(cell);
-    node.risk = snapshot.risk.riskCost(cell);
-    for (int dx = -1; dx <= 1; ++dx) {
-      for (int dy = -1; dy <= 1; ++dy) {
-        if (dx == 0 && dy == 0) {
-          continue;
+        SurfaceNode node;
+        node.cell = cell;
+        node.x = cell.x;
+        node.y = cell.y;
+        const auto surface_it = snapshot.surface.surface_cells.find(cell);
+        if (surface_it != snapshot.surface.surface_cells.end()) {
+          const SurfaceCell & surface_cell = surface_it->second;
+          node.z = surface_cell.height_m;
+          node.reachability = surface_cell.reachability;
+          node.support_component_id = surface_cell.support_component_id;
+          node.surface_layer_id = surface_cell.surface_layer_id;
+          node.bridge_id = surface_cell.bridge_id;
+          node.bridge_order = surface_cell.bridge_order;
+          node.bridge_endpoint = surface_cell.bridge_endpoint;
+          node.confidence = surface_cell.confidence;
+          node.bridge = isBridgeLabel(surface_cell);
+        } else {
+          node.z = cellCenter(cell, snapshot.resolution_m).z;
         }
-        const int index = directionIndex(dx, dy);
-        if (index < 0) {
-          continue;
+        const auto reachability_it = snapshot.reachability.find(cell);
+        if (reachability_it != snapshot.reachability.end()) {
+          node.reachability = reachability_it->second;
         }
-        const double yaw = std::atan2(static_cast<double>(dy), static_cast<double>(dx));
-        if (validator.isCellCenterFootprintSupported(snapshot, cell, yaw)) {
-          node.directional_footprint_mask |= static_cast<std::uint8_t>(1U << index);
+        node.clearance_m = snapshot.clearance.clearanceDistance(cell);
+        node.risk = snapshot.risk.riskCost(cell);
+        for (int dx = -1; dx <= 1; ++dx) {
+          for (int dy = -1; dy <= 1; ++dy) {
+            if (dx == 0 && dy == 0) {
+              continue;
+            }
+            const int index = directionIndex(dx, dy);
+            if (index < 0) {
+              continue;
+            }
+            const double yaw = std::atan2(static_cast<double>(dy), static_cast<double>(dx));
+            if (local_validator.isCellCenterFootprintSupported(snapshot, cell, yaw)) {
+              node.directional_footprint_mask |= static_cast<std::uint8_t>(1U << index);
+            }
+          }
         }
+
+        candidate_nodes[cell_index] = node;
+        keep_node[cell_index] = 1U;
       }
-    }
+    });
+  }
+  for (std::thread & worker : node_workers) {
+    worker.join();
+  }
 
+  nodes_.reserve(snapshot.surface.traversable_cells.size());
+  for (std::size_t cell_index = 0; cell_index < candidate_nodes.size(); ++cell_index) {
+    if (keep_node[cell_index] == 0U) {
+      continue;
+    }
+    SurfaceNode node;
+    node = candidate_nodes[cell_index];
+    node.id = {static_cast<std::uint32_t>(nodes_.size())};
     nodes_.push_back(node);
-    cell_to_node_[cell] = node.id;
-    xy_to_nodes_[{cell.x, cell.y, 0}].push_back(node.id);
+    cell_to_node_[node.cell] = node.id;
+    xy_to_nodes_[{node.x, node.y, 0}].push_back(node.id);
   }
 
   adjacency_.resize(nodes_.size());
-  for (const SurfaceNode & node : nodes_) {
-    std::vector<SurfaceEdge> & edges = adjacency_[node.id.id];
-    for (int dx = -1; dx <= 1; ++dx) {
-      for (int dy = -1; dy <= 1; ++dy) {
-        if (dx == 0 && dy == 0) {
-          continue;
-        }
-        const GridIndex xy_key{node.x + dx, node.y + dy, 0};
-        const auto candidates_it = xy_to_nodes_.find(xy_key);
-        if (candidates_it == xy_to_nodes_.end()) {
-          continue;
-        }
-        for (const SurfaceNodeId candidate_id : candidates_it->second) {
-          if (candidate_id == node.id) {
-            continue;
-          }
-          const SurfaceNode & candidate = nodes_[candidate_id.id];
-          const std::optional<SurfaceEdge> edge = makeContinuousSurfaceEdge(
-            snapshot, validator, options, node, candidate, dx, dy);
-          if (edge.has_value()) {
-            edges.push_back(*edge);
+  const std::size_t thread_count = chooseWorkerCount(nodes_.size());
+  std::vector<SurfaceGraphBuildMetrics> thread_metrics(thread_count);
+  std::vector<std::thread> workers;
+  workers.reserve(thread_count);
+  const std::size_t chunk_size = (nodes_.size() + thread_count - 1U) / thread_count;
+  for (std::size_t thread_index = 0; thread_index < thread_count; ++thread_index) {
+    const std::size_t begin = thread_index * chunk_size;
+    const std::size_t end = std::min(nodes_.size(), begin + chunk_size);
+    if (begin >= end) {
+      continue;
+    }
+    workers.emplace_back([&, begin, end, thread_index]() {
+      SurfaceTransitionValidator local_validator(validator.options());
+      local_validator.reserveCellCenterFootprintCache((end - begin) * 2U);
+      SurfaceGraphBuildMetrics & local_metrics = thread_metrics[thread_index];
+      for (std::size_t node_index = begin; node_index < end; ++node_index) {
+        const SurfaceNode & node = nodes_[node_index];
+        std::vector<SurfaceEdge> & edges = adjacency_[node.id.id];
+        for (int dx = -1; dx <= 1; ++dx) {
+          for (int dy = -1; dy <= 1; ++dy) {
+            if (dx == 0 && dy == 0) {
+              continue;
+            }
+            const GridIndex xy_key{node.x + dx, node.y + dy, 0};
+            const auto candidates_it = xy_to_nodes_.find(xy_key);
+            if (candidates_it == xy_to_nodes_.end()) {
+              continue;
+            }
+            for (const SurfaceNodeId candidate_id : candidates_it->second) {
+              if (candidate_id == node.id) {
+                continue;
+              }
+              const SurfaceNode & candidate = nodes_[candidate_id.id];
+              const std::optional<SurfaceEdge> edge = makeContinuousSurfaceEdge(
+                snapshot, local_validator, options, node, candidate, dx, dy, local_metrics);
+              if (edge.has_value()) {
+                edges.push_back(*edge);
+              }
+            }
           }
         }
       }
-    }
+    });
+  }
+  for (std::thread & worker : workers) {
+    worker.join();
+  }
+  for (const SurfaceGraphBuildMetrics & local : thread_metrics) {
+    mergeSurfaceGraphMetrics(metrics_, local);
   }
 
   computeComponents();
@@ -388,7 +477,8 @@ std::optional<SurfaceEdge> ExperienceSurfaceGraph::makeContinuousSurfaceEdge(
   const SurfaceNode & from,
   const SurfaceNode & to,
   int dx,
-  int dy)
+  int dy,
+  SurfaceGraphBuildMetrics & metrics) const
 {
   const double length_xy =
     std::hypot(static_cast<double>(dx), static_cast<double>(dy)) * snapshot.resolution_m;
@@ -405,25 +495,25 @@ std::optional<SurfaceEdge> ExperienceSurfaceGraph::makeContinuousSurfaceEdge(
       options.max_bridge_attach_height_delta_m : options.max_bridge_edge_height_delta_m) :
     options.max_edge_height_delta_m;
   if (abs_dz > max_height_delta) {
-    ++metrics_.graph_rejected_large_dz_edges;
+    ++metrics.graph_rejected_large_dz_edges;
     return std::nullopt;
   }
 
   const double slope = abs_dz / length_xy;
   const double max_slope = bridge_edge ? options.max_bridge_edge_slope : options.max_edge_slope;
   if (slope > max_slope) {
-    ++metrics_.graph_rejected_large_slope_edges;
+    ++metrics.graph_rejected_large_slope_edges;
     return std::nullopt;
   }
 
   if (bridge_edge) {
     if (!isValidBridgeTransition(from, to)) {
-      ++metrics_.graph_rejected_invalid_bridge_edges;
+      ++metrics.graph_rejected_invalid_bridge_edges;
       return std::nullopt;
     }
   } else {
     if (!isValidNormalTransition(from, to)) {
-      ++metrics_.graph_rejected_cross_component_edges;
+      ++metrics.graph_rejected_cross_component_edges;
       return std::nullopt;
     }
     const int max_step_cells = std::max(
@@ -475,13 +565,13 @@ std::optional<SurfaceEdge> ExperienceSurfaceGraph::makeContinuousSurfaceEdge(
     0.0,
     std::max(0.0, options.max_surface_safety_multiplier));
   edge.cost = length_xy * (1.0 + safety_multiplier) + bridge_penalty;
-  ++metrics_.graph_edges;
-  metrics_.max_graph_edge_dz_m = std::max(metrics_.max_graph_edge_dz_m, abs_dz);
-  metrics_.max_graph_edge_slope = std::max(metrics_.max_graph_edge_slope, slope);
+  ++metrics.graph_edges;
+  metrics.max_graph_edge_dz_m = std::max(metrics.max_graph_edge_dz_m, abs_dz);
+  metrics.max_graph_edge_slope = std::max(metrics.max_graph_edge_slope, slope);
   if (edge.kind == SurfaceEdgeKind::TrajectoryBridge) {
-    ++metrics_.graph_bridge_edges;
+    ++metrics.graph_bridge_edges;
   } else {
-    ++metrics_.graph_normal_edges;
+    ++metrics.graph_normal_edges;
   }
   return edge;
 }

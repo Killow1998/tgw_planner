@@ -140,6 +140,7 @@ public:
   bool isCellCenterFootprintSupported(
     const NavigationSnapshot & snapshot, const GridIndex & cell, double yaw_rad) const;
   void reserveCellCenterFootprintCache(std::size_t entries) const;
+  const SurfacePlannerOptions & options() const;
 
 private:
   struct FootprintCacheKey

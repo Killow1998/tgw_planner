@@ -164,7 +164,8 @@ private:
     const SurfaceNode & from,
     const SurfaceNode & to,
     int dx,
-    int dy);
+    int dy,
+    SurfaceGraphBuildMetrics & metrics) const;
   bool isValidBridgeTransition(const SurfaceNode & from, const SurfaceNode & to) const;
   bool isValidNormalTransition(const SurfaceNode & from, const SurfaceNode & to) const;
   void computeComponents();

@@ -177,6 +177,9 @@ SurfaceTransitionValidator::FootprintCacheKey SurfaceTransitionValidator::footpr
 bool SurfaceTransitionValidator::isCellCenterFootprintSupported(
   const NavigationSnapshot & snapshot, const GridIndex & cell, double yaw_rad) const
 {
+  if (!options_.require_footprint_support) {
+    return true;
+  }
   if (cell_center_footprint_cache_snapshot_ != &snapshot) {
     cell_center_footprint_cache_snapshot_ = &snapshot;
     cell_center_footprint_cache_.clear();
@@ -196,6 +199,11 @@ void SurfaceTransitionValidator::reserveCellCenterFootprintCache(std::size_t ent
 {
   cell_center_footprint_cache_.reserve(
     std::max(entries, cell_center_footprint_cache_.size()));
+}
+
+const SurfacePlannerOptions & SurfaceTransitionValidator::options() const
+{
+  return options_;
 }
 
 bool SurfaceTransitionValidator::isFootprintSupported(

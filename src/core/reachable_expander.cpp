@@ -129,6 +129,7 @@ AnchorColumns buildAnchorColumns(
   const ReachableExpanderOptions & options)
 {
   AnchorColumns columns;
+  columns.reserve(anchors.size());
   const int radius = std::max(0, options.experience_anchor_radius_cells);
   for (const GridIndex & anchor : anchors) {
     const double height = cellHeight(cells, anchor, options.resolution_m);
@@ -170,49 +171,81 @@ bool isInsideAnchorEnvelope(
   return false;
 }
 
-ComponentMap buildSupportComponents(
+void labelSupportComponent(
   const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & cells,
+  const GridIndex & seed,
+  int component_id,
+  const ReachableExpanderOptions & options,
+  ComponentMap & components)
+{
+  if (components.find(seed) != components.end()) {
+    return;
+  }
+  const auto seed_it = cells.find(seed);
+  if (seed_it == cells.end()) {
+    return;
+  }
+
+  std::queue<GridIndex> queue;
+  components[seed] = component_id;
+  queue.push(seed);
+  while (!queue.empty()) {
+    const GridIndex current = queue.front();
+    queue.pop();
+    const double current_height = cellHeight(cells, current, options.resolution_m);
+    for (int dx = -1; dx <= 1; ++dx) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dz = -options.vertical_tolerance_cells; dz <= options.vertical_tolerance_cells;
+          ++dz)
+        {
+          if (dx == 0 && dy == 0 && dz == 0) {
+            continue;
+          }
+          const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
+          if (components.find(neighbor) != components.end()) {
+            continue;
+          }
+          const auto it = cells.find(neighbor);
+          if (it == cells.end()) {
+            continue;
+          }
+          if (std::abs(it->second.height_m - current_height) >
+            options.max_expansion_step_height_m)
+          {
+            continue;
+          }
+          components[neighbor] = component_id;
+          queue.push(neighbor);
+        }
+      }
+    }
+  }
+}
+
+ComponentMap buildAnchoredSupportComponents(
+  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & cells,
+  const std::unordered_set<GridIndex, GridIndexHash> & observed_seed_cells,
   const ReachableExpanderOptions & options,
   std::size_t * component_count)
 {
   ComponentMap components;
+  components.reserve(std::min(cells.size(), observed_seed_cells.size() * 128U));
   int next_component = 0;
-  std::queue<GridIndex> queue;
-  for (const auto & entry : cells) {
-    if (components.find(entry.first) != components.end()) {
-      continue;
-    }
-    const int component_id = next_component++;
-    components[entry.first] = component_id;
-    queue.push(entry.first);
-    while (!queue.empty()) {
-      const GridIndex current = queue.front();
-      queue.pop();
-      const double current_height = cellHeight(cells, current, options.resolution_m);
-      for (int dx = -1; dx <= 1; ++dx) {
-        for (int dy = -1; dy <= 1; ++dy) {
-          for (int dz = -options.vertical_tolerance_cells; dz <= options.vertical_tolerance_cells;
-            ++dz)
-          {
-            if (dx == 0 && dy == 0 && dz == 0) {
-              continue;
-            }
-            const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
-            if (components.find(neighbor) != components.end()) {
-              continue;
-            }
-            const auto it = cells.find(neighbor);
-            if (it == cells.end()) {
-              continue;
-            }
-            if (std::abs(it->second.height_m - current_height) >
-              options.max_expansion_step_height_m)
-            {
-              continue;
-            }
-            components[neighbor] = component_id;
-            queue.push(neighbor);
+  for (const GridIndex & seed : observed_seed_cells) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dz = -options.vertical_tolerance_cells; dz <= options.vertical_tolerance_cells;
+          ++dz)
+        {
+          const GridIndex start{seed.x + dx, seed.y + dy, seed.z + dz};
+          if (components.find(start) != components.end()) {
+            continue;
           }
+          if (cells.find(start) == cells.end()) {
+            continue;
+          }
+          labelSupportComponent(cells, start, next_component, options, components);
+          ++next_component;
         }
       }
     }
@@ -221,39 +254,11 @@ ComponentMap buildSupportComponents(
   return components;
 }
 
-std::unordered_set<int> anchoredComponents(
-  const ComponentMap & components,
-  const std::unordered_set<GridIndex, GridIndexHash> & observed_seed_cells,
-  const ReachableExpanderOptions & options)
-{
-  std::unordered_set<int> anchored;
-  for (const GridIndex & seed : observed_seed_cells) {
-    for (int dx = -1; dx <= 1; ++dx) {
-      for (int dy = -1; dy <= 1; ++dy) {
-        for (int dz = -options.vertical_tolerance_cells; dz <= options.vertical_tolerance_cells;
-          ++dz)
-        {
-          const auto it = components.find({seed.x + dx, seed.y + dy, seed.z + dz});
-          if (it != components.end()) {
-            anchored.insert(it->second);
-          }
-        }
-      }
-    }
-  }
-  return anchored;
-}
-
 bool isAnchoredComponent(
   const ComponentMap & components,
-  const std::unordered_set<int> & anchored_components,
   const GridIndex & cell)
 {
-  const auto it = components.find(cell);
-  if (it == components.end()) {
-    return false;
-  }
-  return anchored_components.find(it->second) != anchored_components.end();
+  return components.find(cell) != components.end();
 }
 
 int supportComponentForCell(
@@ -285,6 +290,7 @@ void assignSurfaceLayerIds(
   const ReachableExpanderOptions & options)
 {
   std::unordered_map<GridIndex, int, GridIndexHash> layer_ids;
+  layer_ids.reserve(result.traversable_cells.size());
   int next_layer_id = 0;
 
   for (const GridIndex & seed : result.traversable_cells) {
@@ -405,11 +411,16 @@ ReachableExpansionResult ReachableExpander::expand(
   const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry_cells) const
 {
   ReachableExpansionResult result;
-  const ComponentMap components = buildSupportComponents(
-    geometry_cells, options_, &result.support_component_count);
-  const std::unordered_set<int> anchored_components = anchoredComponents(
-    components, observed_seed_cells, options_);
-  result.anchored_support_component_count = anchored_components.size();
+  const std::size_t expected_surface_cells = std::min(
+    geometry_cells.size(),
+    std::max(
+      observed_seed_cells.size() + bridge_seed_cells.size(),
+      geometry_cells.size() / 2U));
+  result.surface_cells.reserve(expected_surface_cells);
+  result.reachability.reserve(expected_surface_cells);
+  const ComponentMap components = buildAnchoredSupportComponents(
+    geometry_cells, observed_seed_cells, options_, &result.support_component_count);
+  result.anchored_support_component_count = result.support_component_count;
 
   std::queue<QueueItem> queue;
   for (const GridIndex & seed : observed_seed_cells) {
@@ -456,7 +467,7 @@ ReachableExpansionResult ReachableExpander::expand(
           if (geometry_it == geometry_cells.end()) {
             continue;
           }
-          if (!isAnchoredComponent(components, anchored_components, neighbor)) {
+          if (!isAnchoredComponent(components, neighbor)) {
             ++result.rejected_unanchored_component_cells;
             continue;
           }
@@ -503,6 +514,7 @@ ReachableExpansionResult ReachableExpander::expand(
   if (options_.enable_hole_filling) {
     for (int iteration = 0; iteration < options_.hole_fill_iterations; ++iteration) {
       std::vector<SurfaceCell> additions;
+      additions.reserve(result.traversable_cells.size() / 16U + 1U);
       for (const GridIndex & cell : result.traversable_cells) {
         for (int dx = -1; dx <= 1; ++dx) {
           for (int dy = -1; dy <= 1; ++dy) {
@@ -539,7 +551,7 @@ ReachableExpansionResult ReachableExpander::expand(
 
             const auto geometry_it = geometry_cells.find(candidate);
             if (geometry_it != geometry_cells.end()) {
-              if (!isAnchoredComponent(components, anchored_components, candidate)) {
+              if (!isAnchoredComponent(components, candidate)) {
                 ++result.rejected_unanchored_component_cells;
                 continue;
               }
