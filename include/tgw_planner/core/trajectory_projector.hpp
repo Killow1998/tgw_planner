@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "tgw_planner/core/grid_index.hpp"
+#include "tgw_planner/core/experience_geometry_index.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
 #include "tgw_planner/core/surface_map.hpp"
 
@@ -75,6 +76,9 @@ public:
   explicit TrajectoryProjector(TrajectoryProjectorOptions options = {});
 
   TrajectoryProjectionResult project(const N3NavResource & resource) const;
+  TrajectoryProjectionResult project(
+    const N3NavResource & resource,
+    const ExperienceGeometryIndex & geometry) const;
 
 private:
   GridIndex worldToGrid(const Point3 & point) const;

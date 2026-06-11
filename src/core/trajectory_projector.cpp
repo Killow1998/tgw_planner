@@ -13,33 +13,12 @@ namespace tgw_planner::core
 namespace
 {
 
-using SupportColumns = std::unordered_map<GridIndex, std::vector<double>, GridIndexHash>;
-
 GridIndex supportColumnKey(const Point3 & point, double raw_resolution_m)
 {
   return {
     static_cast<int>(std::floor(point.x / raw_resolution_m)),
     static_cast<int>(std::floor(point.y / raw_resolution_m)),
     0};
-}
-
-SupportColumns buildSupportColumns(const N3NavResource & resource, double raw_resolution_m)
-{
-  SupportColumns columns;
-  for (const auto & keyframe : resource.keyframes) {
-    for (const PointXYZI & point_body : keyframe.cloud_body) {
-      const Point3 world = transformPoint(
-        keyframe.pose_optimized, {point_body.x, point_body.y, point_body.z});
-      columns[supportColumnKey(world, raw_resolution_m)].push_back(world.z);
-    }
-  }
-
-  for (auto & entry : columns) {
-    auto & heights = entry.second;
-    std::sort(heights.begin(), heights.end());
-    heights.erase(std::unique(heights.begin(), heights.end()), heights.end());
-  }
-  return columns;
 }
 
 std::vector<double> collectCandidateHeights(
@@ -335,8 +314,22 @@ TrajectoryProjector::TrajectoryProjector(TrajectoryProjectorOptions options)
 
 TrajectoryProjectionResult TrajectoryProjector::project(const N3NavResource & resource) const
 {
+  ExperienceGeometryIndex geometry;
+  ExperienceGeometryIndexOptions geometry_options;
+  geometry_options.raw_resolution_m = options_.raw_resolution_m;
+  geometry_options.nav_resolution_m = options_.resolution_m;
+  geometry_options.body_clearance_height_m = 0.0;
+  geometry_options.max_debug_world_points = 0U;
+  geometry.build(resource, geometry_options);
+  return project(resource, geometry);
+}
+
+TrajectoryProjectionResult TrajectoryProjector::project(
+  const N3NavResource & resource,
+  const ExperienceGeometryIndex & geometry) const
+{
   TrajectoryProjectionResult result;
-  const SupportColumns columns = buildSupportColumns(resource, options_.raw_resolution_m);
+  const SupportColumns & columns = geometry.supportColumns();
   bool has_previous_support = false;
   double previous_support_z = 0.0;
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #include "tgw_planner/core/experience_backbone_graph.hpp"
@@ -23,6 +24,64 @@ struct HybridExperiencePlannerOptions
   double surface_target_speed_mps{0.6};
   double backbone_target_speed_mps{0.3};
   double portal_target_speed_mps{0.15};
+};
+
+enum class HybridNodeKind
+{
+  Surface,
+  Backbone
+};
+
+enum class HybridEdgeKind
+{
+  Surface,
+  Backbone,
+  Portal
+};
+
+struct HybridNode
+{
+  HybridNodeKind kind{HybridNodeKind::Surface};
+  SurfaceNodeId surface_id{0};
+  BackboneNodeId backbone_id{0};
+  Point3 point;
+};
+
+struct HybridEdge
+{
+  std::uint32_t to{0};
+  HybridEdgeKind kind{HybridEdgeKind::Surface};
+  double cost{0.0};
+  double length_xy_m{0.0};
+  double dz_m{0.0};
+  ExperiencePortalId portal_id{0};
+};
+
+class HybridExperienceGraph
+{
+public:
+  void build(
+    const ExperienceSurfaceGraph & surface_graph,
+    const ExperienceBackboneGraph & backbone_graph,
+    const SurfacePlannerOptions & surface_options,
+    const HybridExperiencePlannerOptions & hybrid_options);
+
+  bool empty() const;
+  bool isValid(std::uint32_t id) const;
+  const std::vector<HybridNode> & nodes() const;
+  const std::vector<std::vector<HybridEdge>> & adjacency() const;
+  std::uint32_t backboneOffset() const;
+  std::uint32_t surfaceEdgeCount() const;
+  std::uint32_t backboneEdgeCount() const;
+  std::uint32_t portalEdgeCount() const;
+
+private:
+  std::vector<HybridNode> nodes_;
+  std::vector<std::vector<HybridEdge>> adjacency_;
+  std::uint32_t backbone_offset_{0};
+  std::uint32_t surface_edge_count_{0};
+  std::uint32_t backbone_edge_count_{0};
+  std::uint32_t portal_edge_count_{0};
 };
 
 struct HybridBackboneEdgeValidation
@@ -55,6 +114,12 @@ public:
   SurfacePlanResult plan(
     const ExperienceSurfaceGraph & surface_graph,
     const ExperienceBackboneGraph & backbone_graph,
+    SurfaceNodeId start,
+    SurfaceNodeId goal) const;
+  SurfacePlanResult plan(
+    const ExperienceSurfaceGraph & surface_graph,
+    const ExperienceBackboneGraph & backbone_graph,
+    const HybridExperienceGraph & hybrid_graph,
     SurfaceNodeId start,
     SurfaceNodeId goal) const;
 

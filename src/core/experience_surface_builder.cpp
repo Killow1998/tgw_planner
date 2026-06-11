@@ -10,12 +10,7 @@ namespace tgw_planner::core
 
 ExperienceSurfaceBuilder::ExperienceSurfaceBuilder(ExperienceSurfaceBuilderOptions options)
 : options_(std::move(options)),
-  validator_(),
-  projector_([&]() {
-    TrajectoryProjectorOptions projector = options_.projector;
-    projector.resolution_m = options_.resolution_m;
-    return projector;
-  }())
+  validator_()
 {
   if (options_.resolution_m <= 0.0) {
     options_.resolution_m = 0.10;
@@ -31,6 +26,36 @@ ExperienceSurfaceBuilder::ExperienceSurfaceBuilder(ExperienceSurfaceBuilderOptio
 
 ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & resource) const
 {
+  ExperienceGeometryIndex geometry;
+  ExperienceGeometryIndexOptions geometry_options;
+  geometry_options.raw_resolution_m = options_.projector.raw_resolution_m;
+  geometry_options.nav_resolution_m = options_.resolution_m;
+  geometry_options.body_clearance_height_m = options_.body_clearance_height_m;
+  geometry_options.max_debug_world_points = 0U;
+  const ExperienceGeometryIndexBuildResult geometry_result =
+    geometry.build(resource, geometry_options);
+  if (!geometry_result.success) {
+    ExperienceBuildResult result;
+    result.error_code = geometry_result.error_code;
+    result.message = geometry_result.message;
+    result.raw_geometry_cell_count = geometry_result.raw_geometry_cell_count;
+    result.geometry_cell_count = geometry_result.support_candidate_count;
+    result.support_candidate_count = geometry_result.support_candidate_count;
+    return result;
+  }
+
+  TrajectoryProjectorOptions projector_options = options_.projector;
+  projector_options.resolution_m = options_.resolution_m;
+  const TrajectoryProjectionResult projection =
+    TrajectoryProjector(projector_options).project(resource, geometry);
+  return build(resource, geometry, projection);
+}
+
+ExperienceBuildResult ExperienceSurfaceBuilder::build(
+  const N3NavResource & resource,
+  const ExperienceGeometryIndex & geometry,
+  const TrajectoryProjectionResult & seeds) const
+{
   const auto t0 = std::chrono::steady_clock::now();
   ExperienceBuildResult result;
   const N3MapReadResult validation = validator_.validate(resource);
@@ -40,24 +65,15 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & reso
     return result;
   }
 
-  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> raw_geometry;
-  for (const auto & keyframe : resource.keyframes) {
-    addKeyframeGeometry(keyframe, raw_geometry);
-  }
-  markBodyObstructions(raw_geometry);
-  result.raw_geometry_cell_count = raw_geometry.size();
-  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> geometry =
-    buildSupportCandidates(raw_geometry);
-  markBodyObstructions(geometry);
-  result.geometry_cell_count = geometry.size();
-  result.support_candidate_count = geometry.size();
-  if (geometry.empty()) {
-    result.error_code = "pbstream_no_keyframes";
+  result.raw_geometry_cell_count = geometry.rawGeometry().size();
+  result.geometry_cell_count = geometry.supportCandidates().size();
+  result.support_candidate_count = geometry.supportCandidates().size();
+  if (geometry.supportCandidates().empty()) {
+    result.error_code = "pbstream_no_support_candidates";
     result.message = "keyframes are present but contain no usable geometry";
     return result;
   }
 
-  const TrajectoryProjectionResult seeds = projector_.project(resource);
   if (seeds.proven_seed_cells.empty()) {
     result.error_code = "support_projection_failed";
     result.message = "dense trajectory did not project to any support cells";
@@ -66,7 +82,8 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & reso
 
   ReachableExpansionResult expanded =
     ReachableExpander(options_.expander).expand(
-      seeds.observed_seed_cells, seeds.bridge_seed_cells, seeds.bridge_cell_metadata, geometry);
+      seeds.observed_seed_cells, seeds.bridge_seed_cells, seeds.bridge_cell_metadata,
+      geometry.supportCandidates());
   if (expanded.traversable_cells.empty()) {
     result.error_code = "experience_surface_empty";
     result.message = "reachable surface builder produced no traversable cells";
@@ -109,14 +126,6 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & reso
   return result;
 }
 
-GridIndex ExperienceSurfaceBuilder::worldToGrid(const Point3 & point) const
-{
-  return {
-    static_cast<int>(std::floor(point.x / options_.resolution_m)),
-    static_cast<int>(std::floor(point.y / options_.resolution_m)),
-    static_cast<int>(std::floor(point.z / options_.resolution_m))};
-}
-
 void ExperienceSurfaceBuilder::rebuildBoundaryLayer(SurfaceMap & surface) const
 {
   surface.boundary_cells.clear();
@@ -141,99 +150,6 @@ void ExperienceSurfaceBuilder::rebuildBoundaryLayer(SurfaceMap & surface) const
     if (boundary) {
       surface.boundary_cells.insert(cell);
       surface.wall_boundary_cells.insert(cell);
-    }
-  }
-}
-
-void ExperienceSurfaceBuilder::addKeyframeGeometry(
-  const N3KeyframeLite & keyframe,
-  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry) const
-{
-  for (const PointXYZI & point_body : keyframe.cloud_body) {
-    const Point3 world = transformPoint(
-      keyframe.pose_optimized, {point_body.x, point_body.y, point_body.z});
-    const GridIndex cell = worldToGrid(world);
-    SurfaceCell & surface_cell = geometry[cell];
-    surface_cell.cell = cell;
-    surface_cell.support = {cell.x, cell.y, cell.z - 1};
-    surface_cell.label = SurfaceLabel::GeometrySupport;
-    surface_cell.reachability = ReachabilityLabel::Unknown;
-    surface_cell.height_m = world.z;
-    surface_cell.confidence = std::max(surface_cell.confidence, 0.25);
-  }
-}
-
-std::unordered_map<GridIndex, SurfaceCell, GridIndexHash>
-ExperienceSurfaceBuilder::buildSupportCandidates(
-  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & raw_geometry) const
-{
-  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> candidates;
-  constexpr int kNeighborRadius = 1;
-  constexpr int kMinLocalSupportCells = 3;
-  const double max_local_height_spread = std::max(0.12, options_.resolution_m * 1.5);
-
-  for (const auto & entry : raw_geometry) {
-    const GridIndex & cell = entry.first;
-    const SurfaceCell & raw_cell = entry.second;
-    if (raw_cell.body_obstructed) {
-      continue;
-    }
-
-    int support_neighbors = 0;
-    double min_height = raw_cell.height_m;
-    double max_height = raw_cell.height_m;
-    for (int dx = -kNeighborRadius; dx <= kNeighborRadius; ++dx) {
-      for (int dy = -kNeighborRadius; dy <= kNeighborRadius; ++dy) {
-        for (int dz = -1; dz <= 1; ++dz) {
-          const auto neighbor_it = raw_geometry.find({cell.x + dx, cell.y + dy, cell.z + dz});
-          if (neighbor_it == raw_geometry.end()) {
-            continue;
-          }
-          if (std::abs(neighbor_it->second.height_m - raw_cell.height_m) >
-            max_local_height_spread)
-          {
-            continue;
-          }
-          ++support_neighbors;
-          min_height = std::min(min_height, neighbor_it->second.height_m);
-          max_height = std::max(max_height, neighbor_it->second.height_m);
-        }
-      }
-    }
-
-    if (support_neighbors < kMinLocalSupportCells) {
-      continue;
-    }
-    if ((max_height - min_height) > max_local_height_spread) {
-      continue;
-    }
-
-    SurfaceCell candidate = raw_cell;
-    candidate.label = SurfaceLabel::GeometrySupport;
-    candidate.reachability = ReachabilityLabel::Unknown;
-    candidate.confidence = std::max(candidate.confidence, 0.35);
-    candidates[cell] = candidate;
-  }
-
-  return candidates;
-}
-
-void ExperienceSurfaceBuilder::markBodyObstructions(
-  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry) const
-{
-  const int body_clearance_cells = std::max(
-    0, static_cast<int>(std::ceil(options_.body_clearance_height_m / options_.resolution_m)));
-  if (body_clearance_cells == 0) {
-    return;
-  }
-
-  for (auto & entry : geometry) {
-    const GridIndex cell = entry.first;
-    for (int dz = 1; dz <= body_clearance_cells; ++dz) {
-      if (geometry.find({cell.x, cell.y, cell.z + dz}) != geometry.end()) {
-        entry.second.body_obstructed = true;
-        break;
-      }
     }
   }
 }

@@ -25,11 +25,15 @@ using tgw_planner::core::BackboneEdge;
 using tgw_planner::core::ExperienceBackboneGraph;
 using tgw_planner::core::ExperienceBackboneOptions;
 using tgw_planner::core::ExperienceBuildResult;
+using tgw_planner::core::ExperienceGeometryIndex;
+using tgw_planner::core::ExperienceGeometryIndexBuildResult;
+using tgw_planner::core::ExperienceGeometryIndexOptions;
 using tgw_planner::core::ExperienceSurfaceBuilder;
 using tgw_planner::core::ExperienceSurfaceBuilderOptions;
 using tgw_planner::core::ExperienceSurfaceGraph;
 using tgw_planner::core::GridIndex;
 using tgw_planner::core::GlobalPathPoint;
+using tgw_planner::core::HybridExperienceGraph;
 using tgw_planner::core::HybridExperiencePlanner;
 using tgw_planner::core::HybridExperiencePlannerOptions;
 using tgw_planner::core::N3MapReader;
@@ -387,6 +391,17 @@ ExperienceSurfaceBuilderOptions builderOptions()
   return defaultExperienceSurfaceBuilderOptions();
 }
 
+ExperienceGeometryIndexOptions geometryIndexOptions()
+{
+  ExperienceGeometryIndexOptions options;
+  const ExperienceSurfaceBuilderOptions builder = builderOptions();
+  options.raw_resolution_m = builder.projector.raw_resolution_m;
+  options.nav_resolution_m = builder.resolution_m;
+  options.body_clearance_height_m = builder.body_clearance_height_m;
+  options.max_debug_world_points = 0U;
+  return options;
+}
+
 SurfacePlannerOptions plannerOptions()
 {
   return defaultSurfacePlannerOptions();
@@ -661,10 +676,18 @@ int main(int argc, char ** argv)
       return 2;
     }
 
+    ExperienceGeometryIndex geometry;
+    const ExperienceGeometryIndexBuildResult geometry_result =
+      geometry.build(read_result.resource, geometryIndexOptions());
+    if (!geometry_result.success) {
+      std::cerr << "geometry_failed error_code=" << geometry_result.error_code <<
+        " message=" << geometry_result.message << std::endl;
+      return 3;
+    }
     const TrajectoryProjectionResult projection =
-      TrajectoryProjector(projectorOptions()).project(read_result.resource);
+      TrajectoryProjector(projectorOptions()).project(read_result.resource, geometry);
     const ExperienceBuildResult build =
-      ExperienceSurfaceBuilder(builderOptions()).build(read_result.resource);
+      ExperienceSurfaceBuilder(builderOptions()).build(read_result.resource, geometry, projection);
     if (!build.success) {
       std::cerr << "build_failed error_code=" << build.error_code <<
         " message=" << build.message << std::endl;
@@ -711,6 +734,8 @@ int main(int argc, char ** argv)
     }
 
     const HybridExperiencePlannerOptions hybrid_options = hybridOptions();
+    HybridExperienceGraph hybrid_graph;
+    hybrid_graph.build(surface_graph, backbone_graph, surface_options, hybrid_options);
     const HybridConnectivity connectivity =
       buildHybridConnectivity(surface_graph, backbone_graph, hybrid_options);
     const auto low_components = countComponents(low_nodes, connectivity);
@@ -793,7 +818,7 @@ int main(int argc, char ** argv)
     QualityStats quality;
     for (std::size_t i = 0; i < sampled_start.size() && i < sampled_goal.size(); ++i) {
       const SurfacePlanResult plan =
-        planner.plan(surface_graph, backbone_graph, sampled_start[i], sampled_goal[i]);
+        planner.plan(surface_graph, backbone_graph, hybrid_graph, sampled_start[i], sampled_goal[i]);
       ++sampled_queries;
       const Point3 start = surfacePoint(surface_graph, sampled_start[i]);
       const Point3 goal = surfacePoint(surface_graph, sampled_goal[i]);

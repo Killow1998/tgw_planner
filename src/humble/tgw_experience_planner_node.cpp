@@ -56,6 +56,9 @@ using tgw_planner::core::Point3;
 using tgw_planner::core::ProjectedSupportSample;
 using tgw_planner::core::RejectedProjectionSample;
 using tgw_planner::core::ExperienceBuildResult;
+using tgw_planner::core::ExperienceGeometryIndex;
+using tgw_planner::core::ExperienceGeometryIndexBuildResult;
+using tgw_planner::core::ExperienceGeometryIndexOptions;
 using tgw_planner::core::ExperienceSurfaceGraph;
 using tgw_planner::core::ExperienceSurfaceBuilder;
 using tgw_planner::core::ExperienceSurfaceBuilderOptions;
@@ -70,6 +73,7 @@ using tgw_planner::core::SurfaceAstarPlanner;
 using tgw_planner::core::SurfacePlanResult;
 using tgw_planner::core::SurfacePlannerOptions;
 using tgw_planner::core::SurfaceTransitionValidator;
+using tgw_planner::core::HybridExperienceGraph;
 using tgw_planner::core::HybridExperiencePlanner;
 using tgw_planner::core::HybridExperiencePlannerOptions;
 using tgw_planner::core::RegulatedPurePursuitCommand;
@@ -1007,6 +1011,10 @@ public:
 private:
   void loadResource()
   {
+    has_snapshot_ = false;
+    has_surface_graph_ = false;
+    has_backbone_graph_ = false;
+    has_hybrid_graph_ = false;
     const std::string pbstream_path = get_parameter("pbstream_path").as_string();
     if (pbstream_path.empty()) {
       N3MapReadResult result;
@@ -1024,10 +1032,21 @@ private:
       return;
     }
 
-    const TrajectoryProjectionResult projection = TrajectoryProjector(projectorOptions()).project(
-      result.resource);
-    const ExperienceBuildResult build = ExperienceSurfaceBuilder(builderOptions()).build(
-      result.resource);
+    ExperienceGeometryIndex geometry;
+    const ExperienceGeometryIndexBuildResult geometry_result =
+      geometry.build(result.resource, geometryIndexOptions());
+    if (!geometry_result.success) {
+      publishStats(result, pbstream_path, nullptr, nullptr);
+      LOG(ERROR)
+        << "experience geometry index failed: [" << geometry_result.error_code << "] "
+        << geometry_result.message;
+      return;
+    }
+
+    const TrajectoryProjectionResult projection =
+      TrajectoryProjector(projectorOptions()).project(result.resource, geometry);
+    const ExperienceBuildResult build =
+      ExperienceSurfaceBuilder(builderOptions()).build(result.resource, geometry, projection);
     if (build.success) {
       snapshot_ = build.snapshot;
       has_snapshot_ = true;
@@ -1046,8 +1065,10 @@ private:
       has_surface_graph_ = true;
       backbone_graph_.build(result.resource, projection, surface_graph_, backboneOptions());
       has_backbone_graph_ = true;
+      hybrid_graph_.build(surface_graph_, backbone_graph_, planner_options, hybridOptions());
+      has_hybrid_graph_ = true;
     }
-    publishKeyframeGeometry(result.resource);
+    publishKeyframeGeometry(result.resource, geometry);
     publishTrajectory(result.resource);
     publishProjectionDebug(result.resource, projection);
     publishExpansionDebug(result.resource, build);
@@ -1064,6 +1085,8 @@ private:
       << " dense_trajectory=" << result.resource.dense_trajectory.size()
       << " raw_geometry=" << (build.success ? build.raw_geometry_cell_count : 0U)
       << " support_candidates=" << (build.success ? build.support_candidate_count : 0U)
+      << " geometry_transform_points=" << geometry_result.transformed_points
+      << " geometry_build_ms=" << geometry_result.build_time_ms
       << " projected_support=" << projection.projected_support_samples.size()
       << " observed_seed=" << projection.observed_seed_cells.size()
       << " bridge_seed=" << projection.bridge_seed_cells.size()
@@ -1079,6 +1102,11 @@ private:
       << " backbone_nodes=" << (has_backbone_graph_ ? backbone_graph_.nodes().size() : 0U)
       << " backbone_edges=" << (has_backbone_graph_ ? backbone_graph_.edges().size() : 0U)
       << " backbone_portals=" << (has_backbone_graph_ ? backbone_graph_.portals().size() : 0U)
+      << " hybrid_nodes=" << (has_hybrid_graph_ ? hybrid_graph_.nodes().size() : 0U)
+      << " hybrid_edges=" <<
+      (has_hybrid_graph_ ?
+      hybrid_graph_.surfaceEdgeCount() + hybrid_graph_.backboneEdgeCount() +
+      hybrid_graph_.portalEdgeCount() : 0U)
       << " rejected_projection=" << projection.rejected_samples.size()
       << " no_support=" << rejected_counts["support_projection_failed"]
       << " ambiguous_multifloor=" <<
@@ -1121,6 +1149,34 @@ private:
     return options;
   }
 
+  HybridExperiencePlannerOptions hybridOptions() const
+  {
+    HybridExperiencePlannerOptions options = defaultHybridExperiencePlannerOptions();
+    options.backbone_cost_scale = get_parameter("hybrid_backbone_cost_scale").as_double();
+    options.portal_switch_cost = get_parameter("hybrid_portal_switch_cost").as_double();
+    options.portal_height_error_weight =
+      get_parameter("hybrid_portal_height_error_weight").as_double();
+    options.backbone_low_confidence_penalty =
+      get_parameter("hybrid_backbone_low_confidence_penalty").as_double();
+    options.max_backbone_edge_xy_gap_m =
+      get_parameter("hybrid_max_backbone_edge_xy_gap_m").as_double();
+    options.max_backbone_edge_dz_m =
+      get_parameter("hybrid_max_backbone_edge_dz_m").as_double();
+    options.max_backbone_edge_slope =
+      get_parameter("hybrid_max_backbone_edge_slope").as_double();
+    options.max_portal_xy_distance_m =
+      get_parameter("hybrid_max_portal_xy_distance_m").as_double();
+    options.max_portal_height_error_m =
+      get_parameter("hybrid_max_portal_height_error_m").as_double();
+    options.surface_target_speed_mps =
+      get_parameter("hybrid_surface_target_speed_mps").as_double();
+    options.backbone_target_speed_mps =
+      get_parameter("hybrid_backbone_target_speed_mps").as_double();
+    options.portal_target_speed_mps =
+      get_parameter("hybrid_portal_target_speed_mps").as_double();
+    return options;
+  }
+
   TrajectoryProjectorOptions projectorOptions() const
   {
     TrajectoryProjectorOptions options = defaultTrajectoryProjectorOptions();
@@ -1153,32 +1209,24 @@ private:
     return options;
   }
 
-  void publishKeyframeGeometry(const N3NavResource & resource)
+  ExperienceGeometryIndexOptions geometryIndexOptions() const
   {
-    std::size_t total_points = 0U;
-    for (const auto & keyframe : resource.keyframes) {
-      total_points += keyframe.cloud_body.size();
-    }
-    if (total_points == 0U) {
+    ExperienceGeometryIndexOptions options;
+    options.raw_resolution_m = get_parameter("raw_resolution_m").as_double();
+    options.nav_resolution_m = get_parameter("nav_resolution_m").as_double();
+    options.body_clearance_height_m = get_parameter("body_clearance_height_m").as_double();
+    options.max_debug_world_points = static_cast<std::size_t>(
+      std::max<std::int64_t>(0, get_parameter("max_geometry_debug_points").as_int()));
+    return options;
+  }
+
+  void publishKeyframeGeometry(
+    const N3NavResource & resource,
+    const ExperienceGeometryIndex & geometry)
+  {
+    const std::vector<Point3> & points = geometry.debugWorldPoints();
+    if (points.empty()) {
       return;
-    }
-
-    const auto max_points = static_cast<std::size_t>(
-      std::max<std::int64_t>(1, get_parameter("max_geometry_debug_points").as_int()));
-    const std::size_t stride = total_points > max_points ?
-      ((total_points + max_points - 1U) / max_points) : 1U;
-    std::vector<Point3> points;
-    points.reserve((total_points + stride - 1U) / stride);
-
-    std::size_t index = 0U;
-    for (const auto & keyframe : resource.keyframes) {
-      for (const auto & point_body : keyframe.cloud_body) {
-        if ((index % stride) == 0U) {
-          points.push_back(tgw_planner::core::transformPoint(
-            keyframe.pose_optimized, {point_body.x, point_body.y, point_body.z}));
-        }
-        ++index;
-      }
     }
 
     const std::string frame_id = resource.map_frame.empty() ?
@@ -1255,26 +1303,60 @@ private:
     const Point3 & point, SurfaceNodeId * nearest_node, double * nearest_distance_m,
     int * component_id = nullptr) const
   {
-    if (!has_snapshot_ || !has_surface_graph_) {
+    if (!has_snapshot_ || !has_surface_graph_ || nearest_node == nullptr ||
+      nearest_distance_m == nullptr)
+    {
       return false;
     }
+    const double resolution = std::max(1.0e-3, surface_graph_.resolution());
+    const double max_snap_distance_m = std::max(
+      get_parameter("max_start_snap_distance_m").as_double(),
+      get_parameter("max_goal_snap_distance_m").as_double());
+    const double max_snap_distance_sq = max_snap_distance_m * max_snap_distance_m;
+    const int radius_cells = std::max(
+      1, static_cast<int>(std::ceil(max_snap_distance_m / resolution)) + 2);
+    const int center_x = static_cast<int>(std::floor(point.x / resolution));
+    const int center_y = static_cast<int>(std::floor(point.y / resolution));
+
+    std::vector<SurfaceNodeId> local_candidates;
+    for (int dx = -radius_cells; dx <= radius_cells; ++dx) {
+      for (int dy = -radius_cells; dy <= radius_cells; ++dy) {
+        const GridIndex xy_key{center_x + dx, center_y + dy, 0};
+        const auto nodes_it = surface_graph_.xyToNodes().find(xy_key);
+        if (nodes_it == surface_graph_.xyToNodes().end()) {
+          continue;
+        }
+        local_candidates.insert(
+          local_candidates.end(), nodes_it->second.begin(), nodes_it->second.end());
+      }
+    }
+
     const double layer_tolerance_m = 0.75 * snapshot_.resolution_m;
     const double z_ceiling = point.z + 0.5 * snapshot_.resolution_m;
     double nearest_xy_distance = std::numeric_limits<double>::infinity();
     double target_layer_z = -std::numeric_limits<double>::infinity();
     bool found_layer = false;
 
-    for (const SurfaceNode & node : surface_graph_.nodes()) {
+    for (const SurfaceNodeId node_id : local_candidates) {
+      const SurfaceNode * node_ptr = surface_graph_.node(node_id);
+      if (node_ptr == nullptr) {
+        continue;
+      }
+      const SurfaceNode & node = *node_ptr;
       const Point3 center{
         (static_cast<double>(node.x) + 0.5) * surface_graph_.resolution(),
         (static_cast<double>(node.y) + 0.5) * surface_graph_.resolution(),
         node.z};
       const double dx = point.x - center.x;
       const double dy = point.y - center.y;
-      const double xy_distance = std::sqrt(dx * dx + dy * dy);
+      const double xy_distance_sq = dx * dx + dy * dy;
       if (center.z > z_ceiling) {
         continue;
       }
+      if (xy_distance_sq > max_snap_distance_sq) {
+        continue;
+      }
+      const double xy_distance = std::sqrt(xy_distance_sq);
       if (xy_distance > nearest_xy_distance + snapshot_.resolution_m) {
         continue;
       }
@@ -1308,7 +1390,12 @@ private:
 
     int best_safe_component = -1;
     int best_fallback_component = -1;
-    for (const SurfaceNode & node : surface_graph_.nodes()) {
+    for (const SurfaceNodeId node_id : local_candidates) {
+      const SurfaceNode * node_ptr = surface_graph_.node(node_id);
+      if (node_ptr == nullptr) {
+        continue;
+      }
+      const SurfaceNode & node = *node_ptr;
       const Point3 center{
         (static_cast<double>(node.x) + 0.5) * surface_graph_.resolution(),
         (static_cast<double>(node.y) + 0.5) * surface_graph_.resolution(),
@@ -1318,7 +1405,11 @@ private:
       }
       const double dx = point.x - center.x;
       const double dy = point.y - center.y;
-      const double xy_distance = std::sqrt(dx * dx + dy * dy);
+      const double xy_distance_sq = dx * dx + dy * dy;
+      if (xy_distance_sq > max_snap_distance_sq) {
+        continue;
+      }
+      const double xy_distance = std::sqrt(xy_distance_sq);
 
       const double clearance = node.clearance_m;
       if (clearance >= required_clearance_m) {
@@ -1582,34 +1673,12 @@ private:
       << " start_snap_xy_m=" << start_snap_distance
       << " goal_snap_xy_m=" << goal_snap_distance
       << " backbone_nodes=" << (has_backbone_graph_ ? backbone_graph_.nodes().size() : 0U)
-      << " backbone_portals=" << (has_backbone_graph_ ? backbone_graph_.portals().size() : 0U);
+      << " backbone_portals=" << (has_backbone_graph_ ? backbone_graph_.portals().size() : 0U)
+      << " hybrid_nodes=" << (has_hybrid_graph_ ? hybrid_graph_.nodes().size() : 0U);
 
     const auto t0 = std::chrono::steady_clock::now();
-    HybridExperiencePlannerOptions hybrid_options = defaultHybridExperiencePlannerOptions();
-    hybrid_options.backbone_cost_scale = get_parameter("hybrid_backbone_cost_scale").as_double();
-    hybrid_options.portal_switch_cost = get_parameter("hybrid_portal_switch_cost").as_double();
-    hybrid_options.portal_height_error_weight =
-      get_parameter("hybrid_portal_height_error_weight").as_double();
-    hybrid_options.backbone_low_confidence_penalty =
-      get_parameter("hybrid_backbone_low_confidence_penalty").as_double();
-    hybrid_options.max_backbone_edge_xy_gap_m =
-      get_parameter("hybrid_max_backbone_edge_xy_gap_m").as_double();
-    hybrid_options.max_backbone_edge_dz_m =
-      get_parameter("hybrid_max_backbone_edge_dz_m").as_double();
-    hybrid_options.max_backbone_edge_slope =
-      get_parameter("hybrid_max_backbone_edge_slope").as_double();
-    hybrid_options.max_portal_xy_distance_m =
-      get_parameter("hybrid_max_portal_xy_distance_m").as_double();
-    hybrid_options.max_portal_height_error_m =
-      get_parameter("hybrid_max_portal_height_error_m").as_double();
-    hybrid_options.surface_target_speed_mps =
-      get_parameter("hybrid_surface_target_speed_mps").as_double();
-    hybrid_options.backbone_target_speed_mps =
-      get_parameter("hybrid_backbone_target_speed_mps").as_double();
-    hybrid_options.portal_target_speed_mps =
-      get_parameter("hybrid_portal_target_speed_mps").as_double();
-    plan = HybridExperiencePlanner(plannerOptions(), hybrid_options).plan(
-      surface_graph_, backbone_graph_, start_node, goal_node);
+    plan = HybridExperiencePlanner(plannerOptions(), hybridOptions()).plan(
+      surface_graph_, backbone_graph_, hybrid_graph_, start_node, goal_node);
     const auto t1 = std::chrono::steady_clock::now();
     const double search_time_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     if (stats_out != nullptr) {
@@ -2830,9 +2899,11 @@ private:
   tgw_planner::core::ExperienceSnapshot snapshot_;
   ExperienceSurfaceGraph surface_graph_;
   ExperienceBackboneGraph backbone_graph_;
+  HybridExperienceGraph hybrid_graph_;
   bool has_snapshot_{false};
   bool has_surface_graph_{false};
   bool has_backbone_graph_{false};
+  bool has_hybrid_graph_{false};
   bool has_tracking_path_{false};
   bool has_odom_{false};
   bool has_expected_surface_z_{false};

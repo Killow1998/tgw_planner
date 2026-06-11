@@ -3,6 +3,7 @@
 #include <string>
 
 #include "tgw_planner/core/experience_snapshot.hpp"
+#include "tgw_planner/core/experience_geometry_index.hpp"
 #include "tgw_planner/core/n3map_reader.hpp"
 #include "tgw_planner/core/reachable_expander.hpp"
 #include "tgw_planner/core/trajectory_projector.hpp"
@@ -57,21 +58,16 @@ public:
   // No silent fallback to global_map.pcd, realtime raycast reconstruction,
   // terrain semantics, or StairFlight-style rescue logic is allowed here.
   ExperienceBuildResult build(const N3NavResource & resource) const;
+  ExperienceBuildResult build(
+    const N3NavResource & resource,
+    const ExperienceGeometryIndex & geometry,
+    const TrajectoryProjectionResult & projection) const;
 
 private:
-  GridIndex worldToGrid(const Point3 & point) const;
   void rebuildBoundaryLayer(SurfaceMap & surface) const;
-  void addKeyframeGeometry(
-    const N3KeyframeLite & keyframe,
-    std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry) const;
-  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> buildSupportCandidates(
-    const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & raw_geometry) const;
-  void markBodyObstructions(
-    std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry) const;
 
   ExperienceSurfaceBuilderOptions options_;
   N3MapReader validator_;
-  TrajectoryProjector projector_;
 };
 
 }  // namespace tgw_planner::core
