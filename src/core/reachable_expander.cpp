@@ -1,6 +1,7 @@
 #include "tgw_planner/core/reachable_expander.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -11,6 +12,12 @@ namespace tgw_planner::core
 {
 namespace
 {
+double elapsedMs(const std::chrono::steady_clock::time_point start)
+{
+  return std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - start).count();
+}
+
 struct QueueItem
 {
   GridIndex cell;
@@ -22,7 +29,30 @@ struct AnchorHeightRange
   std::vector<int> z_values;
 };
 
+struct AnchorRowKey
+{
+  int x{0};
+  int z{0};
+
+  bool operator==(const AnchorRowKey & other) const
+  {
+    return x == other.x && z == other.z;
+  }
+};
+
+struct AnchorRowKeyHash
+{
+  std::size_t operator()(const AnchorRowKey & key) const
+  {
+    std::size_t seed = std::hash<int>{}(key.x);
+    seed ^= std::hash<int>{}(key.z) + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
+    return seed;
+  }
+};
+
 using AnchorColumns = std::unordered_map<GridIndex, AnchorHeightRange, GridIndexHash>;
+using AnchorIntervals =
+  std::unordered_map<AnchorRowKey, std::vector<std::pair<int, int>>, AnchorRowKeyHash>;
 using ComponentMap = std::unordered_map<GridIndex, int, GridIndexHash>;
 
 double fallbackHeight(const GridIndex & cell, double resolution_m)
@@ -129,20 +159,54 @@ AnchorColumns buildAnchorColumns(
   const ReachableExpanderOptions & options)
 {
   AnchorColumns columns;
-  columns.reserve(anchors.size());
   const int radius = std::max(0, options.experience_anchor_radius_cells);
+  if (anchors.empty()) {
+    return columns;
+  }
+
+  std::vector<std::pair<int, int>> row_offsets;
+  row_offsets.reserve(static_cast<std::size_t>(2 * radius + 1));
+  for (int dx = -radius; dx <= radius; ++dx) {
+    const int dy_limit = static_cast<int>(
+      std::floor(std::sqrt(static_cast<double>(radius * radius - dx * dx))));
+    row_offsets.push_back({dx, dy_limit});
+  }
+
+  AnchorIntervals intervals;
+  intervals.reserve(anchors.size() * row_offsets.size());
   for (const GridIndex & anchor : anchors) {
-    const double height = cellHeight(cells, anchor, options.resolution_m);
-    for (int dx = -radius; dx <= radius; ++dx) {
-      for (int dy = -radius; dy <= radius; ++dy) {
-        if (dx * dx + dy * dy > radius * radius) {
-          continue;
-        }
-        (void)height;
-        columns[{anchor.x + dx, anchor.y + dy, 0}].z_values.push_back(anchor.z);
-      }
+    (void)cellHeight(cells, anchor, options.resolution_m);
+    for (const auto & row_offset : row_offsets) {
+      const int dx = row_offset.first;
+      const int dy_limit = row_offset.second;
+      intervals[{anchor.x + dx, anchor.z}].push_back(
+        {anchor.y - dy_limit, anchor.y + dy_limit});
     }
   }
+
+  columns.reserve(intervals.size() * static_cast<std::size_t>(std::max(1, radius)));
+  for (auto & entry : intervals) {
+    std::vector<std::pair<int, int>> & ranges = entry.second;
+    std::sort(ranges.begin(), ranges.end());
+    int start = ranges.front().first;
+    int end = ranges.front().second;
+    const auto flush_range = [&columns, &entry](int range_start, int range_end) {
+      for (int y = range_start; y <= range_end; ++y) {
+        columns[{entry.first.x, y, 0}].z_values.push_back(entry.first.z);
+      }
+    };
+    for (std::size_t index = 1; index < ranges.size(); ++index) {
+      if (ranges[index].first <= end + 1) {
+        end = std::max(end, ranges[index].second);
+        continue;
+      }
+      flush_range(start, end);
+      start = ranges[index].first;
+      end = ranges[index].second;
+    }
+    flush_range(start, end);
+  }
+
   for (auto & entry : columns) {
     auto & z_values = entry.second.z_values;
     std::sort(z_values.begin(), z_values.end());
@@ -287,72 +351,15 @@ int supportComponentForCell(
 
 void assignSurfaceLayerIds(
   ReachableExpansionResult & result,
-  const ReachableExpanderOptions & options)
+  const ReachableExpanderOptions &)
 {
-  std::unordered_map<GridIndex, int, GridIndexHash> layer_ids;
-  layer_ids.reserve(result.traversable_cells.size());
-  int next_layer_id = 0;
-
-  for (const GridIndex & seed : result.traversable_cells) {
-    if (layer_ids.find(seed) != layer_ids.end()) {
+  for (auto & entry : result.surface_cells) {
+    SurfaceCell & cell = entry.second;
+    if (cell.label == SurfaceLabel::TrajectoryBridge || cell.support_component_id < 0) {
+      cell.surface_layer_id = -1;
       continue;
     }
-    const auto seed_it = result.surface_cells.find(seed);
-    if (seed_it == result.surface_cells.end() ||
-      seed_it->second.label == SurfaceLabel::TrajectoryBridge) {
-      continue;
-    }
-
-    const int layer_id = next_layer_id++;
-    std::queue<GridIndex> queue;
-    queue.push(seed);
-    layer_ids[seed] = layer_id;
-
-    while (!queue.empty()) {
-      const GridIndex current = queue.front();
-      queue.pop();
-      const double current_height = cellHeight(
-        result.surface_cells, current, options.resolution_m);
-
-      for (int dx = -1; dx <= 1; ++dx) {
-        for (int dy = -1; dy <= 1; ++dy) {
-          if (dx == 0 && dy == 0) {
-            continue;
-          }
-          for (int dz = -options.vertical_tolerance_cells;
-            dz <= options.vertical_tolerance_cells; ++dz)
-          {
-            const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
-            if (result.traversable_cells.find(neighbor) == result.traversable_cells.end() ||
-              layer_ids.find(neighbor) != layer_ids.end())
-            {
-              continue;
-            }
-            const auto neighbor_it = result.surface_cells.find(neighbor);
-            if (neighbor_it == result.surface_cells.end() ||
-              neighbor_it->second.label == SurfaceLabel::TrajectoryBridge) {
-              continue;
-            }
-            const double neighbor_height = cellHeight(
-              result.surface_cells, neighbor, options.resolution_m);
-            if (std::abs(neighbor_height - current_height) >
-              options.max_expansion_step_height_m)
-            {
-              continue;
-            }
-            layer_ids[neighbor] = layer_id;
-            queue.push(neighbor);
-          }
-        }
-      }
-    }
-  }
-
-  for (const auto & entry : layer_ids) {
-    const auto surface_it = result.surface_cells.find(entry.first);
-    if (surface_it != result.surface_cells.end()) {
-      surface_it->second.surface_layer_id = entry.second;
-    }
+    cell.surface_layer_id = cell.support_component_id;
   }
 }
 
@@ -418,10 +425,14 @@ ReachableExpansionResult ReachableExpander::expand(
       geometry_cells.size() / 2U));
   result.surface_cells.reserve(expected_surface_cells);
   result.reachability.reserve(expected_surface_cells);
+  const auto t_components = std::chrono::steady_clock::now();
   const ComponentMap components = buildAnchoredSupportComponents(
     geometry_cells, observed_seed_cells, options_, &result.support_component_count);
+  result.anchored_component_time_ms = elapsedMs(t_components);
   result.anchored_support_component_count = result.support_component_count;
 
+  const auto t_wave = std::chrono::steady_clock::now();
+  const auto t_seed_init = std::chrono::steady_clock::now();
   std::queue<QueueItem> queue;
   for (const GridIndex & seed : observed_seed_cells) {
     SurfaceCell & cell = result.surface_cells[seed];
@@ -443,9 +454,16 @@ ReachableExpansionResult ReachableExpander::expand(
     queue.push({seed, 0});
   }
   result.proven_seed_count = result.traversable_cells.size();
+  result.seed_initialization_time_ms = elapsedMs(t_seed_init);
+  const auto t_anchor_envelope = std::chrono::steady_clock::now();
   const AnchorColumns anchor_columns = buildAnchorColumns(
     result.traversable_cells, result.surface_cells, options_);
+  result.anchor_envelope_time_ms = elapsedMs(t_anchor_envelope);
+  std::unordered_set<GridIndex, GridIndexHash> permanently_rejected_expansion_cells;
+  permanently_rejected_expansion_cells.reserve(
+    std::min(geometry_cells.size(), result.traversable_cells.size() * 64U + 1024U));
 
+  const auto t_frontier = std::chrono::steady_clock::now();
   while (!queue.empty()) {
     const QueueItem current = queue.front();
     queue.pop();
@@ -463,12 +481,20 @@ ReachableExpansionResult ReachableExpander::expand(
           }
           const GridIndex neighbor{
             current.cell.x + dx, current.cell.y + dy, current.cell.z + dz};
+          if (result.traversable_cells.find(neighbor) != result.traversable_cells.end() ||
+            permanently_rejected_expansion_cells.find(neighbor) !=
+            permanently_rejected_expansion_cells.end())
+          {
+            continue;
+          }
           const auto geometry_it = geometry_cells.find(neighbor);
           if (geometry_it == geometry_cells.end()) {
+            permanently_rejected_expansion_cells.insert(neighbor);
             continue;
           }
           if (!isAnchoredComponent(components, neighbor)) {
             ++result.rejected_unanchored_component_cells;
+            permanently_rejected_expansion_cells.insert(neighbor);
             continue;
           }
           if (!isInsideAnchorEnvelope(
@@ -477,6 +503,7 @@ ReachableExpansionResult ReachableExpander::expand(
               options_.experience_anchor_vertical_tolerance_cells))
           {
             ++result.anchor_envelope_rejected_count;
+            permanently_rejected_expansion_cells.insert(neighbor);
             continue;
           }
           if (!isBodyClear(
@@ -484,6 +511,7 @@ ReachableExpansionResult ReachableExpander::expand(
               options_.body_clearance_cells))
           {
             ++result.body_obstructed_rejected_count;
+            permanently_rejected_expansion_cells.insert(neighbor);
             continue;
           }
           const double current_height = cellHeight(
@@ -510,11 +538,16 @@ ReachableExpansionResult ReachableExpander::expand(
       }
     }
   }
+  result.expansion_frontier_time_ms = elapsedMs(t_frontier);
+  result.expansion_wave_time_ms = elapsedMs(t_wave);
 
+  const auto t_hole_fill = std::chrono::steady_clock::now();
   if (options_.enable_hole_filling) {
     for (int iteration = 0; iteration < options_.hole_fill_iterations; ++iteration) {
       std::vector<SurfaceCell> additions;
       additions.reserve(result.traversable_cells.size() / 16U + 1U);
+      std::unordered_set<GridIndex, GridIndexHash> evaluated_candidates;
+      evaluated_candidates.reserve(result.traversable_cells.size() / 2U + 1U);
       for (const GridIndex & cell : result.traversable_cells) {
         for (int dx = -1; dx <= 1; ++dx) {
           for (int dy = -1; dy <= 1; ++dy) {
@@ -522,7 +555,9 @@ ReachableExpansionResult ReachableExpander::expand(
               continue;
             }
             const GridIndex candidate{cell.x + dx, cell.y + dy, cell.z};
-            if (result.traversable_cells.find(candidate) != result.traversable_cells.end()) {
+            if (result.traversable_cells.find(candidate) != result.traversable_cells.end() ||
+              !evaluated_candidates.insert(candidate).second)
+            {
               continue;
             }
             const double candidate_height = fallbackHeight(candidate, options_.resolution_m);
@@ -601,9 +636,13 @@ ReachableExpansionResult ReachableExpander::expand(
       }
     }
   }
+  result.hole_fill_time_ms = elapsedMs(t_hole_fill);
 
+  const auto t_layers = std::chrono::steady_clock::now();
   assignSurfaceLayerIds(result, options_);
+  result.layer_assignment_time_ms = elapsedMs(t_layers);
 
+  const auto t_bridge = std::chrono::steady_clock::now();
   for (const GridIndex & seed : bridge_seed_cells) {
     if (result.traversable_cells.find(seed) != result.traversable_cells.end()) {
       continue;
@@ -635,8 +674,11 @@ ReachableExpansionResult ReachableExpander::expand(
     result.reachability[seed] = ReachabilityLabel::LowConfidenceReachable;
     ++result.bridge_seed_count;
   }
+  result.bridge_seed_time_ms = elapsedMs(t_bridge);
 
+  const auto t_compact = std::chrono::steady_clock::now();
   keepOnlyTraversableSurfaceCells(result);
+  result.compact_time_ms = elapsedMs(t_compact);
   return result;
 }
 

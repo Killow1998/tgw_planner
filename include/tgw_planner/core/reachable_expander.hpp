@@ -42,6 +42,15 @@ struct ReachableExpansionResult
   std::size_t support_component_count{0};
   std::size_t anchored_support_component_count{0};
   std::size_t rejected_unanchored_component_cells{0};
+  double anchored_component_time_ms{0.0};
+  double anchor_envelope_time_ms{0.0};
+  double seed_initialization_time_ms{0.0};
+  double expansion_frontier_time_ms{0.0};
+  double expansion_wave_time_ms{0.0};
+  double hole_fill_time_ms{0.0};
+  double layer_assignment_time_ms{0.0};
+  double bridge_seed_time_ms{0.0};
+  double compact_time_ms{0.0};
 };
 
 class ReachableExpander

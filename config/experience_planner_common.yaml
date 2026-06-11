@@ -4,6 +4,7 @@ tgw_experience_planner_node:
     map_frame: "map"
     nav_resolution_m: 0.10
     raw_resolution_m: 0.05
+    geometry_roi_distance_to_trajectory_m: 1.8
     lidar_to_footprint_x_m: 0.0
     lidar_to_footprint_y_m: 0.0
     support_search_below_min_m: 0.10

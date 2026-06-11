@@ -729,6 +729,9 @@ public:
     declare_parameter<std::string>("map_frame", "map");
     declare_parameter<double>("nav_resolution_m", projector_defaults.resolution_m);
     declare_parameter<double>("raw_resolution_m", projector_defaults.raw_resolution_m);
+    declare_parameter<double>(
+      "geometry_roi_distance_to_trajectory_m",
+      builder_defaults.geometry_roi_distance_to_trajectory_m);
     declare_parameter<double>("lidar_to_footprint_x_m", projector_defaults.lidar_to_footprint_x_m);
     declare_parameter<double>("lidar_to_footprint_y_m", projector_defaults.lidar_to_footprint_y_m);
     declare_parameter<double>("support_search_below_min_m", projector_defaults.search_below_min_m);
@@ -1215,6 +1218,8 @@ private:
     options.raw_resolution_m = get_parameter("raw_resolution_m").as_double();
     options.nav_resolution_m = get_parameter("nav_resolution_m").as_double();
     options.body_clearance_height_m = get_parameter("body_clearance_height_m").as_double();
+    options.trajectory_roi_distance_m =
+      get_parameter("geometry_roi_distance_to_trajectory_m").as_double();
     options.max_debug_world_points = static_cast<std::size_t>(
       std::max<std::int64_t>(0, get_parameter("max_geometry_debug_points").as_int()));
     return options;

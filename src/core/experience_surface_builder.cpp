@@ -31,6 +31,7 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(const N3NavResource & reso
   geometry_options.raw_resolution_m = options_.projector.raw_resolution_m;
   geometry_options.nav_resolution_m = options_.resolution_m;
   geometry_options.body_clearance_height_m = options_.body_clearance_height_m;
+  geometry_options.trajectory_roi_distance_m = options_.geometry_roi_distance_to_trajectory_m;
   geometry_options.max_debug_world_points = 0U;
   const ExperienceGeometryIndexBuildResult geometry_result =
     geometry.build(resource, geometry_options);
@@ -80,10 +81,13 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(
     return result;
   }
 
+  const auto t_expansion = std::chrono::steady_clock::now();
   ReachableExpansionResult expanded =
     ReachableExpander(options_.expander).expand(
       seeds.observed_seed_cells, seeds.bridge_seed_cells, seeds.bridge_cell_metadata,
       geometry.supportCandidates());
+  result.expansion_time_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - t_expansion).count();
   if (expanded.traversable_cells.empty()) {
     result.error_code = "experience_surface_empty";
     result.message = "reachable surface builder produced no traversable cells";
@@ -108,6 +112,15 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(
   result.support_component_count = expanded.support_component_count;
   result.anchored_support_component_count = expanded.anchored_support_component_count;
   result.rejected_unanchored_component_cells = expanded.rejected_unanchored_component_cells;
+  result.expansion_anchored_component_time_ms = expanded.anchored_component_time_ms;
+  result.expansion_anchor_envelope_time_ms = expanded.anchor_envelope_time_ms;
+  result.expansion_seed_initialization_time_ms = expanded.seed_initialization_time_ms;
+  result.expansion_frontier_time_ms = expanded.expansion_frontier_time_ms;
+  result.expansion_wave_time_ms = expanded.expansion_wave_time_ms;
+  result.expansion_hole_fill_time_ms = expanded.hole_fill_time_ms;
+  result.expansion_layer_assignment_time_ms = expanded.layer_assignment_time_ms;
+  result.expansion_bridge_seed_time_ms = expanded.bridge_seed_time_ms;
+  result.expansion_compact_time_ms = expanded.compact_time_ms;
 
   for (const auto & entry : result.snapshot.reachability) {
     if (entry.second == ReachabilityLabel::Forbidden) {
@@ -115,11 +128,20 @@ ExperienceBuildResult ExperienceSurfaceBuilder::build(
     }
   }
 
+  const auto t_boundary = std::chrono::steady_clock::now();
   rebuildBoundaryLayer(result.snapshot.surface);
+  result.boundary_time_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - t_boundary).count();
+  const auto t_clearance = std::chrono::steady_clock::now();
   result.snapshot.clearance.compute(
     result.snapshot.surface.traversable_cells, result.snapshot.surface.boundary_cells,
     result.snapshot.resolution_m);
+  result.clearance_time_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - t_clearance).count();
+  const auto t_risk = std::chrono::steady_clock::now();
   result.snapshot.risk.compute(result.snapshot.surface, result.snapshot.clearance);
+  result.risk_time_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - t_risk).count();
   result.success = true;
   const auto t1 = std::chrono::steady_clock::now();
   result.build_time_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();

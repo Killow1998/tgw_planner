@@ -18,6 +18,7 @@ struct ExperienceGeometryIndexOptions
   double raw_resolution_m{0.05};
   double nav_resolution_m{0.10};
   double body_clearance_height_m{0.65};
+  double trajectory_roi_distance_m{0.0};
   std::size_t max_debug_world_points{400000U};
 };
 
@@ -31,7 +32,13 @@ struct ExperienceGeometryIndexBuildResult
   std::size_t support_candidate_count{0};
   std::size_t support_column_count{0};
   std::size_t debug_world_point_count{0};
+  std::size_t roi_skipped_points{0};
   double build_time_ms{0.0};
+  double transform_insert_time_ms{0.0};
+  double support_column_sort_time_ms{0.0};
+  double raw_body_obstruction_time_ms{0.0};
+  double support_candidate_time_ms{0.0};
+  double support_body_obstruction_time_ms{0.0};
 };
 
 class ExperienceGeometryIndex

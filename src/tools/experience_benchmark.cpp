@@ -66,6 +66,7 @@ ExperienceGeometryIndexOptions geometryOptions()
   options.raw_resolution_m = builder.projector.raw_resolution_m;
   options.nav_resolution_m = builder.resolution_m;
   options.body_clearance_height_m = builder.body_clearance_height_m;
+  options.trajectory_roi_distance_m = builder.geometry_roi_distance_to_trajectory_m;
   options.max_debug_world_points = 0U;
   return options;
 }
@@ -206,8 +207,27 @@ int main(int argc, char ** argv)
   writeJsonString("status", "ok");
   writeJsonField("read_pbstream_ms", read_ms);
   writeJsonField("geometry_index_build_ms", geometry_ms);
+  writeJsonField("geometry_transform_insert_ms", geometry_result.transform_insert_time_ms);
+  writeJsonField("geometry_support_column_sort_ms", geometry_result.support_column_sort_time_ms);
+  writeJsonField("geometry_raw_body_obstruction_ms", geometry_result.raw_body_obstruction_time_ms);
+  writeJsonField("geometry_support_candidate_ms", geometry_result.support_candidate_time_ms);
+  writeJsonField(
+    "geometry_support_body_obstruction_ms", geometry_result.support_body_obstruction_time_ms);
   writeJsonField("trajectory_projection_ms", projection_ms);
   writeJsonField("surface_build_ms", surface_ms);
+  writeJsonField("surface_expansion_ms", surface.expansion_time_ms);
+  writeJsonField("surface_expansion_components_ms", surface.expansion_anchored_component_time_ms);
+  writeJsonField("surface_expansion_seed_init_ms", surface.expansion_seed_initialization_time_ms);
+  writeJsonField("surface_expansion_anchor_envelope_ms", surface.expansion_anchor_envelope_time_ms);
+  writeJsonField("surface_expansion_frontier_ms", surface.expansion_frontier_time_ms);
+  writeJsonField("surface_expansion_wave_ms", surface.expansion_wave_time_ms);
+  writeJsonField("surface_expansion_hole_fill_ms", surface.expansion_hole_fill_time_ms);
+  writeJsonField("surface_expansion_layers_ms", surface.expansion_layer_assignment_time_ms);
+  writeJsonField("surface_expansion_bridge_ms", surface.expansion_bridge_seed_time_ms);
+  writeJsonField("surface_expansion_compact_ms", surface.expansion_compact_time_ms);
+  writeJsonField("surface_boundary_ms", surface.boundary_time_ms);
+  writeJsonField("surface_clearance_ms", surface.clearance_time_ms);
+  writeJsonField("surface_risk_ms", surface.risk_time_ms);
   writeJsonField("surface_graph_build_ms", surface_graph_ms);
   writeJsonField("backbone_build_ms", backbone_ms);
   writeJsonField("hybrid_graph_build_ms", hybrid_ms);
@@ -217,6 +237,7 @@ int main(int argc, char ** argv)
   writeJsonField("keyframes", read.resource.keyframes.size());
   writeJsonField("dense_trajectory", read.resource.dense_trajectory.size());
   writeJsonField("transformed_points", geometry_result.transformed_points);
+  writeJsonField("roi_skipped_points", geometry_result.roi_skipped_points);
   writeJsonField("raw_geometry_cells", geometry_result.raw_geometry_cell_count);
   writeJsonField("support_candidates", geometry_result.support_candidate_count);
   writeJsonField("support_columns", geometry_result.support_column_count);

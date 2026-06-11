@@ -398,6 +398,7 @@ ExperienceGeometryIndexOptions geometryIndexOptions()
   options.raw_resolution_m = builder.projector.raw_resolution_m;
   options.nav_resolution_m = builder.resolution_m;
   options.body_clearance_height_m = builder.body_clearance_height_m;
+  options.trajectory_roi_distance_m = builder.geometry_roi_distance_to_trajectory_m;
   options.max_debug_world_points = 0U;
   return options;
 }

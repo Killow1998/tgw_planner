@@ -15,6 +15,7 @@ struct ExperienceSurfaceBuilderOptions
 {
   double resolution_m{0.10};
   double body_clearance_height_m{0.65};
+  double geometry_roi_distance_to_trajectory_m{1.8};
   TrajectoryProjectorOptions projector;
   ReachableExpanderOptions expander;
 };
@@ -41,6 +42,19 @@ struct ExperienceBuildResult
   std::size_t anchored_support_component_count{0};
   std::size_t rejected_unanchored_component_cells{0};
   double build_time_ms{0.0};
+  double expansion_time_ms{0.0};
+  double boundary_time_ms{0.0};
+  double clearance_time_ms{0.0};
+  double risk_time_ms{0.0};
+  double expansion_anchored_component_time_ms{0.0};
+  double expansion_anchor_envelope_time_ms{0.0};
+  double expansion_seed_initialization_time_ms{0.0};
+  double expansion_frontier_time_ms{0.0};
+  double expansion_wave_time_ms{0.0};
+  double expansion_hole_fill_time_ms{0.0};
+  double expansion_layer_assignment_time_ms{0.0};
+  double expansion_bridge_seed_time_ms{0.0};
+  double expansion_compact_time_ms{0.0};
 };
 
 class ExperienceSurfaceBuilder

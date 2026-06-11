@@ -12,6 +12,70 @@ namespace
 {
 constexpr int kNeighborRadius = 1;
 constexpr int kMinLocalSupportCells = 3;
+
+GridIndex roiCellKey(const Point3 & point, double resolution_m)
+{
+  return {
+    static_cast<int>(std::floor(point.x / resolution_m)),
+    static_cast<int>(std::floor(point.y / resolution_m)),
+    0};
+}
+
+struct TrajectoryRoiIndex
+{
+  bool enabled{false};
+  double radius_m{0.0};
+  double radius_sq_m{0.0};
+  double grid_resolution_m{1.0};
+  int search_radius_cells{1};
+  std::unordered_map<GridIndex, std::vector<Point3>, GridIndexHash> buckets;
+
+  bool contains(const Point3 & point) const
+  {
+    if (!enabled) {
+      return true;
+    }
+    const GridIndex center = roiCellKey(point, grid_resolution_m);
+    for (int dx = -search_radius_cells; dx <= search_radius_cells; ++dx) {
+      for (int dy = -search_radius_cells; dy <= search_radius_cells; ++dy) {
+        const auto bucket_it = buckets.find({center.x + dx, center.y + dy, 0});
+        if (bucket_it == buckets.end()) {
+          continue;
+        }
+        for (const Point3 & trajectory_point : bucket_it->second) {
+          const double delta_x = point.x - trajectory_point.x;
+          const double delta_y = point.y - trajectory_point.y;
+          if (delta_x * delta_x + delta_y * delta_y <= radius_sq_m) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+};
+
+TrajectoryRoiIndex buildTrajectoryRoiIndex(
+  const N3NavResource & resource,
+  const ExperienceGeometryIndexOptions & options)
+{
+  TrajectoryRoiIndex index;
+  index.radius_m = std::max(0.0, options.trajectory_roi_distance_m);
+  if (index.radius_m <= 1.0e-6 || resource.dense_trajectory.empty()) {
+    return index;
+  }
+  index.enabled = true;
+  index.radius_sq_m = index.radius_m * index.radius_m;
+  index.grid_resolution_m = std::max(options.nav_resolution_m, index.radius_m);
+  index.search_radius_cells = std::max(
+    1, static_cast<int>(std::ceil(index.radius_m / index.grid_resolution_m)));
+  index.buckets.reserve(resource.dense_trajectory.size());
+  for (const N3TrajectoryPose & pose : resource.dense_trajectory) {
+    const Point3 & point = pose.pose_world_lidar.translation;
+    index.buckets[roiCellKey(point, index.grid_resolution_m)].push_back(point);
+  }
+  return index;
+}
 }
 
 ExperienceGeometryIndexBuildResult ExperienceGeometryIndex::build(
@@ -29,6 +93,7 @@ ExperienceGeometryIndexBuildResult ExperienceGeometryIndex::build(
   if (options_.body_clearance_height_m < 0.0) {
     options_.body_clearance_height_m = 0.0;
   }
+  options_.trajectory_roi_distance_m = std::max(0.0, options_.trajectory_roi_distance_m);
 
   support_columns_.clear();
   raw_geometry_.clear();
@@ -53,13 +118,22 @@ ExperienceGeometryIndexBuildResult ExperienceGeometryIndex::build(
   if (max_debug_points > 0U) {
     debug_world_points_.reserve((total_points + debug_stride - 1U) / debug_stride);
   }
+  support_columns_.reserve(total_points / 2U + 1U);
+  raw_geometry_.reserve(total_points / 2U + 1U);
+  const TrajectoryRoiIndex trajectory_roi = buildTrajectoryRoiIndex(resource, options_);
 
+  const auto t_transform_insert = std::chrono::steady_clock::now();
   std::size_t point_index = 0U;
   for (const N3KeyframeLite & keyframe : resource.keyframes) {
     for (const PointXYZI & point_body : keyframe.cloud_body) {
       const Point3 world = transformPoint(
         keyframe.pose_optimized, {point_body.x, point_body.y, point_body.z});
       ++metrics_.transformed_points;
+      if (!trajectory_roi.contains(world)) {
+        ++metrics_.roi_skipped_points;
+        ++point_index;
+        continue;
+      }
       support_columns_[rawColumnKey(world)].push_back(world.z);
 
       const GridIndex cell = navCellKey(world);
@@ -77,16 +151,30 @@ ExperienceGeometryIndexBuildResult ExperienceGeometryIndex::build(
       ++point_index;
     }
   }
+  metrics_.transform_insert_time_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - t_transform_insert).count();
 
+  const auto t_sort_columns = std::chrono::steady_clock::now();
   for (auto & entry : support_columns_) {
     auto & heights = entry.second;
     std::sort(heights.begin(), heights.end());
     heights.erase(std::unique(heights.begin(), heights.end()), heights.end());
   }
+  metrics_.support_column_sort_time_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - t_sort_columns).count();
 
+  const auto t_raw_obstruction = std::chrono::steady_clock::now();
   markBodyObstructions(raw_geometry_);
+  metrics_.raw_body_obstruction_time_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - t_raw_obstruction).count();
+  const auto t_support_candidates = std::chrono::steady_clock::now();
   support_candidates_ = buildSupportCandidates();
+  metrics_.support_candidate_time_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - t_support_candidates).count();
+  const auto t_support_obstruction = std::chrono::steady_clock::now();
   markBodyObstructions(support_candidates_);
+  metrics_.support_body_obstruction_time_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - t_support_obstruction).count();
 
   metrics_.raw_geometry_cell_count = raw_geometry_.size();
   metrics_.support_candidate_count = support_candidates_.size();
@@ -186,6 +274,7 @@ std::unordered_map<GridIndex, SurfaceCell, GridIndexHash>
 ExperienceGeometryIndex::buildSupportCandidates() const
 {
   std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> candidates;
+  candidates.reserve(raw_geometry_.size() / 2U + 1U);
   const double max_local_height_spread = std::max(0.12, options_.nav_resolution_m * 1.5);
 
   for (const auto & entry : raw_geometry_) {
