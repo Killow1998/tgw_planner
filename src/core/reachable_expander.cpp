@@ -43,13 +43,23 @@ double cellHeight(
          fallbackHeight(cell, resolution_m);
 }
 
+bool containsSurfaceCell(
+  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & base_cells,
+  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & overlay_cells,
+  const GridIndex & cell)
+{
+  return base_cells.find(cell) != base_cells.end() ||
+         overlay_cells.find(cell) != overlay_cells.end();
+}
+
 bool hasBodyObstruction(
-  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & cells,
+  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & base_cells,
+  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & overlay_cells,
   const GridIndex & cell,
   int body_clearance_cells)
 {
   for (int dz = 1; dz <= body_clearance_cells; ++dz) {
-    if (cells.find({cell.x, cell.y, cell.z + dz}) != cells.end()) {
+    if (containsSurfaceCell(base_cells, overlay_cells, {cell.x, cell.y, cell.z + dz})) {
       return true;
     }
   }
@@ -57,12 +67,13 @@ bool hasBodyObstruction(
 }
 
 bool isBodyClear(
-  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & cells,
+  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & base_cells,
+  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & overlay_cells,
   const SurfaceCell & candidate,
   int body_clearance_cells)
 {
   return !candidate.body_obstructed &&
-         !hasBodyObstruction(cells, candidate.cell, body_clearance_cells);
+         !hasBodyObstruction(base_cells, overlay_cells, candidate.cell, body_clearance_cells);
 }
 
 bool collectHoleFillSupport(
@@ -338,6 +349,19 @@ void assignSurfaceLayerIds(
     }
   }
 }
+
+void keepOnlyTraversableSurfaceCells(ReachableExpansionResult & result)
+{
+  std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> compact;
+  compact.reserve(result.traversable_cells.size());
+  for (const GridIndex & cell : result.traversable_cells) {
+    const auto surface_it = result.surface_cells.find(cell);
+    if (surface_it != result.surface_cells.end()) {
+      compact.emplace(cell, surface_it->second);
+    }
+  }
+  result.surface_cells = std::move(compact);
+}
 }  // namespace
 
 ReachableExpander::ReachableExpander(ReachableExpanderOptions options)
@@ -381,15 +405,8 @@ ReachableExpansionResult ReachableExpander::expand(
   const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & geometry_cells) const
 {
   ReachableExpansionResult result;
-  result.surface_cells = geometry_cells;
   const ComponentMap components = buildSupportComponents(
     geometry_cells, options_, &result.support_component_count);
-  for (auto & entry : result.surface_cells) {
-    const auto component_it = components.find(entry.first);
-    if (component_it != components.end()) {
-      entry.second.support_component_id = component_it->second;
-    }
-  }
   const std::unordered_set<int> anchored_components = anchoredComponents(
     components, observed_seed_cells, options_);
   result.anchored_support_component_count = anchored_components.size();
@@ -397,6 +414,10 @@ ReachableExpansionResult ReachableExpander::expand(
   std::queue<QueueItem> queue;
   for (const GridIndex & seed : observed_seed_cells) {
     SurfaceCell & cell = result.surface_cells[seed];
+    const auto geometry_it = geometry_cells.find(seed);
+    if (geometry_it != geometry_cells.end()) {
+      cell = geometry_it->second;
+    }
     cell.cell = seed;
     cell.support = {seed.x, seed.y, seed.z - 1};
     cell.label = SurfaceLabel::ReachableSeed;
@@ -448,7 +469,8 @@ ReachableExpansionResult ReachableExpander::expand(
             continue;
           }
           if (!isBodyClear(
-              result.surface_cells, geometry_it->second, options_.body_clearance_cells))
+              geometry_cells, result.surface_cells, geometry_it->second,
+              options_.body_clearance_cells))
           {
             ++result.body_obstructed_rejected_count;
             continue;
@@ -501,7 +523,7 @@ ReachableExpansionResult ReachableExpander::expand(
               continue;
             }
             if (hasBodyObstruction(
-                result.surface_cells, candidate, options_.body_clearance_cells))
+                geometry_cells, result.surface_cells, candidate, options_.body_clearance_cells))
             {
               ++result.body_obstructed_rejected_count;
               continue;
@@ -522,7 +544,8 @@ ReachableExpansionResult ReachableExpander::expand(
                 continue;
               }
               if (!isBodyClear(
-                  result.surface_cells, geometry_it->second, options_.body_clearance_cells))
+                  geometry_cells, result.surface_cells, geometry_it->second,
+                  options_.body_clearance_cells))
               {
                 ++result.body_obstructed_rejected_count;
                 continue;
@@ -574,6 +597,10 @@ ReachableExpansionResult ReachableExpander::expand(
       continue;
     }
     SurfaceCell & cell = result.surface_cells[seed];
+    const auto geometry_it = geometry_cells.find(seed);
+    if (geometry_it != geometry_cells.end()) {
+      cell = geometry_it->second;
+    }
     cell.cell = seed;
     cell.support = {seed.x, seed.y, seed.z - 1};
     cell.label = SurfaceLabel::TrajectoryBridge;
@@ -597,6 +624,7 @@ ReachableExpansionResult ReachableExpander::expand(
     ++result.bridge_seed_count;
   }
 
+  keepOnlyTraversableSurfaceCells(result);
   return result;
 }
 

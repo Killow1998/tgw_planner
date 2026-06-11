@@ -100,6 +100,7 @@ void ExperienceSurfaceGraph::build(
   options_ = options;
   resolution_m_ = snapshot.resolution_m;
   buildBridgeAttachments(snapshot);
+  validator.reserveCellCenterFootprintCache(snapshot.surface.traversable_cells.size() * 8U);
 
   nodes_.reserve(snapshot.surface.traversable_cells.size());
   for (const GridIndex & cell : snapshot.surface.traversable_cells) {

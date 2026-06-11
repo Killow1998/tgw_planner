@@ -1071,7 +1071,7 @@ private:
     publishKeyframeGeometry(result.resource, geometry);
     publishTrajectory(result.resource);
     publishProjectionDebug(result.resource, projection);
-    publishExpansionDebug(result.resource, build);
+    publishExpansionDebug(result.resource, geometry, build);
     publishPlannerConnectivityDebug(result.resource);
     publishBackboneDebug(result.resource);
     publishStats(result, pbstream_path, &projection, &build);
@@ -2731,6 +2731,7 @@ private:
 
   void publishExpansionDebug(
     const N3NavResource & resource,
+    const ExperienceGeometryIndex & geometry,
     const ExperienceBuildResult & build)
   {
     if (!build.success) {
@@ -2747,11 +2748,8 @@ private:
     expanded_reachable_pub_->publish(makePointCloud(stamp, frame_id, expanded_points));
 
     std::vector<Point3> support_candidate_points;
-    support_candidate_points.reserve(build.snapshot.surface.surface_cells.size());
-    for (const auto & entry : build.snapshot.surface.surface_cells) {
-      if (entry.second.label == tgw_planner::core::SurfaceLabel::TrajectoryBridge) {
-        continue;
-      }
+    support_candidate_points.reserve(geometry.supportCandidates().size());
+    for (const auto & entry : geometry.supportCandidates()) {
       support_candidate_points.push_back(cellCenter(entry.first, build.snapshot.resolution_m));
     }
     support_candidate_pub_->publish(makePointCloud(stamp, frame_id, support_candidate_points));

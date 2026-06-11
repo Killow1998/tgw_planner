@@ -192,6 +192,12 @@ bool SurfaceTransitionValidator::isCellCenterFootprintSupported(
   return supported;
 }
 
+void SurfaceTransitionValidator::reserveCellCenterFootprintCache(std::size_t entries) const
+{
+  cell_center_footprint_cache_.reserve(
+    std::max(entries, cell_center_footprint_cache_.size()));
+}
+
 bool SurfaceTransitionValidator::isFootprintSupported(
   const NavigationSnapshot & snapshot, const Point3 & point, double yaw_rad) const
 {

@@ -139,6 +139,7 @@ public:
   bool isEndpointCell(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
   bool isCellCenterFootprintSupported(
     const NavigationSnapshot & snapshot, const GridIndex & cell, double yaw_rad) const;
+  void reserveCellCenterFootprintCache(std::size_t entries) const;
 
 private:
   struct FootprintCacheKey
