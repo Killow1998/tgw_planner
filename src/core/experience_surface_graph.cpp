@@ -16,6 +16,72 @@ bool isBridgeLabel(const SurfaceCell & cell)
 {
   return cell.label == SurfaceLabel::TrajectoryBridge;
 }
+
+int directionIndex(int dx, int dy)
+{
+  if (dx == 1 && dy == 0) {
+    return 0;
+  }
+  if (dx == 1 && dy == 1) {
+    return 1;
+  }
+  if (dx == 0 && dy == 1) {
+    return 2;
+  }
+  if (dx == -1 && dy == 1) {
+    return 3;
+  }
+  if (dx == -1 && dy == 0) {
+    return 4;
+  }
+  if (dx == -1 && dy == -1) {
+    return 5;
+  }
+  if (dx == 0 && dy == -1) {
+    return 6;
+  }
+  if (dx == 1 && dy == -1) {
+    return 7;
+  }
+  return -1;
+}
+
+bool hasDirectionalFootprintSupport(const SurfaceNode & node, int dx, int dy)
+{
+  const int index = directionIndex(dx, dy);
+  return index >= 0 && (node.directional_footprint_mask & (1U << index)) != 0U;
+}
+
+bool hasTraversableCellAtXY(
+  const NavigationSnapshot & snapshot,
+  const SurfaceTransitionValidator & validator,
+  int x,
+  int y,
+  int min_z,
+  int max_z)
+{
+  for (int z = min_z; z <= max_z; ++z) {
+    if (validator.isCellTraversable(snapshot, {x, y, z})) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool hasDiagonalCornerSupport(
+  const NavigationSnapshot & snapshot,
+  const SurfaceTransitionValidator & validator,
+  const GridIndex & from,
+  const GridIndex & to)
+{
+  if (std::abs(to.x - from.x) != 1 || std::abs(to.y - from.y) != 1) {
+    return true;
+  }
+  const int min_z = std::min(from.z, to.z);
+  const int max_z = std::max(from.z, to.z);
+  return hasTraversableCellAtXY(snapshot, validator, to.x, from.y, min_z, max_z) &&
+         hasTraversableCellAtXY(snapshot, validator, from.x, to.y, min_z, max_z);
+}
 }
 
 void ExperienceSurfaceGraph::build(
@@ -67,6 +133,21 @@ void ExperienceSurfaceGraph::build(
     }
     node.clearance_m = snapshot.clearance.clearanceDistance(cell);
     node.risk = snapshot.risk.riskCost(cell);
+    for (int dx = -1; dx <= 1; ++dx) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        if (dx == 0 && dy == 0) {
+          continue;
+        }
+        const int index = directionIndex(dx, dy);
+        if (index < 0) {
+          continue;
+        }
+        const double yaw = std::atan2(static_cast<double>(dy), static_cast<double>(dx));
+        if (validator.isCellCenterFootprintSupported(snapshot, cell, yaw)) {
+          node.directional_footprint_mask |= static_cast<std::uint8_t>(1U << index);
+        }
+      }
+    }
 
     nodes_.push_back(node);
     cell_to_node_[cell] = node.id;
@@ -344,9 +425,28 @@ std::optional<SurfaceEdge> ExperienceSurfaceGraph::makeContinuousSurfaceEdge(
       ++metrics_.graph_rejected_cross_component_edges;
       return std::nullopt;
     }
-    const TransitionReport report = validator.validate(snapshot, from.cell, to.cell);
-    if (!report.allowed) {
-      return std::nullopt;
+    const int max_step_cells = std::max(
+      1,
+      static_cast<int>(std::ceil(
+        options.max_edge_height_delta_m / snapshot.resolution_m)));
+    const bool direct_surface_neighbor =
+      std::abs(to.cell.x - from.cell.x) <= 1 &&
+      std::abs(to.cell.y - from.cell.y) <= 1 &&
+      std::abs(to.cell.z - from.cell.z) <= max_step_cells;
+    if (direct_surface_neighbor) {
+      if (!hasDiagonalCornerSupport(snapshot, validator, from.cell, to.cell)) {
+        return std::nullopt;
+      }
+      if (!hasDirectionalFootprintSupport(from, dx, dy) ||
+        !hasDirectionalFootprintSupport(to, dx, dy))
+      {
+        return std::nullopt;
+      }
+    } else {
+      const TransitionReport report = validator.validate(snapshot, from.cell, to.cell);
+      if (!report.allowed) {
+        return std::nullopt;
+      }
     }
   }
 

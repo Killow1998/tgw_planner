@@ -57,6 +57,7 @@ struct SurfaceNode
   double confidence{0.0};
   bool bridge{false};
   bool bridge_endpoint{false};
+  std::uint8_t directional_footprint_mask{0U};
 };
 
 struct SurfaceEdge

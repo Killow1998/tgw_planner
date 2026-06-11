@@ -89,10 +89,10 @@ TransitionReport SurfaceTransitionValidator::validate(
   const Point3 to_point = cellCenter(to, snapshot.resolution_m);
   const double yaw = std::atan2(to_point.y - from_point.y, to_point.x - from_point.x);
   if (isDirectSurfaceNeighbor(snapshot, from, to)) {
-    if (!isFootprintSupported(snapshot, from_point, yaw)) {
+    if (!isCellCenterFootprintSupported(snapshot, from, yaw)) {
       return {false, "from_footprint_not_supported"};
     }
-    if (!isFootprintSupported(snapshot, to_point, yaw)) {
+    if (!isCellCenterFootprintSupported(snapshot, to, yaw)) {
       return {false, "to_footprint_not_supported"};
     }
     return {true, ""};
@@ -154,14 +154,42 @@ bool SurfaceTransitionValidator::isEndpointCell(
   if (!options_.require_footprint_support) {
     return true;
   }
-  const Point3 point = cellCenter(cell, snapshot.resolution_m);
   constexpr double headings[] = {0.0, 1.5707963267948966, 3.141592653589793, -1.5707963267948966};
   for (const double yaw : headings) {
-    if (isFootprintSupported(snapshot, point, yaw)) {
+    if (isCellCenterFootprintSupported(snapshot, cell, yaw)) {
       return true;
     }
   }
   return false;
+}
+
+SurfaceTransitionValidator::FootprintCacheKey SurfaceTransitionValidator::footprintCacheKey(
+  const NavigationSnapshot & snapshot, const GridIndex & cell, double yaw_rad) const
+{
+  constexpr double kYawBucketScale = 1000000.0;
+  return {
+    &snapshot,
+    cell,
+    static_cast<int>(std::llround(std::cos(yaw_rad) * kYawBucketScale)),
+    static_cast<int>(std::llround(std::sin(yaw_rad) * kYawBucketScale))};
+}
+
+bool SurfaceTransitionValidator::isCellCenterFootprintSupported(
+  const NavigationSnapshot & snapshot, const GridIndex & cell, double yaw_rad) const
+{
+  if (cell_center_footprint_cache_snapshot_ != &snapshot) {
+    cell_center_footprint_cache_snapshot_ = &snapshot;
+    cell_center_footprint_cache_.clear();
+  }
+  const FootprintCacheKey key = footprintCacheKey(snapshot, cell, yaw_rad);
+  const auto cached = cell_center_footprint_cache_.find(key);
+  if (cached != cell_center_footprint_cache_.end()) {
+    return cached->second;
+  }
+  const bool supported = isFootprintSupported(
+    snapshot, cellCenter(cell, snapshot.resolution_m), yaw_rad);
+  cell_center_footprint_cache_.emplace(key, supported);
+  return supported;
 }
 
 bool SurfaceTransitionValidator::isFootprintSupported(

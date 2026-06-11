@@ -64,28 +64,42 @@ FootprintSupportReport RobotFootprint::supportReport(
   FootprintSupportReport report;
   const int vertical_tolerance_cells = std::max(
     0, static_cast<int>(std::ceil(options_.support_height_tolerance_m / resolution_m)));
-  for (const Point3 & sample : sampleFootprint(center, yaw_rad, resolution_m)) {
-    ++report.total_samples;
-    const GridIndex cell = worldToGrid(sample, resolution_m);
-    bool supported = false;
-    for (int dz = -vertical_tolerance_cells; dz <= vertical_tolerance_cells; ++dz) {
-      const GridIndex candidate{cell.x, cell.y, cell.z + dz};
-      if (surface.forbidden_cells.find(candidate) != surface.forbidden_cells.end()) {
-        report.reason = "footprint overlaps forbidden cell";
-        return report;
+
+  const double step = std::max(0.05, 0.5 * resolution_m);
+  const double front = options_.base_to_front_m;
+  const double rear = options_.length_m - options_.base_to_front_m;
+  const double half_width = 0.5 * options_.width_m;
+  const double cos_yaw = std::cos(yaw_rad);
+  const double sin_yaw = std::sin(yaw_rad);
+
+  for (double x = -rear; x <= front + 1.0e-9; x += step) {
+    for (double y = -half_width; y <= half_width + 1.0e-9; y += step) {
+      ++report.total_samples;
+      const Point3 sample{
+        center.x + x * cos_yaw - y * sin_yaw,
+        center.y + x * sin_yaw + y * cos_yaw,
+        center.z};
+      const GridIndex cell = worldToGrid(sample, resolution_m);
+      bool supported = false;
+      for (int dz = -vertical_tolerance_cells; dz <= vertical_tolerance_cells; ++dz) {
+        const GridIndex candidate{cell.x, cell.y, cell.z + dz};
+        if (surface.forbidden_cells.find(candidate) != surface.forbidden_cells.end()) {
+          report.reason = "footprint overlaps forbidden cell";
+          return report;
+        }
+        if (surface.blocked_cells.find(candidate) != surface.blocked_cells.end()) {
+          report.reason = "footprint overlaps blocked cell";
+          return report;
+        }
+        if (surface.traversable_cells.find(candidate) == surface.traversable_cells.end()) {
+          continue;
+        }
+        supported = true;
+        break;
       }
-      if (surface.blocked_cells.find(candidate) != surface.blocked_cells.end()) {
-        report.reason = "footprint overlaps blocked cell";
-        return report;
+      if (supported) {
+        ++report.supported_samples;
       }
-      if (surface.traversable_cells.find(candidate) == surface.traversable_cells.end()) {
-        continue;
-      }
-      supported = true;
-      break;
-    }
-    if (supported) {
-      ++report.supported_samples;
     }
   }
   if (report.total_samples > 0) {

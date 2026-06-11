@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "tgw_planner/core/experience_surface_graph.hpp"
@@ -135,8 +137,43 @@ public:
     const NavigationSnapshot & snapshot, const GridIndex & cell) const;
   bool isCellTraversable(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
   bool isEndpointCell(const NavigationSnapshot & snapshot, const GridIndex & cell) const;
+  bool isCellCenterFootprintSupported(
+    const NavigationSnapshot & snapshot, const GridIndex & cell, double yaw_rad) const;
 
 private:
+  struct FootprintCacheKey
+  {
+    const NavigationSnapshot * snapshot{nullptr};
+    GridIndex cell;
+    int cos_bucket{0};
+    int sin_bucket{0};
+
+    bool operator==(const FootprintCacheKey & other) const
+    {
+      return snapshot == other.snapshot &&
+             cell == other.cell &&
+             cos_bucket == other.cos_bucket &&
+             sin_bucket == other.sin_bucket;
+    }
+  };
+
+  struct FootprintCacheKeyHash
+  {
+    std::size_t operator()(const FootprintCacheKey & key) const
+    {
+      std::size_t seed = std::hash<const void *>{}(key.snapshot);
+      const auto mix = [&seed](std::size_t value) {
+        seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
+      };
+      mix(GridIndexHash{}(key.cell));
+      mix(std::hash<int>{}(key.cos_bucket));
+      mix(std::hash<int>{}(key.sin_bucket));
+      return seed;
+    }
+  };
+
+  FootprintCacheKey footprintCacheKey(
+    const NavigationSnapshot & snapshot, const GridIndex & cell, double yaw_rad) const;
   bool isFootprintSupported(
     const NavigationSnapshot & snapshot, const Point3 & point, double yaw_rad) const;
   bool isDirectSurfaceNeighbor(
@@ -150,6 +187,9 @@ private:
 
   SurfacePlannerOptions options_;
   RobotFootprint footprint_;
+  mutable const NavigationSnapshot * cell_center_footprint_cache_snapshot_{nullptr};
+  mutable std::unordered_map<FootprintCacheKey, bool, FootprintCacheKeyHash>
+  cell_center_footprint_cache_;
 };
 
 class SurfaceAstarPlanner
