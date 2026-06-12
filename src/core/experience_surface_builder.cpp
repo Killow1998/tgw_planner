@@ -154,6 +154,8 @@ void ExperienceSurfaceBuilder::rebuildBoundaryLayer(SurfaceMap & surface) const
   surface.dropoff_boundary_cells.clear();
   surface.wall_boundary_cells.clear();
   surface.forbidden_boundary_cells.clear();
+  surface.boundary_cells.reserve(surface.traversable_cells.size() / 8U + 1U);
+  surface.wall_boundary_cells.reserve(surface.traversable_cells.size() / 8U + 1U);
 
   for (const GridIndex & cell : surface.traversable_cells) {
     bool boundary = false;

@@ -119,31 +119,26 @@ bool collectHoleFillSupport(
   const std::unordered_set<GridIndex, GridIndexHash> & traversable_cells,
   const GridIndex & candidate,
   const ReachableExpanderOptions & options,
+  const std::vector<CellOffset> & support_offsets,
   double * average_height_m)
 {
   int count = 0;
   double min_height = std::numeric_limits<double>::infinity();
   double max_height = -std::numeric_limits<double>::infinity();
   double total_height = 0.0;
-  for (int dx = -1; dx <= 1; ++dx) {
-    for (int dy = -1; dy <= 1; ++dy) {
-      if (dx == 0 && dy == 0) {
-        continue;
-      }
-      for (int dz = -options.vertical_tolerance_cells; dz <= options.vertical_tolerance_cells;
-        ++dz)
-      {
-        const GridIndex neighbor{candidate.x + dx, candidate.y + dy, candidate.z + dz};
-        if (traversable_cells.find(neighbor) == traversable_cells.end()) {
-          continue;
-        }
-        const double height = cellHeight(surface_cells, neighbor, options.resolution_m);
-        min_height = std::min(min_height, height);
-        max_height = std::max(max_height, height);
-        total_height += height;
-        ++count;
-      }
+  for (const CellOffset & offset : support_offsets) {
+    const GridIndex neighbor{
+      candidate.x + offset.dx,
+      candidate.y + offset.dy,
+      candidate.z + offset.dz};
+    if (traversable_cells.find(neighbor) == traversable_cells.end()) {
+      continue;
     }
+    const double height = cellHeight(surface_cells, neighbor, options.resolution_m);
+    min_height = std::min(min_height, height);
+    max_height = std::max(max_height, height);
+    total_height += height;
+    ++count;
   }
   if (count < options.min_hole_fill_neighbors) {
     return false;
@@ -164,7 +159,6 @@ GridIndex columnKey(const GridIndex & cell)
 
 AnchorColumns buildAnchorColumns(
   const std::unordered_set<GridIndex, GridIndexHash> & anchors,
-  const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & cells,
   const ReachableExpanderOptions & options)
 {
   AnchorColumns columns;
@@ -184,7 +178,6 @@ AnchorColumns buildAnchorColumns(
   AnchorIntervals intervals;
   intervals.reserve(anchors.size() * row_offsets.size());
   for (const GridIndex & anchor : anchors) {
-    (void)cellHeight(cells, anchor, options.resolution_m);
     for (const auto & row_offset : row_offsets) {
       const int dx = row_offset.first;
       const int dy_limit = row_offset.second;
@@ -244,11 +237,14 @@ bool isInsideAnchorEnvelope(
   return false;
 }
 
+std::vector<CellOffset> buildComponentOffsets(int vertical_tolerance_cells);
+
 void labelSupportComponent(
   const std::unordered_map<GridIndex, SurfaceCell, GridIndexHash> & cells,
   const GridIndex & seed,
   int component_id,
   const ReachableExpanderOptions & options,
+  const std::vector<CellOffset> & component_offsets,
   ComponentMap & components)
 {
   if (components.find(seed) != components.end()) {
@@ -266,31 +262,25 @@ void labelSupportComponent(
     const GridIndex current = queue.front();
     queue.pop();
     const double current_height = cellHeight(cells, current, options.resolution_m);
-    for (int dx = -1; dx <= 1; ++dx) {
-      for (int dy = -1; dy <= 1; ++dy) {
-        for (int dz = -options.vertical_tolerance_cells; dz <= options.vertical_tolerance_cells;
-          ++dz)
-        {
-          if (dx == 0 && dy == 0 && dz == 0) {
-            continue;
-          }
-          const GridIndex neighbor{current.x + dx, current.y + dy, current.z + dz};
-          if (components.find(neighbor) != components.end()) {
-            continue;
-          }
-          const auto it = cells.find(neighbor);
-          if (it == cells.end()) {
-            continue;
-          }
-          if (std::abs(it->second.height_m - current_height) >
-            options.max_expansion_step_height_m)
-          {
-            continue;
-          }
-          components[neighbor] = component_id;
-          queue.push(neighbor);
-        }
+    for (const CellOffset & offset : component_offsets) {
+      const GridIndex neighbor{
+        current.x + offset.dx,
+        current.y + offset.dy,
+        current.z + offset.dz};
+      if (components.find(neighbor) != components.end()) {
+        continue;
       }
+      const auto it = cells.find(neighbor);
+      if (it == cells.end()) {
+        continue;
+      }
+      if (std::abs(it->second.height_m - current_height) >
+        options.max_expansion_step_height_m)
+      {
+        continue;
+      }
+      components[neighbor] = component_id;
+      queue.push(neighbor);
     }
   }
 }
@@ -303,24 +293,20 @@ ComponentMap buildAnchoredSupportComponents(
 {
   ComponentMap components;
   components.reserve(std::min(cells.size(), observed_seed_cells.size() * 128U));
+  const std::vector<CellOffset> component_offsets = buildComponentOffsets(
+    options.vertical_tolerance_cells);
   int next_component = 0;
   for (const GridIndex & seed : observed_seed_cells) {
-    for (int dx = -1; dx <= 1; ++dx) {
-      for (int dy = -1; dy <= 1; ++dy) {
-        for (int dz = -options.vertical_tolerance_cells; dz <= options.vertical_tolerance_cells;
-          ++dz)
-        {
-          const GridIndex start{seed.x + dx, seed.y + dy, seed.z + dz};
-          if (components.find(start) != components.end()) {
-            continue;
-          }
-          if (cells.find(start) == cells.end()) {
-            continue;
-          }
-          labelSupportComponent(cells, start, next_component, options, components);
-          ++next_component;
-        }
+    for (const CellOffset & offset : component_offsets) {
+      const GridIndex start{seed.x + offset.dx, seed.y + offset.dy, seed.z + offset.dz};
+      if (components.find(start) != components.end()) {
+        continue;
       }
+      if (cells.find(start) == cells.end()) {
+        continue;
+      }
+      labelSupportComponent(cells, start, next_component, options, component_offsets, components);
+      ++next_component;
     }
   }
   *component_count = static_cast<std::size_t>(next_component);
@@ -371,6 +357,23 @@ std::vector<CellOffset> buildExpansionOffsets(int radius, int vertical_tolerance
   return offsets;
 }
 
+std::vector<CellOffset> buildComponentOffsets(int vertical_tolerance_cells)
+{
+  std::vector<CellOffset> offsets;
+  offsets.reserve(9U * static_cast<std::size_t>(2 * vertical_tolerance_cells + 1));
+  for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      for (int dz = -vertical_tolerance_cells; dz <= vertical_tolerance_cells; ++dz) {
+        if (dx == 0 && dy == 0 && dz == 0) {
+          continue;
+        }
+        offsets.push_back({dx, dy, dz});
+      }
+    }
+  }
+  return offsets;
+}
+
 std::vector<CellOffset> buildHoleCandidateOffsets()
 {
   std::vector<CellOffset> offsets;
@@ -381,6 +384,23 @@ std::vector<CellOffset> buildHoleCandidateOffsets()
         continue;
       }
       offsets.push_back({dx, dy, 0});
+    }
+  }
+  return offsets;
+}
+
+std::vector<CellOffset> buildHoleSupportOffsets(int vertical_tolerance_cells)
+{
+  std::vector<CellOffset> offsets;
+  offsets.reserve(8U * static_cast<std::size_t>(2 * vertical_tolerance_cells + 1));
+  for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      if (dx == 0 && dy == 0) {
+        continue;
+      }
+      for (int dz = -vertical_tolerance_cells; dz <= vertical_tolerance_cells; ++dz) {
+        offsets.push_back({dx, dy, dz});
+      }
     }
   }
   return offsets;
@@ -466,6 +486,8 @@ ReachableExpansionResult ReachableExpander::expand(
   const std::vector<CellOffset> expansion_offsets = buildExpansionOffsets(
     options_.expansion_radius_cells, options_.vertical_tolerance_cells);
   const std::vector<CellOffset> hole_candidate_offsets = buildHoleCandidateOffsets();
+  const std::vector<CellOffset> hole_support_offsets = buildHoleSupportOffsets(
+    options_.vertical_tolerance_cells);
   const auto t_components = std::chrono::steady_clock::now();
   const ComponentMap components = buildAnchoredSupportComponents(
     geometry_cells, observed_seed_cells, options_, &result.support_component_count);
@@ -498,7 +520,7 @@ ReachableExpansionResult ReachableExpander::expand(
   result.seed_initialization_time_ms = elapsedMs(t_seed_init);
   const auto t_anchor_envelope = std::chrono::steady_clock::now();
   const AnchorColumns anchor_columns = buildAnchorColumns(
-    result.traversable_cells, result.surface_cells, options_);
+    result.traversable_cells, options_);
   result.anchor_envelope_time_ms = elapsedMs(t_anchor_envelope);
   std::unordered_set<GridIndex, GridIndexHash> permanently_rejected_expansion_cells;
   permanently_rejected_expansion_cells.reserve(
@@ -534,6 +556,12 @@ ReachableExpansionResult ReachableExpander::expand(
         permanently_rejected_expansion_cells.insert(neighbor);
         continue;
       }
+      if (std::abs(geometry_it->second.height_m - current.height_m) >
+        options_.max_expansion_step_height_m)
+      {
+        ++result.rejected_expansion_count;
+        continue;
+      }
       if (!isInsideAnchorEnvelope(
           anchor_columns, neighbor, geometry_it->second.height_m,
           options_.experience_anchor_height_tolerance_m,
@@ -549,12 +577,6 @@ ReachableExpansionResult ReachableExpander::expand(
       {
         ++result.body_obstructed_rejected_count;
         permanently_rejected_expansion_cells.insert(neighbor);
-        continue;
-      }
-      if (std::abs(geometry_it->second.height_m - current.height_m) >
-        options_.max_expansion_step_height_m)
-      {
-        ++result.rejected_expansion_count;
         continue;
       }
       if (!result.traversable_cells.insert(neighbor).second) {
@@ -608,7 +630,7 @@ ReachableExpansionResult ReachableExpander::expand(
           double average_height = 0.0;
           if (!collectHoleFillSupport(
               result.surface_cells, result.traversable_cells, candidate, options_,
-              &average_height))
+              hole_support_offsets, &average_height))
           {
             continue;
           }

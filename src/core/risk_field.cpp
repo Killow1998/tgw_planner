@@ -15,6 +15,7 @@ RiskField::RiskField(RiskFieldOptions options)
 void RiskField::compute(const SurfaceMap & surface, const ClearanceField & clearance)
 {
   risk_.clear();
+  risk_.reserve(surface.boundary_cells.size());
   for (const GridIndex & cell : surface.traversable_cells) {
     double risk = 0.0;
     if (surface.boundary_cells.find(cell) != surface.boundary_cells.end()) {

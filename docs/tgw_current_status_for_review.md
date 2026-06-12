@@ -341,8 +341,8 @@ Measured on the current development CPU:
 
 | Scene | End-to-end preprocess | First query | Peak RSS | Main hotspots |
 | --- | ---: | ---: | ---: | --- |
-| 20260608 | about 4.7s | 0.15ms | 680 MB | surface build 2.26s, surface graph 0.98s |
-| 20260610 | about 6.6s | 0.29ms | 728 MB | surface build 3.61s, surface graph 1.64s |
+| 20260608 | about 4.6s | 0.14ms | 680 MB | surface build 2.15s, surface graph 1.00s |
+| 20260610 | about 6.6s | 0.27ms | 728 MB | surface build 3.68s, surface graph 1.59s |
 
 Interpretation:
 
@@ -360,11 +360,14 @@ Recent 20260610 benchmark breakdown:
 read_pbstream: 0.18s
 geometry_index_build: 0.76s
 trajectory_projection: 0.24s
-surface_build: 3.61s
-surface_graph_build: 1.64s
+surface_build: 3.68s
+  expansion frontier/wave: about 1.66s / 1.82s
+  hole fill: about 0.63s
+  clearance: about 0.46s
+surface_graph_build: 1.59s
 backbone_build: 0.16s
 hybrid_graph_build: 0.02s
-first_query: 0.29ms
+first_query: 0.27ms
 ```
 
 The acceleration came from:
@@ -372,12 +375,30 @@ The acceleration came from:
 ```text
 1. using the shared ExperienceGeometryIndex as the only keyframe cloud pass;
 2. making reachable expansion avoid repeated neighbor offset generation,
-   temporary vectors, and redundant component lookups;
-3. making surface graph node filtering compute endpoint support and
-   directional footprint support in one pass;
-4. tightening the default trajectory ROI from 1.8m to 1.2m after regression
+   temporary vectors, redundant component lookups, and one unused anchor
+   height lookup;
+3. making clearance / boundary / risk construction pre-allocate hot data and
+   reuse precomputed clearance neighbor offsets;
+4. making surface graph node filtering compute endpoint support and
+   directional footprint support in one pass, then reject obvious
+   cross-component / unsupported-footprint edges before the full edge builder;
+5. tightening the default trajectory ROI from 1.8m to 1.2m after regression
    evidence showed both golden scenes still pass.
 ```
+
+The ROI is a bounded experience-planner knob, not the only optimization.
+With the current code and a wider diagnostic ROI:
+
+```text
+scene_20260610, roi=1.8m:
+  preprocess: about 8.8s
+  surface_build: about 4.87s
+  surface_graph_build: about 2.12s
+```
+
+This is still well below the older 13.8s baseline, but the default remains
+1.2m because it preserves the current golden routes while reducing startup
+load. New scenes should run ROI sweep before changing this default.
 
 ## Current Run Commands
 

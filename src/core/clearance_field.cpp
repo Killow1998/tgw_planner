@@ -22,6 +22,35 @@ struct QueueCompare
     return lhs.distance > rhs.distance;
   }
 };
+
+struct NeighborOffset
+{
+  int dx{0};
+  int dy{0};
+  int dz{0};
+  double step_cells{0.0};
+};
+
+const std::vector<NeighborOffset> & neighborOffsets()
+{
+  static const std::vector<NeighborOffset> offsets = [] {
+    std::vector<NeighborOffset> out;
+    out.reserve(26U);
+    for (int dx = -1; dx <= 1; ++dx) {
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dz = -1; dz <= 1; ++dz) {
+          if (dx == 0 && dy == 0 && dz == 0) {
+            continue;
+          }
+          out.push_back(
+            {dx, dy, dz, std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz))});
+        }
+      }
+    }
+    return out;
+  }();
+  return offsets;
+}
 }  // namespace
 
 void ClearanceField::compute(
@@ -33,8 +62,12 @@ void ClearanceField::compute(
   if (traversable.empty()) {
     return;
   }
+  distance_m_.reserve(traversable.size());
 
-  std::priority_queue<QueueItem, std::vector<QueueItem>, QueueCompare> queue;
+  std::vector<QueueItem> heap_storage;
+  heap_storage.reserve(traversable.size());
+  std::priority_queue<QueueItem, std::vector<QueueItem>, QueueCompare> queue(
+    QueueCompare{}, std::move(heap_storage));
   const double boundary_center_clearance = std::max(0.0, 0.5 * resolution_m);
   for (const GridIndex & cell : boundary) {
     if (traversable.find(cell) == traversable.end()) {
@@ -59,28 +92,21 @@ void ClearanceField::compute(
       continue;
     }
 
-    for (int dx = -1; dx <= 1; ++dx) {
-      for (int dy = -1; dy <= 1; ++dy) {
-        for (int dz = -1; dz <= 1; ++dz) {
-          if (dx == 0 && dy == 0 && dz == 0) {
-            continue;
-          }
-          const GridIndex neighbor{
-            current.cell.x + dx, current.cell.y + dy, current.cell.z + dz};
-          if (traversable.find(neighbor) == traversable.end()) {
-            continue;
-          }
-          const double step =
-            std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz)) * resolution_m;
-          const double candidate = current.distance + step;
-          const auto old = distance_m_.find(neighbor);
-          if (old != distance_m_.end() && candidate >= old->second) {
-            continue;
-          }
-          distance_m_[neighbor] = candidate;
-          queue.push({neighbor, candidate});
-        }
+    for (const NeighborOffset & offset : neighborOffsets()) {
+      const GridIndex neighbor{
+        current.cell.x + offset.dx,
+        current.cell.y + offset.dy,
+        current.cell.z + offset.dz};
+      if (traversable.find(neighbor) == traversable.end()) {
+        continue;
       }
+      const double candidate = current.distance + offset.step_cells * resolution_m;
+      const auto old = distance_m_.find(neighbor);
+      if (old != distance_m_.end() && candidate >= old->second) {
+        continue;
+      }
+      distance_m_[neighbor] = candidate;
+      queue.push({neighbor, candidate});
     }
   }
 }

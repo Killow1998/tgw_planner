@@ -246,6 +246,10 @@ void ExperienceSurfaceGraph::build(
       SurfaceTransitionValidator local_validator(validator.options());
       local_validator.reserveCellCenterFootprintCache((end - begin) * 2U);
       SurfaceGraphBuildMetrics & local_metrics = thread_metrics[thread_index];
+      const int max_step_cells = std::max(
+        1,
+        static_cast<int>(std::ceil(
+          options.max_edge_height_delta_m / snapshot.resolution_m)));
       for (std::size_t node_index = begin; node_index < end; ++node_index) {
         const SurfaceNode & node = nodes_[node_index];
         std::vector<SurfaceEdge> & edges = adjacency_[node.id.id];
@@ -265,6 +269,25 @@ void ExperienceSurfaceGraph::build(
                 continue;
               }
               const SurfaceNode & candidate = nodes_[candidate_id.id];
+              const bool bridge_edge = node.bridge || candidate.bridge;
+              if (!bridge_edge) {
+                if (node.surface_layer_id < 0 ||
+                  node.surface_layer_id != candidate.surface_layer_id)
+                {
+                  ++local_metrics.graph_rejected_cross_component_edges;
+                  continue;
+                }
+                const bool direct_surface_neighbor =
+                  std::abs(candidate.cell.x - node.cell.x) <= 1 &&
+                  std::abs(candidate.cell.y - node.cell.y) <= 1 &&
+                  std::abs(candidate.cell.z - node.cell.z) <= max_step_cells;
+                if (direct_surface_neighbor &&
+                  (!hasDirectionalFootprintSupport(node, dx, dy) ||
+                  !hasDirectionalFootprintSupport(candidate, dx, dy)))
+                {
+                  continue;
+                }
+              }
               const std::optional<SurfaceEdge> edge = makeContinuousSurfaceEdge(
                 snapshot, local_validator, options, node, candidate, dx, dy, local_metrics);
               if (edge.has_value()) {
@@ -536,12 +559,12 @@ std::optional<SurfaceEdge> ExperienceSurfaceGraph::makeContinuousSurfaceEdge(
       std::abs(to.cell.y - from.cell.y) <= 1 &&
       std::abs(to.cell.z - from.cell.z) <= max_step_cells;
     if (direct_surface_neighbor) {
-      if (!hasDiagonalCornerSupport(snapshot, validator, from.cell, to.cell)) {
-        return std::nullopt;
-      }
       if (!hasDirectionalFootprintSupport(from, dx, dy) ||
         !hasDirectionalFootprintSupport(to, dx, dy))
       {
+        return std::nullopt;
+      }
+      if (!hasDiagonalCornerSupport(snapshot, validator, from.cell, to.cell)) {
         return std::nullopt;
       }
     } else {

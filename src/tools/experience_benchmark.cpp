@@ -235,10 +235,14 @@ int main(int argc, char ** argv)
     first_query_ms = elapsedMs(t_query);
     first_query_success = plan.success;
   }
+  const double preprocess_ms =
+    read_ms + geometry_ms + projection_ms + surface_ms + surface_graph_ms +
+    backbone_ms + hybrid_ms;
 
   std::cout << "{";
   writeJsonString("status", "ok");
   writeJsonField("trajectory_roi_distance_m", geometry_options.trajectory_roi_distance_m);
+  writeJsonField("preprocess_ms", preprocess_ms);
   writeJsonField("read_pbstream_ms", read_ms);
   writeJsonField("geometry_index_build_ms", geometry_ms);
   writeJsonField("geometry_transform_insert_ms", geometry_result.transform_insert_time_ms);
@@ -249,7 +253,9 @@ int main(int argc, char ** argv)
     "geometry_support_body_obstruction_ms", geometry_result.support_body_obstruction_time_ms);
   writeJsonField("trajectory_projection_ms", projection_ms);
   writeJsonField("surface_build_ms", surface_ms);
+  writeJsonField("surface_build_total_ms", surface_ms);
   writeJsonField("surface_expansion_ms", surface.expansion_time_ms);
+  writeJsonField("expansion_total_ms", surface.expansion_time_ms);
   writeJsonField("surface_expansion_components_ms", surface.expansion_anchored_component_time_ms);
   writeJsonField("surface_expansion_seed_init_ms", surface.expansion_seed_initialization_time_ms);
   writeJsonField("surface_expansion_anchor_envelope_ms", surface.expansion_anchor_envelope_time_ms);
@@ -275,8 +281,11 @@ int main(int argc, char ** argv)
   writeJsonField("raw_geometry_cells", geometry_result.raw_geometry_cell_count);
   writeJsonField("support_candidates", geometry_result.support_candidate_count);
   writeJsonField("support_columns", geometry_result.support_column_count);
+  writeJsonField("traversable_cells", surface.snapshot.surface.traversable_cells.size());
   writeJsonField("surface_nodes", surface_graph.nodes().size());
+  writeJsonField("graph_nodes", surface_graph.nodes().size());
   writeJsonField("surface_edges", surface_graph.metrics().graph_edges);
+  writeJsonField("graph_edges", surface_graph.metrics().graph_edges);
   writeJsonField("backbone_nodes", backbone_graph.nodes().size());
   writeJsonField("backbone_edges", backbone_graph.edges().size());
   writeJsonField("portals", backbone_graph.portals().size());
