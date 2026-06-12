@@ -418,6 +418,7 @@ Tested variants:
 2. anchored-component-only `GridIndex -> state index`
 3. sparse fixed-size chunk lookup
 4. bounded dense local array over the anchored component bounding box
+5. source-owned `SupportCandidateStore` with vector entries + packed-key lookup
 ```
 
 Result on `scene_20260610`:
@@ -426,6 +427,9 @@ Result on `scene_20260610`:
 baseline after e7ae036: about 6.15s preprocess, about 732MB RSS
 all / anchored / chunked side-index variants: slower surface_build
 64M-cell dense array variant: about 6.31s preprocess, about 786MB RSS
+source-owned vector store variant:
+  component labeling improved, but expansion frontier regressed;
+  preprocess about 6.9s, peak RSS about 760MB
 ```
 
 Interpretation:
@@ -433,9 +437,11 @@ Interpretation:
 ```text
 The current sparse grid still pays either hash lookup cost or dense memory
 cost when a compact workspace is bolted onto the side. The clean next target
-is not another side index inside ReachableExpander. It is to move the source
-geometry / support candidates themselves toward packed-key or chunked storage,
-then let expansion consume that native storage directly.
+is not another side index inside ReachableExpander, nor a vector wrapper around
+the existing unordered_map. It is to make GeometryIndex build support evidence
+directly into a native chunked / tiled representation, so neighbor access is
+array-local from the moment points are inserted.
+Until that rewrite is justified, the verified baseline should stay in place.
 ```
 
 ## Current Run Commands
