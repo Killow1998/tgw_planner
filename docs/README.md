@@ -10,6 +10,10 @@ TGW pbstream experience planner.
   first.
 - [exp/golden_scenes.md](exp/golden_scenes.md) defines the current golden
   regression scenes and commands.
+- [exp/edge_benchmark_plan.md](exp/edge_benchmark_plan.md) defines the edge
+  device benchmark checklist before any further performance rewrite.
+- [hil_test_plan.md](hil_test_plan.md) defines the supervised robot dry-run
+  and low-speed HIL validation stages.
 - [question/README.md](question/README.md) indexes historical GPT Pro review
   prompts and marks which ones are still relevant.
 
@@ -20,6 +24,7 @@ TGW pbstream experience planner.
 | `data/` | Golden pbstream and debug data used by core regression. Large map files are intentionally local artifacts. |
 | `exp/` | Reproducible experiment summaries, selected plots, and golden regression outputs. |
 | `question/` | Historical review prompts, screenshots, and issue writeups used to drive design decisions. |
+| `hil_test_plan.md` | Supervised robot-side dry-run and low-speed HIL checklist. |
 
 ## Current Golden Inputs
 
@@ -60,4 +65,3 @@ resolved or reframed:
 
 Keep those documents as design evidence, but do not treat them as the current
 implementation contract.
-

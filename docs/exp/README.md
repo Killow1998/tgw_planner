@@ -6,6 +6,8 @@ experience planner.
 ## Current Regression Entry Point
 
 Use [golden_scenes.md](golden_scenes.md) for the canonical commands.
+Use [edge_benchmark_plan.md](edge_benchmark_plan.md) for target-device
+preprocess / query / memory benchmarking before another performance rewrite.
 
 Current golden scenes:
 
@@ -50,4 +52,3 @@ portal_switch_count
 same-floor detour
 tracking replay final/lateral error
 ```
-

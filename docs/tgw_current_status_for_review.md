@@ -30,6 +30,51 @@ map repair or fallback chains
 The current remaining work is system hardening, performance, and robot
 deployment validation, not another global-planner architecture rewrite.
 
+## Pre-HIL Baseline Decision
+
+Current stable code baseline:
+
+```text
+e7ae036 Tighten TGW preprocessing data paths
+```
+
+Current review / documentation head:
+
+```text
+3549c75 Record TGW support store refactor benchmark
+```
+
+Recommended stable marker:
+
+```text
+tgw-experience-mvp-pre-hil
+```
+
+Decision:
+
+```text
+Do not merge the SupportCandidateStore / compact side-index direction.
+Do not continue desktop-only preprocessing micro-optimization as the mainline.
+Move the next proof point to edge benchmark and supervised HIL dry run.
+```
+
+The high-level state is:
+
+```text
+algorithm direction: about 90%
+global path: about 90%
+local tracking core: about 85-88%
+simulation validation: about 80-85%
+edge deployment: unknown until target-device benchmark
+real robot safety chain: not yet verified
+```
+
+The next system-level question is no longer whether the current planner can
+produce cross-floor paths in the golden scenes. It can. The next question is
+whether the current baseline is fast enough on the target edge computer and
+whether robot-side odom, command mux, e-stop, and dry-run status behavior are
+safe enough to start supervised low-speed testing.
+
 ## Current Pipeline
 
 ### 1. Input Contract
