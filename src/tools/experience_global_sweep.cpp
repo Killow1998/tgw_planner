@@ -78,6 +78,7 @@ struct SweepOptions
   bool strict_all{false};
   QueryMode query_mode{QueryMode::LowHigh};
   std::string export_jsonl_path;
+  double roi_distance_override_m{-1.0};
 };
 
 struct HybridConnectivity
@@ -313,7 +314,7 @@ SweepOptions parseArgs(int argc, char ** argv)
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--export-jsonl" || arg == "--mode" ||
-      arg == "--same-z-min" || arg == "--same-z-max")
+      arg == "--same-z-min" || arg == "--same-z-max" || arg == "--roi-distance")
     {
       if (i + 1 >= argc) {
         throw std::runtime_error(arg + " requires a value");
@@ -348,6 +349,11 @@ SweepOptions parseArgs(int argc, char ** argv)
       options.same_z_max = parseDouble(positional[++i].c_str());
       options.has_same_band_bounds = true;
       options.has_same_z_max = true;
+    } else if (arg == "--roi-distance") {
+      options.roi_distance_override_m = parseDouble(positional[++i].c_str());
+      if (options.roi_distance_override_m < 0.0) {
+        throw std::runtime_error("--roi-distance must be >= 0");
+      }
     } else if (arg == "--strict-all") {
       options.strict_all = true;
     } else if (arg == "--dominant-only") {
@@ -361,7 +367,8 @@ SweepOptions parseArgs(int argc, char ** argv)
     throw std::runtime_error(
       "usage: tgw_experience_global_sweep <n3map.pbstream> [low_z_max high_z_min [sample_pairs]] "
       "[--mode low-high|same-band] [--same-z-min M --same-z-max M] "
-      "[--export-jsonl /tmp/tgw_sweep_paths.jsonl] [--strict-all|--dominant-only]");
+      "[--roi-distance M] [--export-jsonl /tmp/tgw_sweep_paths.jsonl] "
+      "[--strict-all|--dominant-only]");
   }
   options.pbstream_path = values[0];
   if (values.size() >= 3U) {
@@ -386,15 +393,19 @@ TrajectoryProjectorOptions projectorOptions()
   return defaultTrajectoryProjectorOptions();
 }
 
-ExperienceSurfaceBuilderOptions builderOptions()
+ExperienceSurfaceBuilderOptions builderOptions(double roi_distance_override_m = -1.0)
 {
-  return defaultExperienceSurfaceBuilderOptions();
+  ExperienceSurfaceBuilderOptions options = defaultExperienceSurfaceBuilderOptions();
+  if (roi_distance_override_m >= 0.0) {
+    options.geometry_roi_distance_to_trajectory_m = roi_distance_override_m;
+  }
+  return options;
 }
 
-ExperienceGeometryIndexOptions geometryIndexOptions()
+ExperienceGeometryIndexOptions geometryIndexOptions(double roi_distance_override_m = -1.0)
 {
   ExperienceGeometryIndexOptions options;
-  const ExperienceSurfaceBuilderOptions builder = builderOptions();
+  const ExperienceSurfaceBuilderOptions builder = builderOptions(roi_distance_override_m);
   options.raw_resolution_m = builder.projector.raw_resolution_m;
   options.nav_resolution_m = builder.resolution_m;
   options.body_clearance_height_m = builder.body_clearance_height_m;
@@ -678,8 +689,12 @@ int main(int argc, char ** argv)
     }
 
     ExperienceGeometryIndex geometry;
+    const ExperienceSurfaceBuilderOptions builder_options =
+      builderOptions(sweep_options.roi_distance_override_m);
+    const ExperienceGeometryIndexOptions geometry_options =
+      geometryIndexOptions(sweep_options.roi_distance_override_m);
     const ExperienceGeometryIndexBuildResult geometry_result =
-      geometry.build(read_result.resource, geometryIndexOptions());
+      geometry.build(read_result.resource, geometry_options);
     if (!geometry_result.success) {
       std::cerr << "geometry_failed error_code=" << geometry_result.error_code <<
         " message=" << geometry_result.message << std::endl;
@@ -688,7 +703,7 @@ int main(int argc, char ** argv)
     const TrajectoryProjectionResult projection =
       TrajectoryProjector(projectorOptions()).project(read_result.resource, geometry);
     const ExperienceBuildResult build =
-      ExperienceSurfaceBuilder(builderOptions()).build(read_result.resource, geometry, projection);
+      ExperienceSurfaceBuilder(builder_options).build(read_result.resource, geometry, projection);
     if (!build.success) {
       std::cerr << "build_failed error_code=" << build.error_code <<
         " message=" << build.message << std::endl;
@@ -893,6 +908,8 @@ int main(int argc, char ** argv)
     std::cout << "global_sweep_success=" <<
       (sweep_success ? "true" : "false") << "\n";
     std::cout << "pbstream=" << sweep_options.pbstream_path << "\n";
+    std::cout << "trajectory_roi_distance_m=" <<
+      geometry_options.trajectory_roi_distance_m << "\n";
     std::cout << "query_mode=" << queryModeName(sweep_options.query_mode) << "\n";
     std::cout << "low_z_max=" << low_z_max << " high_z_min=" << high_z_min <<
       " auto_bands=" << (sweep_options.auto_bands ? "true" : "false") << "\n";

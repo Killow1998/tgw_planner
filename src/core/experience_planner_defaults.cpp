@@ -30,7 +30,7 @@ ExperienceSurfaceBuilderOptions defaultExperienceSurfaceBuilderOptions()
   ExperienceSurfaceBuilderOptions options;
   options.resolution_m = 0.10;
   options.body_clearance_height_m = 0.65;
-  options.geometry_roi_distance_to_trajectory_m = 1.8;
+  options.geometry_roi_distance_to_trajectory_m = 1.2;
   options.projector = defaultTrajectoryProjectorOptions();
   options.expander.expansion_radius_cells = 2;
   options.expander.max_expansion_steps = 12;

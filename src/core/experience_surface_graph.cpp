@@ -153,9 +153,10 @@ void ExperienceSurfaceGraph::build(
       local_validator.reserveCellCenterFootprintCache((end - begin) * 12U);
       for (std::size_t cell_index = begin; cell_index < end; ++cell_index) {
         const GridIndex & cell = traversable_cells[cell_index];
-        if (!isSurfaceGraphNode(snapshot, local_validator, cell)) {
+        if (!local_validator.isCellTraversable(snapshot, cell)) {
           continue;
         }
+        const bool bridge_cell = isBridgeCell(snapshot, cell);
 
         SurfaceNode node;
         node.cell = cell;
@@ -172,7 +173,7 @@ void ExperienceSurfaceGraph::build(
           node.bridge_order = surface_cell.bridge_order;
           node.bridge_endpoint = surface_cell.bridge_endpoint;
           node.confidence = surface_cell.confidence;
-          node.bridge = isBridgeLabel(surface_cell);
+          node.bridge = bridge_cell;
         } else {
           node.z = cellCenter(cell, snapshot.resolution_m).z;
         }
@@ -182,6 +183,7 @@ void ExperienceSurfaceGraph::build(
         }
         node.clearance_m = snapshot.clearance.clearanceDistance(cell);
         node.risk = snapshot.risk.riskCost(cell);
+        bool endpoint_supported = bridge_cell || !validator.options().require_footprint_support;
         for (int dx = -1; dx <= 1; ++dx) {
           for (int dy = -1; dy <= 1; ++dy) {
             if (dx == 0 && dy == 0) {
@@ -194,8 +196,14 @@ void ExperienceSurfaceGraph::build(
             const double yaw = std::atan2(static_cast<double>(dy), static_cast<double>(dx));
             if (local_validator.isCellCenterFootprintSupported(snapshot, cell, yaw)) {
               node.directional_footprint_mask |= static_cast<std::uint8_t>(1U << index);
+              if (index == 0 || index == 2 || index == 4 || index == 6) {
+                endpoint_supported = true;
+              }
             }
           }
+        }
+        if (!endpoint_supported) {
+          continue;
         }
 
         candidate_nodes[cell_index] = node;
@@ -208,6 +216,8 @@ void ExperienceSurfaceGraph::build(
   }
 
   nodes_.reserve(snapshot.surface.traversable_cells.size());
+  cell_to_node_.reserve(snapshot.surface.traversable_cells.size());
+  xy_to_nodes_.reserve(snapshot.surface.traversable_cells.size());
   for (std::size_t cell_index = 0; cell_index < candidate_nodes.size(); ++cell_index) {
     if (keep_node[cell_index] == 0U) {
       continue;
@@ -239,6 +249,7 @@ void ExperienceSurfaceGraph::build(
       for (std::size_t node_index = begin; node_index < end; ++node_index) {
         const SurfaceNode & node = nodes_[node_index];
         std::vector<SurfaceEdge> & edges = adjacency_[node.id.id];
+        edges.reserve(8U);
         for (int dx = -1; dx <= 1; ++dx) {
           for (int dy = -1; dy <= 1; ++dy) {
             if (dx == 0 && dy == 0) {

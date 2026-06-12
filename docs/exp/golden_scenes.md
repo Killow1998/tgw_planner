@@ -171,9 +171,21 @@ Recent local CPU measurements:
 
 | Scene | Preprocess | First query | Peak RSS | Primary hotspot |
 | --- | ---: | ---: | ---: | --- |
-| `scene_20260608` | about 7.9s | 0.27ms | 725 MB | `surface_build` |
-| `scene_20260610` | about 13.8s | 14.5ms | 875 MB | `surface_build`, then `surface_graph_build` |
+| `scene_20260608` | about 4.7s | 0.15ms | 680 MB | `surface_build` |
+| `scene_20260610` | about 6.6s | 0.29ms | 728 MB | `surface_build`, then `surface_graph_build` |
 
 This means the global planner is already fast enough for interactive use after
-map load. Startup preprocessing, especially surface expansion / graph build, is
-the next performance target if the goal is consistent sub-10s readiness.
+map load. Startup preprocessing now meets the current sub-10s readiness proof
+point on the development CPU. Surface expansion / graph build are still the
+next performance targets before compiled cache work.
+
+The default trajectory ROI used by the core, ROS node, benchmark, and sweep
+tools is currently:
+
+```text
+geometry_roi_distance_to_trajectory_m: 1.2
+```
+
+This value should remain evidence-gated: if a new scene loses valid routes,
+run `tgw_experience_benchmark --roi-distance M` and
+`tgw_experience_global_sweep --roi-distance M` before changing the default.

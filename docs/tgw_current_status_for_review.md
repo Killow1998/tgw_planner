@@ -67,6 +67,17 @@ sampled debug geometry
 This replaced repeated full keyframe cloud transforms in the projector,
 surface builder, and debug publishers.
 
+The default trajectory ROI is currently:
+
+```text
+geometry_roi_distance_to_trajectory_m = 1.2
+```
+
+This keeps TGW focused on the robot's experienced navigation corridor instead
+of rebuilding a full general terrain map. The value is evidence-based for the
+current golden scenes: both scenes still pass dominant cross-floor and
+same-floor sweeps at 50 / 50.
+
 Relevant files:
 
 ```text
@@ -330,15 +341,42 @@ Measured on the current development CPU:
 
 | Scene | End-to-end preprocess | First query | Peak RSS | Main hotspots |
 | --- | ---: | ---: | ---: | --- |
-| 20260608 | about 7.9s | 0.27ms | 725 MB | surface build 4.37s, surface graph 1.43s |
-| 20260610 | about 13.8s | 14.5ms | 875 MB | surface build 8.22s, surface graph 2.66s |
+| 20260608 | about 4.7s | 0.15ms | 680 MB | surface build 2.26s, surface graph 0.98s |
+| 20260610 | about 6.6s | 0.29ms | 728 MB | surface build 3.61s, surface graph 1.64s |
 
 Interpretation:
 
 ```text
 global search is already fast;
-startup preprocessing is the remaining performance pressure;
-surface_build and surface_graph_build are the next optimization targets.
+startup preprocessing now meets the current sub-10s proof point on the
+development CPU;
+surface expansion and surface_graph_build remain the next optimization targets
+before any compiled cache work.
+```
+
+Recent 20260610 benchmark breakdown:
+
+```text
+read_pbstream: 0.18s
+geometry_index_build: 0.76s
+trajectory_projection: 0.24s
+surface_build: 3.61s
+surface_graph_build: 1.64s
+backbone_build: 0.16s
+hybrid_graph_build: 0.02s
+first_query: 0.29ms
+```
+
+The acceleration came from:
+
+```text
+1. using the shared ExperienceGeometryIndex as the only keyframe cloud pass;
+2. making reachable expansion avoid repeated neighbor offset generation,
+   temporary vectors, and redundant component lookups;
+3. making surface graph node filtering compute endpoint support and
+   directional footprint support in one pass;
+4. tightening the default trajectory ROI from 1.8m to 1.2m after regression
+   evidence showed both golden scenes still pass.
 ```
 
 ## Current Run Commands
@@ -466,8 +504,8 @@ Ask the next reviewer to focus on:
 3. Is the current stop-only local obstacle layer acceptable for first hardware
    tests, or should a stricter body-volume checker be added before deployment?
 
-4. What is the cleanest way to reduce 20260610 preprocessing below 10s without
-   adding a compiled cache yet?
+4. What is the cleanest next step to reduce surface expansion and graph build
+   further without adding compiled cache yet?
 
 5. Which regression metrics should become hard CI gates, and which should stay
    diagnostic because map fragments and N3 input quality vary?
@@ -475,4 +513,3 @@ Ask the next reviewer to focus on:
 
 Do not ask the reviewer to solve old PCD, raycast, StairFlight, or bridge-only
 topology problems. Those are intentionally out of the current architecture.
-

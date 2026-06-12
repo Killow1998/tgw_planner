@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -24,6 +25,7 @@ using tgw_planner::core::ExperienceGeometryIndex;
 using tgw_planner::core::ExperienceGeometryIndexBuildResult;
 using tgw_planner::core::ExperienceGeometryIndexOptions;
 using tgw_planner::core::ExperienceSurfaceBuilder;
+using tgw_planner::core::ExperienceSurfaceBuilderOptions;
 using tgw_planner::core::ExperienceSurfaceGraph;
 using tgw_planner::core::HybridExperienceGraph;
 using tgw_planner::core::HybridExperiencePlanner;
@@ -59,7 +61,7 @@ double peakRssMb()
   return static_cast<double>(usage.ru_maxrss) / 1024.0;
 }
 
-ExperienceGeometryIndexOptions geometryOptions()
+ExperienceGeometryIndexOptions geometryOptions(double roi_distance_override_m)
 {
   const auto builder = defaultExperienceSurfaceBuilderOptions();
   ExperienceGeometryIndexOptions options;
@@ -67,7 +69,19 @@ ExperienceGeometryIndexOptions geometryOptions()
   options.nav_resolution_m = builder.resolution_m;
   options.body_clearance_height_m = builder.body_clearance_height_m;
   options.trajectory_roi_distance_m = builder.geometry_roi_distance_to_trajectory_m;
+  if (roi_distance_override_m >= 0.0) {
+    options.trajectory_roi_distance_m = roi_distance_override_m;
+  }
   options.max_debug_world_points = 0U;
+  return options;
+}
+
+ExperienceSurfaceBuilderOptions builderOptions(double roi_distance_override_m)
+{
+  ExperienceSurfaceBuilderOptions options = defaultExperienceSurfaceBuilderOptions();
+  if (roi_distance_override_m >= 0.0) {
+    options.geometry_roi_distance_to_trajectory_m = roi_distance_override_m;
+  }
   return options;
 }
 
@@ -118,12 +132,31 @@ void writeJsonString(const char * name, const std::string & value, bool comma = 
 
 int main(int argc, char ** argv)
 {
-  if (argc != 2) {
-    std::cerr << "usage: tgw_experience_benchmark <n3map.pbstream>" << std::endl;
+  if (argc != 2 && argc != 4) {
+    std::cerr << "usage: tgw_experience_benchmark <n3map.pbstream> "
+      "[--roi-distance meters]" << std::endl;
     return 2;
   }
 
   const std::string pbstream_path = argv[1];
+  double roi_distance_override_m = -1.0;
+  if (argc == 4) {
+    const std::string flag = argv[2];
+    if (flag != "--roi-distance") {
+      std::cerr << "unknown argument: " << flag << std::endl;
+      return 2;
+    }
+    char * end = nullptr;
+    roi_distance_override_m = std::strtod(argv[3], &end);
+    if (end == argv[3] || *end != '\0' || roi_distance_override_m < 0.0) {
+      std::cerr << "invalid --roi-distance value: " << argv[3] << std::endl;
+      return 2;
+    }
+  }
+  const ExperienceSurfaceBuilderOptions builder_options =
+    builderOptions(roi_distance_override_m);
+  const ExperienceGeometryIndexOptions geometry_options =
+    geometryOptions(roi_distance_override_m);
   const auto t_read = std::chrono::steady_clock::now();
   N3MapReader reader;
   const N3MapReadResult read = reader.readPbstream(pbstream_path);
@@ -140,7 +173,7 @@ int main(int argc, char ** argv)
   ExperienceGeometryIndex geometry;
   const auto t_geometry = std::chrono::steady_clock::now();
   const ExperienceGeometryIndexBuildResult geometry_result =
-    geometry.build(read.resource, geometryOptions());
+    geometry.build(read.resource, geometry_options);
   const double geometry_ms = elapsedMs(t_geometry);
   if (!geometry_result.success) {
     std::cout << "{";
@@ -158,7 +191,7 @@ int main(int argc, char ** argv)
 
   const auto t_surface = std::chrono::steady_clock::now();
   const ExperienceBuildResult surface =
-    ExperienceSurfaceBuilder(defaultExperienceSurfaceBuilderOptions()).build(
+    ExperienceSurfaceBuilder(builder_options).build(
     read.resource, geometry, projection);
   const double surface_ms = elapsedMs(t_surface);
   if (!surface.success) {
@@ -205,6 +238,7 @@ int main(int argc, char ** argv)
 
   std::cout << "{";
   writeJsonString("status", "ok");
+  writeJsonField("trajectory_roi_distance_m", geometry_options.trajectory_roi_distance_m);
   writeJsonField("read_pbstream_ms", read_ms);
   writeJsonField("geometry_index_build_ms", geometry_ms);
   writeJsonField("geometry_transform_insert_ms", geometry_result.transform_insert_time_ms);

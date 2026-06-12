@@ -22,11 +22,19 @@ struct QueueItem
 {
   GridIndex cell;
   int steps{0};
+  double height_m{0.0};
 };
 
 struct AnchorHeightRange
 {
   std::vector<int> z_values;
+};
+
+struct CellOffset
+{
+  int dx{0};
+  int dy{0};
+  int dz{0};
 };
 
 struct AnchorRowKey
@@ -113,8 +121,10 @@ bool collectHoleFillSupport(
   const ReachableExpanderOptions & options,
   double * average_height_m)
 {
-  std::vector<double> heights;
-  heights.reserve(8U);
+  int count = 0;
+  double min_height = std::numeric_limits<double>::infinity();
+  double max_height = -std::numeric_limits<double>::infinity();
+  double total_height = 0.0;
   for (int dx = -1; dx <= 1; ++dx) {
     for (int dy = -1; dy <= 1; ++dy) {
       if (dx == 0 && dy == 0) {
@@ -127,24 +137,23 @@ bool collectHoleFillSupport(
         if (traversable_cells.find(neighbor) == traversable_cells.end()) {
           continue;
         }
-        heights.push_back(cellHeight(surface_cells, neighbor, options.resolution_m));
+        const double height = cellHeight(surface_cells, neighbor, options.resolution_m);
+        min_height = std::min(min_height, height);
+        max_height = std::max(max_height, height);
+        total_height += height;
+        ++count;
       }
     }
   }
-  if (static_cast<int>(heights.size()) < options.min_hole_fill_neighbors) {
+  if (count < options.min_hole_fill_neighbors) {
     return false;
   }
 
-  const auto [min_it, max_it] = std::minmax_element(heights.begin(), heights.end());
-  if ((*max_it - *min_it) > options.max_hole_fill_height_spread_m) {
+  if ((max_height - min_height) > options.max_hole_fill_height_spread_m) {
     return false;
   }
 
-  double total = 0.0;
-  for (const double height : heights) {
-    total += height;
-  }
-  *average_height_m = total / static_cast<double>(heights.size());
+  *average_height_m = total_height / static_cast<double>(count);
   return true;
 }
 
@@ -318,13 +327,6 @@ ComponentMap buildAnchoredSupportComponents(
   return components;
 }
 
-bool isAnchoredComponent(
-  const ComponentMap & components,
-  const GridIndex & cell)
-{
-  return components.find(cell) != components.end();
-}
-
 int supportComponentForCell(
   const ComponentMap & components,
   const GridIndex & cell,
@@ -347,6 +349,41 @@ int supportComponentForCell(
     }
   }
   return -1;
+}
+
+std::vector<CellOffset> buildExpansionOffsets(int radius, int vertical_tolerance_cells)
+{
+  std::vector<CellOffset> offsets;
+  offsets.reserve(
+    static_cast<std::size_t>(2 * radius + 1) *
+    static_cast<std::size_t>(2 * radius + 1) *
+    static_cast<std::size_t>(2 * vertical_tolerance_cells + 1));
+  for (int dx = -radius; dx <= radius; ++dx) {
+    for (int dy = -radius; dy <= radius; ++dy) {
+      for (int dz = -vertical_tolerance_cells; dz <= vertical_tolerance_cells; ++dz) {
+        if (dx == 0 && dy == 0 && dz == 0) {
+          continue;
+        }
+        offsets.push_back({dx, dy, dz});
+      }
+    }
+  }
+  return offsets;
+}
+
+std::vector<CellOffset> buildHoleCandidateOffsets()
+{
+  std::vector<CellOffset> offsets;
+  offsets.reserve(8U);
+  for (int dx = -1; dx <= 1; ++dx) {
+    for (int dy = -1; dy <= 1; ++dy) {
+      if (dx == 0 && dy == 0) {
+        continue;
+      }
+      offsets.push_back({dx, dy, 0});
+    }
+  }
+  return offsets;
 }
 
 void assignSurfaceLayerIds(
@@ -422,9 +459,13 @@ ReachableExpansionResult ReachableExpander::expand(
     geometry_cells.size(),
     std::max(
       observed_seed_cells.size() + bridge_seed_cells.size(),
-      geometry_cells.size() / 2U));
+      (geometry_cells.size() * 3U) / 4U));
   result.surface_cells.reserve(expected_surface_cells);
+  result.traversable_cells.reserve(expected_surface_cells);
   result.reachability.reserve(expected_surface_cells);
+  const std::vector<CellOffset> expansion_offsets = buildExpansionOffsets(
+    options_.expansion_radius_cells, options_.vertical_tolerance_cells);
+  const std::vector<CellOffset> hole_candidate_offsets = buildHoleCandidateOffsets();
   const auto t_components = std::chrono::steady_clock::now();
   const ComponentMap components = buildAnchoredSupportComponents(
     geometry_cells, observed_seed_cells, options_, &result.support_component_count);
@@ -451,7 +492,7 @@ ReachableExpansionResult ReachableExpander::expand(
     }
     result.traversable_cells.insert(seed);
     result.reachability[seed] = ReachabilityLabel::ProvenReachable;
-    queue.push({seed, 0});
+    queue.push({seed, 0, cell.height_m});
   }
   result.proven_seed_count = result.traversable_cells.size();
   result.seed_initialization_time_ms = elapsedMs(t_seed_init);
@@ -471,71 +512,63 @@ ReachableExpansionResult ReachableExpander::expand(
       continue;
     }
 
-    for (int dx = -options_.expansion_radius_cells; dx <= options_.expansion_radius_cells; ++dx) {
-      for (int dy = -options_.expansion_radius_cells; dy <= options_.expansion_radius_cells; ++dy) {
-        for (int dz = -options_.vertical_tolerance_cells; dz <= options_.vertical_tolerance_cells;
-          ++dz)
-        {
-          if (dx == 0 && dy == 0 && dz == 0) {
-            continue;
-          }
-          const GridIndex neighbor{
-            current.cell.x + dx, current.cell.y + dy, current.cell.z + dz};
-          if (result.traversable_cells.find(neighbor) != result.traversable_cells.end() ||
-            permanently_rejected_expansion_cells.find(neighbor) !=
-            permanently_rejected_expansion_cells.end())
-          {
-            continue;
-          }
-          const auto geometry_it = geometry_cells.find(neighbor);
-          if (geometry_it == geometry_cells.end()) {
-            permanently_rejected_expansion_cells.insert(neighbor);
-            continue;
-          }
-          if (!isAnchoredComponent(components, neighbor)) {
-            ++result.rejected_unanchored_component_cells;
-            permanently_rejected_expansion_cells.insert(neighbor);
-            continue;
-          }
-          if (!isInsideAnchorEnvelope(
-              anchor_columns, neighbor, geometry_it->second.height_m,
-              options_.experience_anchor_height_tolerance_m,
-              options_.experience_anchor_vertical_tolerance_cells))
-          {
-            ++result.anchor_envelope_rejected_count;
-            permanently_rejected_expansion_cells.insert(neighbor);
-            continue;
-          }
-          if (!isBodyClear(
-              geometry_cells, result.surface_cells, geometry_it->second,
-              options_.body_clearance_cells))
-          {
-            ++result.body_obstructed_rejected_count;
-            permanently_rejected_expansion_cells.insert(neighbor);
-            continue;
-          }
-          const double current_height = cellHeight(
-            result.surface_cells, current.cell, options_.resolution_m);
-          if (std::abs(geometry_it->second.height_m - current_height) >
-            options_.max_expansion_step_height_m)
-          {
-            ++result.rejected_expansion_count;
-            continue;
-          }
-          if (!result.traversable_cells.insert(neighbor).second) {
-            continue;
-          }
-          SurfaceCell & cell = result.surface_cells[neighbor];
-          cell = geometry_it->second;
-          cell.label = SurfaceLabel::Expanded;
-          cell.reachability = ReachabilityLabel::InferredReachable;
-          cell.support_component_id = supportComponentForCell(components, neighbor, options_);
-          cell.confidence = std::max(cell.confidence, 0.5);
-          result.reachability[neighbor] = ReachabilityLabel::InferredReachable;
-          ++result.inferred_cell_count;
-          queue.push({neighbor, current.steps + 1});
-        }
+    for (const CellOffset & offset : expansion_offsets) {
+      const GridIndex neighbor{
+        current.cell.x + offset.dx,
+        current.cell.y + offset.dy,
+        current.cell.z + offset.dz};
+      if (result.traversable_cells.find(neighbor) != result.traversable_cells.end() ||
+        permanently_rejected_expansion_cells.find(neighbor) !=
+        permanently_rejected_expansion_cells.end())
+      {
+        continue;
       }
+      const auto geometry_it = geometry_cells.find(neighbor);
+      if (geometry_it == geometry_cells.end()) {
+        permanently_rejected_expansion_cells.insert(neighbor);
+        continue;
+      }
+      const auto component_it = components.find(neighbor);
+      if (component_it == components.end()) {
+        ++result.rejected_unanchored_component_cells;
+        permanently_rejected_expansion_cells.insert(neighbor);
+        continue;
+      }
+      if (!isInsideAnchorEnvelope(
+          anchor_columns, neighbor, geometry_it->second.height_m,
+          options_.experience_anchor_height_tolerance_m,
+          options_.experience_anchor_vertical_tolerance_cells))
+      {
+        ++result.anchor_envelope_rejected_count;
+        permanently_rejected_expansion_cells.insert(neighbor);
+        continue;
+      }
+      if (!isBodyClear(
+          geometry_cells, result.surface_cells, geometry_it->second,
+          options_.body_clearance_cells))
+      {
+        ++result.body_obstructed_rejected_count;
+        permanently_rejected_expansion_cells.insert(neighbor);
+        continue;
+      }
+      if (std::abs(geometry_it->second.height_m - current.height_m) >
+        options_.max_expansion_step_height_m)
+      {
+        ++result.rejected_expansion_count;
+        continue;
+      }
+      if (!result.traversable_cells.insert(neighbor).second) {
+        continue;
+      }
+      SurfaceCell & cell = result.surface_cells[neighbor];
+      cell = geometry_it->second;
+      cell.label = SurfaceLabel::Expanded;
+      cell.reachability = ReachabilityLabel::InferredReachable;
+      cell.support_component_id = component_it->second;
+      cell.confidence = std::max(cell.confidence, 0.5);
+      result.reachability[neighbor] = ReachabilityLabel::InferredReachable;
+      ++result.inferred_cell_count;
+      queue.push({neighbor, current.steps + 1, cell.height_m});
     }
   }
   result.expansion_frontier_time_ms = elapsedMs(t_frontier);
@@ -549,76 +582,75 @@ ReachableExpansionResult ReachableExpander::expand(
       std::unordered_set<GridIndex, GridIndexHash> evaluated_candidates;
       evaluated_candidates.reserve(result.traversable_cells.size() / 2U + 1U);
       for (const GridIndex & cell : result.traversable_cells) {
-        for (int dx = -1; dx <= 1; ++dx) {
-          for (int dy = -1; dy <= 1; ++dy) {
-            if (dx == 0 && dy == 0) {
+        for (const CellOffset & offset : hole_candidate_offsets) {
+          const GridIndex candidate{cell.x + offset.dx, cell.y + offset.dy, cell.z};
+          if (result.traversable_cells.find(candidate) != result.traversable_cells.end() ||
+            !evaluated_candidates.insert(candidate).second)
+          {
+            continue;
+          }
+          const double candidate_height = fallbackHeight(candidate, options_.resolution_m);
+          if (!isInsideAnchorEnvelope(
+              anchor_columns, candidate, candidate_height,
+              options_.experience_anchor_height_tolerance_m,
+              options_.experience_anchor_vertical_tolerance_cells))
+          {
+            ++result.anchor_envelope_rejected_count;
+            continue;
+          }
+          if (hasBodyObstruction(
+              geometry_cells, result.surface_cells, candidate, options_.body_clearance_cells))
+          {
+            ++result.body_obstructed_rejected_count;
+            continue;
+          }
+
+          double average_height = 0.0;
+          if (!collectHoleFillSupport(
+              result.surface_cells, result.traversable_cells, candidate, options_,
+              &average_height))
+          {
+            continue;
+          }
+
+          const auto geometry_it = geometry_cells.find(candidate);
+          int support_component_id = -1;
+          if (geometry_it != geometry_cells.end()) {
+            const auto component_it = components.find(candidate);
+            if (component_it == components.end()) {
+              ++result.rejected_unanchored_component_cells;
               continue;
             }
-            const GridIndex candidate{cell.x + dx, cell.y + dy, cell.z};
-            if (result.traversable_cells.find(candidate) != result.traversable_cells.end() ||
-              !evaluated_candidates.insert(candidate).second)
-            {
-              continue;
-            }
-            const double candidate_height = fallbackHeight(candidate, options_.resolution_m);
-            if (!isInsideAnchorEnvelope(
-                anchor_columns, candidate, candidate_height,
-                options_.experience_anchor_height_tolerance_m,
-                options_.experience_anchor_vertical_tolerance_cells))
-            {
-              ++result.anchor_envelope_rejected_count;
-              continue;
-            }
-            if (hasBodyObstruction(
-                geometry_cells, result.surface_cells, candidate, options_.body_clearance_cells))
+            support_component_id = component_it->second;
+            if (!isBodyClear(
+                geometry_cells, result.surface_cells, geometry_it->second,
+                options_.body_clearance_cells))
             {
               ++result.body_obstructed_rejected_count;
               continue;
             }
-
-            double average_height = 0.0;
-            if (!collectHoleFillSupport(
-                result.surface_cells, result.traversable_cells, candidate, options_,
-                &average_height))
+            if (std::abs(geometry_it->second.height_m - average_height) >
+              options_.max_hole_fill_height_spread_m)
             {
               continue;
             }
-
-            const auto geometry_it = geometry_cells.find(candidate);
-            if (geometry_it != geometry_cells.end()) {
-              if (!isAnchoredComponent(components, candidate)) {
-                ++result.rejected_unanchored_component_cells;
-                continue;
-              }
-              if (!isBodyClear(
-                  geometry_cells, result.surface_cells, geometry_it->second,
-                  options_.body_clearance_cells))
-              {
-                ++result.body_obstructed_rejected_count;
-                continue;
-              }
-              if (std::abs(geometry_it->second.height_m - average_height) >
-                options_.max_hole_fill_height_spread_m)
-              {
-                continue;
-              }
-            }
-
-            SurfaceCell filled;
-            if (geometry_it != geometry_cells.end()) {
-              filled = geometry_it->second;
-            }
-            filled.cell = candidate;
-            filled.support = {candidate.x, candidate.y, candidate.z - 1};
-            filled.label = SurfaceLabel::Expanded;
-            filled.reachability = ReachabilityLabel::LowConfidenceReachable;
-            filled.support_component_id = supportComponentForCell(components, candidate, options_);
-            filled.height_m = geometry_it == geometry_cells.end() ?
-              average_height : geometry_it->second.height_m;
-            filled.confidence = std::max(filled.confidence, 0.35);
-            filled.hole_filled = true;
-            additions.push_back(filled);
           }
+
+          SurfaceCell filled;
+          if (geometry_it != geometry_cells.end()) {
+            filled = geometry_it->second;
+          }
+          filled.cell = candidate;
+          filled.support = {candidate.x, candidate.y, candidate.z - 1};
+          filled.label = SurfaceLabel::Expanded;
+          filled.reachability = ReachabilityLabel::LowConfidenceReachable;
+          filled.support_component_id = support_component_id >= 0 ?
+            support_component_id : supportComponentForCell(components, candidate, options_);
+          filled.height_m = geometry_it == geometry_cells.end() ?
+            average_height : geometry_it->second.height_m;
+          filled.confidence = std::max(filled.confidence, 0.35);
+          filled.hole_filled = true;
+          additions.push_back(filled);
         }
       }
 
