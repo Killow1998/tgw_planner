@@ -406,6 +406,38 @@ This is still well below the older 13.8s baseline, but the default remains
 1.2m because it preserves the current golden routes while reducing startup
 load. New scenes should run ROI sweep before changing this default.
 
+### Compact Workspace Falsifier
+
+An attempted `unordered_map` to compact-array rewrite for
+`ReachableExpander` was benchmarked and rejected rather than merged.
+
+Tested variants:
+
+```text
+1. all-geometry `GridIndex -> state index`
+2. anchored-component-only `GridIndex -> state index`
+3. sparse fixed-size chunk lookup
+4. bounded dense local array over the anchored component bounding box
+```
+
+Result on `scene_20260610`:
+
+```text
+baseline after e7ae036: about 6.15s preprocess, about 732MB RSS
+all / anchored / chunked side-index variants: slower surface_build
+64M-cell dense array variant: about 6.31s preprocess, about 786MB RSS
+```
+
+Interpretation:
+
+```text
+The current sparse grid still pays either hash lookup cost or dense memory
+cost when a compact workspace is bolted onto the side. The clean next target
+is not another side index inside ReachableExpander. It is to move the source
+geometry / support candidates themselves toward packed-key or chunked storage,
+then let expansion consume that native storage directly.
+```
+
 ## Current Run Commands
 
 Build and tests:
