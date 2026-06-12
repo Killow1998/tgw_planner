@@ -125,7 +125,6 @@ void ExperienceSurfaceGraph::build(
 {
   nodes_.clear();
   adjacency_.clear();
-  xy_to_nodes_.clear();
   xy_to_nodes_packed_.clear();
   cell_to_node_.clear();
   bridge_attachments_.clear();
@@ -227,7 +226,6 @@ void ExperienceSurfaceGraph::build(
 
   nodes_.reserve(snapshot.surface.traversable_cells.size());
   cell_to_node_.reserve(snapshot.surface.traversable_cells.size());
-  xy_to_nodes_.reserve(snapshot.surface.traversable_cells.size());
   xy_to_nodes_packed_.reserve(snapshot.surface.traversable_cells.size());
   for (std::size_t cell_index = 0; cell_index < candidate_nodes.size(); ++cell_index) {
     if (keep_node[cell_index] == 0U) {
@@ -238,7 +236,6 @@ void ExperienceSurfaceGraph::build(
     node.id = {static_cast<std::uint32_t>(nodes_.size())};
     nodes_.push_back(node);
     cell_to_node_[node.cell] = node.id;
-    xy_to_nodes_[{node.x, node.y, 0}].push_back(node.id);
     xy_to_nodes_packed_[packXY(node.x, node.y)].push_back(node.id);
   }
 
@@ -352,12 +349,6 @@ const std::vector<SurfaceNode> & ExperienceSurfaceGraph::nodes() const
 const std::vector<std::vector<SurfaceEdge>> & ExperienceSurfaceGraph::adjacency() const
 {
   return adjacency_;
-}
-
-const std::unordered_map<GridIndex, std::vector<SurfaceNodeId>, GridIndexHash> &
-ExperienceSurfaceGraph::xyToNodes() const
-{
-  return xy_to_nodes_;
 }
 
 const std::vector<SurfaceNodeId> * ExperienceSurfaceGraph::nodesAtXY(int x, int y) const

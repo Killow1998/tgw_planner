@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
-#include <queue>
 #include <unordered_map>
 #include <vector>
 
@@ -255,12 +254,13 @@ void labelSupportComponent(
     return;
   }
 
-  std::queue<GridIndex> queue;
+  std::vector<GridIndex> queue;
+  queue.reserve(1024U);
   components[seed] = component_id;
-  queue.push(seed);
-  while (!queue.empty()) {
-    const GridIndex current = queue.front();
-    queue.pop();
+  queue.push_back(seed);
+  std::size_t queue_head = 0U;
+  while (queue_head < queue.size()) {
+    const GridIndex current = queue[queue_head++];
     const double current_height = cellHeight(cells, current, options.resolution_m);
     for (const CellOffset & offset : component_offsets) {
       const GridIndex neighbor{
@@ -280,7 +280,7 @@ void labelSupportComponent(
         continue;
       }
       components[neighbor] = component_id;
-      queue.push(neighbor);
+      queue.push_back(neighbor);
     }
   }
 }
@@ -496,7 +496,8 @@ ReachableExpansionResult ReachableExpander::expand(
 
   const auto t_wave = std::chrono::steady_clock::now();
   const auto t_seed_init = std::chrono::steady_clock::now();
-  std::queue<QueueItem> queue;
+  std::vector<QueueItem> queue;
+  queue.reserve(std::max<std::size_t>(observed_seed_cells.size(), 1024U));
   for (const GridIndex & seed : observed_seed_cells) {
     SurfaceCell & cell = result.surface_cells[seed];
     const auto geometry_it = geometry_cells.find(seed);
@@ -514,7 +515,7 @@ ReachableExpansionResult ReachableExpander::expand(
     }
     result.traversable_cells.insert(seed);
     result.reachability[seed] = ReachabilityLabel::ProvenReachable;
-    queue.push({seed, 0, cell.height_m});
+    queue.push_back({seed, 0, cell.height_m});
   }
   result.proven_seed_count = result.traversable_cells.size();
   result.seed_initialization_time_ms = elapsedMs(t_seed_init);
@@ -527,9 +528,9 @@ ReachableExpansionResult ReachableExpander::expand(
     std::min(geometry_cells.size(), result.traversable_cells.size() * 64U + 1024U));
 
   const auto t_frontier = std::chrono::steady_clock::now();
-  while (!queue.empty()) {
-    const QueueItem current = queue.front();
-    queue.pop();
+  std::size_t queue_head = 0U;
+  while (queue_head < queue.size()) {
+    const QueueItem current = queue[queue_head++];
     if (current.steps >= options_.max_expansion_steps) {
       continue;
     }
@@ -590,7 +591,7 @@ ReachableExpansionResult ReachableExpander::expand(
       cell.confidence = std::max(cell.confidence, 0.5);
       result.reachability[neighbor] = ReachabilityLabel::InferredReachable;
       ++result.inferred_cell_count;
-      queue.push({neighbor, current.steps + 1, cell.height_m});
+      queue.push_back({neighbor, current.steps + 1, cell.height_m});
     }
   }
   result.expansion_frontier_time_ms = elapsedMs(t_frontier);

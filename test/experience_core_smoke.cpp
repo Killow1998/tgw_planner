@@ -450,10 +450,10 @@ void testLayeredSurfaceGraph()
   ExperienceSurfaceGraph graph;
   graph.build(snapshot, validator);
 
-  const auto xy_it = graph.xyToNodes().find({2, 0, 0});
-  require(xy_it != graph.xyToNodes().end(), "surface graph should index nodes by XY");
+  const std::vector<SurfaceNodeId> * xy_nodes = graph.nodesAtXY(2, 0);
+  require(xy_nodes != nullptr, "surface graph should index nodes by XY");
   require(
-    xy_it->second.size() >= 2U,
+    xy_nodes->size() >= 2U,
     "same XY with two valid surface heights should keep separate graph nodes");
 
   const auto plan = SurfaceAstarPlanner(planner_options).plan(snapshot, {1, 0, 0}, {5, 0, 0});

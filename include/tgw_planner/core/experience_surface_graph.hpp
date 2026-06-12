@@ -126,8 +126,6 @@ public:
   double resolution() const;
   const std::vector<SurfaceNode> & nodes() const;
   const std::vector<std::vector<SurfaceEdge>> & adjacency() const;
-  const std::unordered_map<GridIndex, std::vector<SurfaceNodeId>, GridIndexHash> &
-  xyToNodes() const;
   const std::vector<SurfaceNodeId> * nodesAtXY(int x, int y) const;
 
   const SurfaceNode * node(SurfaceNodeId id) const;
@@ -175,7 +173,6 @@ private:
 
   std::vector<SurfaceNode> nodes_;
   std::vector<std::vector<SurfaceEdge>> adjacency_;
-  std::unordered_map<GridIndex, std::vector<SurfaceNodeId>, GridIndexHash> xy_to_nodes_;
   std::unordered_map<std::uint64_t, std::vector<SurfaceNodeId>> xy_to_nodes_packed_;
   std::unordered_map<GridIndex, SurfaceNodeId, GridIndexHash> cell_to_node_;
   std::unordered_map<int, BridgeAttachment> bridge_attachments_;

@@ -171,8 +171,8 @@ Recent local CPU measurements:
 
 | Scene | Preprocess | First query | Peak RSS | Primary hotspot |
 | --- | ---: | ---: | ---: | --- |
-| `scene_20260608` | about 4.24s | 0.12ms | 679 MB | `surface_build` |
-| `scene_20260610` | about 6.20s | 0.40ms | 727 MB | `surface_build`, then `surface_graph_build` |
+| `scene_20260608` | about 4.30s | 0.12ms | 682 MB | `surface_build` |
+| `scene_20260610` | about 6.15s | 0.26ms | 732 MB | `surface_build`, then `surface_graph_build` |
 
 This means the global planner is already fast enough for interactive use after
 map load. Startup preprocessing now meets the current sub-10s readiness proof

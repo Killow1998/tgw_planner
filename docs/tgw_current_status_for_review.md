@@ -341,8 +341,8 @@ Measured on the current development CPU:
 
 | Scene | End-to-end preprocess | First query | Peak RSS | Main hotspots |
 | --- | ---: | ---: | ---: | --- |
-| 20260608 | about 4.24s | 0.12ms | 679 MB | surface build 1.96s, surface graph 0.94s |
-| 20260610 | about 6.20s | 0.40ms | 727 MB | surface build 3.28s, surface graph 1.64s |
+| 20260608 | about 4.30s | 0.12ms | 682 MB | surface build 2.00s, surface graph 0.95s |
+| 20260610 | about 6.15s | 0.26ms | 732 MB | surface build 3.35s, surface graph 1.52s |
 
 Interpretation:
 
@@ -358,16 +358,16 @@ Recent 20260610 benchmark breakdown:
 
 ```text
 read_pbstream: 0.18s
-geometry_index_build: 0.74s
+geometry_index_build: 0.77s
 trajectory_projection: 0.23s
-surface_build: 3.28s
-  expansion frontier/wave: about 1.53s / 1.69s
+surface_build: 3.35s
+  expansion frontier/wave: about 1.58s / 1.74s
   hole fill: about 0.42s
-  clearance: about 0.43s
-surface_graph_build: 1.64s
+  clearance: about 0.44s
+surface_graph_build: 1.52s
 backbone_build: 0.09s
 hybrid_graph_build: 0.02s
-first_query: 0.40ms
+first_query: 0.26ms
 ```
 
 The acceleration came from:
@@ -384,9 +384,11 @@ The acceleration came from:
    cross-component / unsupported-footprint edges before the full edge builder;
 5. making hole filling frontier-based after the first iteration, so only new
    filled cells trigger follow-up candidate checks;
-6. using a packed XY bucket for hot surface graph adjacency and snap / portal
-   lookup paths while preserving the public debug `xyToNodes()` API;
-7. tightening the default trajectory ROI from 1.8m to 1.2m after regression
+6. replacing expansion/component `std::queue` frontiers with compact vectors
+   and head indices to avoid deque overhead in hot BFS loops;
+7. using one packed XY bucket for surface graph adjacency and snap / portal
+   lookup paths, removing the older duplicate GridIndex-keyed XY map;
+8. tightening the default trajectory ROI from 1.8m to 1.2m after regression
    evidence showed both golden scenes still pass.
 ```
 
