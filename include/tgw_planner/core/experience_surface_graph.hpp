@@ -53,10 +53,12 @@ struct SurfaceNode
   double z{0.0};
   ReachabilityLabel reachability{ReachabilityLabel::Unknown};
   double clearance_m{0.0};
+  double clearance_penalty{0.0};
   double risk{0.0};
   double confidence{0.0};
   bool bridge{false};
   bool bridge_endpoint{false};
+  bool observed_free{true};
   std::uint8_t directional_footprint_mask{0U};
 };
 
@@ -126,6 +128,7 @@ public:
   const std::vector<std::vector<SurfaceEdge>> & adjacency() const;
   const std::unordered_map<GridIndex, std::vector<SurfaceNodeId>, GridIndexHash> &
   xyToNodes() const;
+  const std::vector<SurfaceNodeId> * nodesAtXY(int x, int y) const;
 
   const SurfaceNode * node(SurfaceNodeId id) const;
   SurfaceNodeId nodeIdForCell(const GridIndex & cell) const;
@@ -173,6 +176,7 @@ private:
   std::vector<SurfaceNode> nodes_;
   std::vector<std::vector<SurfaceEdge>> adjacency_;
   std::unordered_map<GridIndex, std::vector<SurfaceNodeId>, GridIndexHash> xy_to_nodes_;
+  std::unordered_map<std::uint64_t, std::vector<SurfaceNodeId>> xy_to_nodes_packed_;
   std::unordered_map<GridIndex, SurfaceNodeId, GridIndexHash> cell_to_node_;
   std::unordered_map<int, BridgeAttachment> bridge_attachments_;
   std::vector<int> component_id_;

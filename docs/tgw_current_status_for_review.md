@@ -341,8 +341,8 @@ Measured on the current development CPU:
 
 | Scene | End-to-end preprocess | First query | Peak RSS | Main hotspots |
 | --- | ---: | ---: | ---: | --- |
-| 20260608 | about 4.6s | 0.14ms | 680 MB | surface build 2.15s, surface graph 1.00s |
-| 20260610 | about 6.6s | 0.27ms | 728 MB | surface build 3.68s, surface graph 1.59s |
+| 20260608 | about 4.24s | 0.12ms | 679 MB | surface build 1.96s, surface graph 0.94s |
+| 20260610 | about 6.20s | 0.40ms | 727 MB | surface build 3.28s, surface graph 1.64s |
 
 Interpretation:
 
@@ -358,16 +358,16 @@ Recent 20260610 benchmark breakdown:
 
 ```text
 read_pbstream: 0.18s
-geometry_index_build: 0.76s
-trajectory_projection: 0.24s
-surface_build: 3.68s
-  expansion frontier/wave: about 1.66s / 1.82s
-  hole fill: about 0.63s
-  clearance: about 0.46s
-surface_graph_build: 1.59s
-backbone_build: 0.16s
+geometry_index_build: 0.74s
+trajectory_projection: 0.23s
+surface_build: 3.28s
+  expansion frontier/wave: about 1.53s / 1.69s
+  hole fill: about 0.42s
+  clearance: about 0.43s
+surface_graph_build: 1.64s
+backbone_build: 0.09s
 hybrid_graph_build: 0.02s
-first_query: 0.27ms
+first_query: 0.40ms
 ```
 
 The acceleration came from:
@@ -382,7 +382,11 @@ The acceleration came from:
 4. making surface graph node filtering compute endpoint support and
    directional footprint support in one pass, then reject obvious
    cross-component / unsupported-footprint edges before the full edge builder;
-5. tightening the default trajectory ROI from 1.8m to 1.2m after regression
+5. making hole filling frontier-based after the first iteration, so only new
+   filled cells trigger follow-up candidate checks;
+6. using a packed XY bucket for hot surface graph adjacency and snap / portal
+   lookup paths while preserving the public debug `xyToNodes()` API;
+7. tightening the default trajectory ROI from 1.8m to 1.2m after regression
    evidence showed both golden scenes still pass.
 ```
 
@@ -391,9 +395,9 @@ With the current code and a wider diagnostic ROI:
 
 ```text
 scene_20260610, roi=1.8m:
-  preprocess: about 8.8s
-  surface_build: about 4.87s
-  surface_graph_build: about 2.12s
+  preprocess: about 8.64s
+  surface_build: about 4.69s
+  surface_graph_build: about 2.20s
 ```
 
 This is still well below the older 13.8s baseline, but the default remains

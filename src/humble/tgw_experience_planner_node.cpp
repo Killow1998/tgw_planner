@@ -1359,13 +1359,12 @@ private:
     std::vector<SurfaceNodeId> local_candidates;
     for (int dx = -radius_cells; dx <= radius_cells; ++dx) {
       for (int dy = -radius_cells; dy <= radius_cells; ++dy) {
-        const GridIndex xy_key{center_x + dx, center_y + dy, 0};
-        const auto nodes_it = surface_graph_.xyToNodes().find(xy_key);
-        if (nodes_it == surface_graph_.xyToNodes().end()) {
+        const std::vector<SurfaceNodeId> * nodes =
+          surface_graph_.nodesAtXY(center_x + dx, center_y + dy);
+        if (nodes == nullptr) {
           continue;
         }
-        local_candidates.insert(
-          local_candidates.end(), nodes_it->second.begin(), nodes_it->second.end());
+        local_candidates.insert(local_candidates.end(), nodes->begin(), nodes->end());
       }
     }
 

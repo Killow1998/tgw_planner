@@ -13,6 +13,12 @@ namespace
 {
 constexpr std::uint32_t kInvalidNodeId = std::numeric_limits<std::uint32_t>::max();
 
+std::uint64_t packXY(int x, int y)
+{
+  return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32U) |
+         static_cast<std::uint32_t>(y);
+}
+
 bool isBridgeLabel(const SurfaceCell & cell)
 {
   return cell.label == SurfaceLabel::TrajectoryBridge;
@@ -120,6 +126,7 @@ void ExperienceSurfaceGraph::build(
   nodes_.clear();
   adjacency_.clear();
   xy_to_nodes_.clear();
+  xy_to_nodes_packed_.clear();
   cell_to_node_.clear();
   bridge_attachments_.clear();
   component_id_.clear();
@@ -182,7 +189,10 @@ void ExperienceSurfaceGraph::build(
           node.reachability = reachability_it->second;
         }
         node.clearance_m = snapshot.clearance.clearanceDistance(cell);
+        node.clearance_penalty = snapshot.clearance.clearancePenalty(cell);
         node.risk = snapshot.risk.riskCost(cell);
+        node.observed_free = snapshot.observed_free_cells.empty() ||
+          snapshot.observed_free_cells.find(cell) != snapshot.observed_free_cells.end();
         bool endpoint_supported = bridge_cell || !validator.options().require_footprint_support;
         for (int dx = -1; dx <= 1; ++dx) {
           for (int dy = -1; dy <= 1; ++dy) {
@@ -218,6 +228,7 @@ void ExperienceSurfaceGraph::build(
   nodes_.reserve(snapshot.surface.traversable_cells.size());
   cell_to_node_.reserve(snapshot.surface.traversable_cells.size());
   xy_to_nodes_.reserve(snapshot.surface.traversable_cells.size());
+  xy_to_nodes_packed_.reserve(snapshot.surface.traversable_cells.size());
   for (std::size_t cell_index = 0; cell_index < candidate_nodes.size(); ++cell_index) {
     if (keep_node[cell_index] == 0U) {
       continue;
@@ -228,6 +239,7 @@ void ExperienceSurfaceGraph::build(
     nodes_.push_back(node);
     cell_to_node_[node.cell] = node.id;
     xy_to_nodes_[{node.x, node.y, 0}].push_back(node.id);
+    xy_to_nodes_packed_[packXY(node.x, node.y)].push_back(node.id);
   }
 
   adjacency_.resize(nodes_.size());
@@ -259,9 +271,8 @@ void ExperienceSurfaceGraph::build(
             if (dx == 0 && dy == 0) {
               continue;
             }
-            const GridIndex xy_key{node.x + dx, node.y + dy, 0};
-            const auto candidates_it = xy_to_nodes_.find(xy_key);
-            if (candidates_it == xy_to_nodes_.end()) {
+            const auto candidates_it = xy_to_nodes_packed_.find(packXY(node.x + dx, node.y + dy));
+            if (candidates_it == xy_to_nodes_packed_.end()) {
               continue;
             }
             for (const SurfaceNodeId candidate_id : candidates_it->second) {
@@ -347,6 +358,15 @@ const std::unordered_map<GridIndex, std::vector<SurfaceNodeId>, GridIndexHash> &
 ExperienceSurfaceGraph::xyToNodes() const
 {
   return xy_to_nodes_;
+}
+
+const std::vector<SurfaceNodeId> * ExperienceSurfaceGraph::nodesAtXY(int x, int y) const
+{
+  const auto it = xy_to_nodes_packed_.find(packXY(x, y));
+  if (it == xy_to_nodes_packed_.end()) {
+    return nullptr;
+  }
+  return &it->second;
 }
 
 const SurfaceNode * ExperienceSurfaceGraph::node(SurfaceNodeId id) const
@@ -582,13 +602,9 @@ std::optional<SurfaceEdge> ExperienceSurfaceGraph::makeContinuousSurfaceEdge(
   edge.dz_m = dz;
   edge.slope = slope;
   edge.kind = bridge_edge ? SurfaceEdgeKind::TrajectoryBridge : SurfaceEdgeKind::NormalSurface;
-  const double clearance_penalty =
-    options.w_clearance * snapshot.clearance.clearancePenalty(to.cell);
+  const double clearance_penalty = options.w_clearance * to.clearance_penalty;
   const double risk_penalty = options.w_risk * to.risk;
-  const double unknown_penalty =
-    options.w_unknown *
-    (!snapshot.observed_free_cells.empty() &&
-    snapshot.observed_free_cells.find(to.cell) == snapshot.observed_free_cells.end() ? 1.0 : 0.0);
+  const double unknown_penalty = options.w_unknown * (!to.observed_free ? 1.0 : 0.0);
   const double slope_penalty = options.w_slope * abs_dz;
   const double bridge_penalty =
     options.w_bridge *

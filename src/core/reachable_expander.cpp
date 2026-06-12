@@ -598,12 +598,20 @@ ReachableExpansionResult ReachableExpander::expand(
 
   const auto t_hole_fill = std::chrono::steady_clock::now();
   if (options_.enable_hole_filling) {
+    std::vector<GridIndex> hole_frontier;
+    hole_frontier.reserve(result.traversable_cells.size());
+    for (const GridIndex & cell : result.traversable_cells) {
+      hole_frontier.push_back(cell);
+    }
     for (int iteration = 0; iteration < options_.hole_fill_iterations; ++iteration) {
+      if (hole_frontier.empty()) {
+        break;
+      }
       std::vector<SurfaceCell> additions;
-      additions.reserve(result.traversable_cells.size() / 16U + 1U);
+      additions.reserve(hole_frontier.size() / 4U + 1U);
       std::unordered_set<GridIndex, GridIndexHash> evaluated_candidates;
-      evaluated_candidates.reserve(result.traversable_cells.size() / 2U + 1U);
-      for (const GridIndex & cell : result.traversable_cells) {
+      evaluated_candidates.reserve(hole_frontier.size() * hole_candidate_offsets.size() + 1U);
+      for (const GridIndex & cell : hole_frontier) {
         for (const CellOffset & offset : hole_candidate_offsets) {
           const GridIndex candidate{cell.x + offset.dx, cell.y + offset.dy, cell.z};
           if (result.traversable_cells.find(candidate) != result.traversable_cells.end() ||
@@ -679,15 +687,19 @@ ReachableExpansionResult ReachableExpander::expand(
       if (additions.empty()) {
         break;
       }
+      std::vector<GridIndex> next_frontier;
+      next_frontier.reserve(additions.size());
       for (const SurfaceCell & filled : additions) {
         if (!result.traversable_cells.insert(filled.cell).second) {
           continue;
         }
         result.surface_cells[filled.cell] = filled;
         result.reachability[filled.cell] = filled.reachability;
+        next_frontier.push_back(filled.cell);
         ++result.inferred_cell_count;
         ++result.hole_filled_count;
       }
+      hole_frontier = std::move(next_frontier);
     }
   }
   result.hole_fill_time_ms = elapsedMs(t_hole_fill);

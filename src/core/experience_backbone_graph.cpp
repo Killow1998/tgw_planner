@@ -241,11 +241,12 @@ void ExperienceBackboneGraph::addPortalForNode(
 
   for (int dx = -radius_cells; dx <= radius_cells; ++dx) {
     for (int dy = -radius_cells; dy <= radius_cells; ++dy) {
-      const auto xy_it = surface_graph.xyToNodes().find({center_x + dx, center_y + dy, 0});
-      if (xy_it == surface_graph.xyToNodes().end()) {
+      const std::vector<SurfaceNodeId> * xy_nodes =
+        surface_graph.nodesAtXY(center_x + dx, center_y + dy);
+      if (xy_nodes == nullptr) {
         continue;
       }
-      for (const SurfaceNodeId candidate_id : xy_it->second) {
+      for (const SurfaceNodeId candidate_id : *xy_nodes) {
         const SurfaceNode * candidate = surface_graph.node(candidate_id);
         if (candidate == nullptr) {
           continue;

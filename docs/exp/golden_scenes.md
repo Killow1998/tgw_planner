@@ -171,8 +171,8 @@ Recent local CPU measurements:
 
 | Scene | Preprocess | First query | Peak RSS | Primary hotspot |
 | --- | ---: | ---: | ---: | --- |
-| `scene_20260608` | about 4.6s | 0.14ms | 680 MB | `surface_build` |
-| `scene_20260610` | about 6.6s | 0.27ms | 728 MB | `surface_build`, then `surface_graph_build` |
+| `scene_20260608` | about 4.24s | 0.12ms | 679 MB | `surface_build` |
+| `scene_20260610` | about 6.20s | 0.40ms | 727 MB | `surface_build`, then `surface_graph_build` |
 
 This means the global planner is already fast enough for interactive use after
 map load. Startup preprocessing now meets the current sub-10s readiness proof
@@ -191,6 +191,6 @@ run `tgw_experience_benchmark --roi-distance M` and
 `tgw_experience_global_sweep --roi-distance M` before changing the default.
 
 Diagnostic note: with `scene_20260610` and `--roi-distance 1.8`, current
-preprocess is about `8.8s`. That is slower than the default `1.2m` ROI but
+preprocess is about `8.64s`. That is slower than the default `1.2m` ROI but
 still substantially below the older `13.8s` baseline, so the current speedup is
 not only a smaller-ROI artifact.
