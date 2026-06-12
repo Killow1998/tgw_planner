@@ -1,6 +1,9 @@
 # TGW Hybrid Path Quality Samples
 
-Generated from `/tmp/tgw_sweep_paths.jsonl` using `scripts/plot_tgw_hybrid_path.py`.
+Historical path-quality sample generated with `scripts/plot_tgw_hybrid_path.py`.
+
+For current canonical regression output, use
+`docs/exp/scene_20260608/golden_regression/README.md`.
 
 Legend: gray line = full dense-trajectory backbone, black line = selected path, green points = surface path, blue points = selected backbone path, red points = portal points, green marker = start, red marker = goal.
 

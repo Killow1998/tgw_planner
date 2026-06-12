@@ -2,6 +2,12 @@
 
 This document defines the current core-only regression scenes for TGW.
 
+For the full current architecture and review summary, start with:
+
+```text
+../tgw_current_status_for_review.md
+```
+
 The goal is not to prove hardware readiness. The goal is to keep the global
 path and local tracking contract from regressing while TGW moves toward
 hardware-in-the-loop testing.
@@ -149,3 +155,25 @@ Local obstacle avoidance is still a 2D inflated stop layer after height
 filtering against the nearest local path point. It is useful for conservative
 stop-only replay and early robot tests, but it is not a full 3D body collision
 checker.
+
+## Current Benchmark Snapshot
+
+Run from the workspace root:
+
+```bash
+build/tgw_planner/tgw_experience_benchmark \
+  src/tgw_planner/docs/data/tgw_n3map_nav_filtered.pbstream
+build/tgw_planner/tgw_experience_benchmark \
+  src/tgw_planner/docs/data/tgw_n3map_nav_filtered_20260610.pbstream
+```
+
+Recent local CPU measurements:
+
+| Scene | Preprocess | First query | Peak RSS | Primary hotspot |
+| --- | ---: | ---: | ---: | --- |
+| `scene_20260608` | about 7.9s | 0.27ms | 725 MB | `surface_build` |
+| `scene_20260610` | about 13.8s | 14.5ms | 875 MB | `surface_build`, then `surface_graph_build` |
+
+This means the global planner is already fast enough for interactive use after
+map load. Startup preprocessing, especially surface expansion / graph build, is
+the next performance target if the goal is consistent sub-10s readiness.

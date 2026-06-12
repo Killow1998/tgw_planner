@@ -1,57 +1,37 @@
 # tgw_planner
 
-`tgw_planner` is now a lightweight experience-based planner entrypoint.
+`tgw_planner` is a lightweight N3Mapping pbstream experience planner.
 
-Mainline pipeline:
+Current mainline:
 
 ```text
 n3map.pbstream
   -> strict N3 nav resource adapter
-  -> dense optimized trajectory debug cloud
-  -> nav-resource stats JSON
+  -> shared ExperienceGeometryIndex
+  -> dense trajectory support projection
+  -> experience reachable surface
+  -> layer-safe local surface graph
+  -> dense trajectory backbone graph
+  -> unified hybrid graph
+  -> global path with Surface / Backbone / Portal segment kinds
+  -> local route window + smoother + regulated pure pursuit
 ```
 
-Current scope:
+The current status, evidence, and review questions are in:
 
-- read `n3map.pbstream` through N3Mapping's nav resource reader
-- reject missing, degraded, or keyframe-fallback dense trajectory data
-- reject missing keyframes or empty keyframe clouds
-- publish `/tgw_experience/trajectory_cloud`
-- publish `/tgw_experience/stats_json`
+```text
+docs/tgw_current_status_for_review.md
+```
 
-Support projection, proven reachable seed generation, expansion, and A* planning
-are the next milestones after pbstream intake is verified.
+The golden regression scenes and commands are in:
 
-Out of scope for the main pipeline:
+```text
+docs/exp/golden_scenes.md
+```
 
-- generic SLAM or map repair
-- arbitrary PCD traversability inference
-- realtime raycast global reconstruction
-- dynamic-object global cleanup
-- StairFlight, stair centerline, curved stair, or spiral stair logic
-- complex fallback chains
-- silent fallback to `global_map.pcd`
-
-Strict failure policy:
-
-- TGW prefers explicit failure over uncertain recovery.
-- No silent fallback to `global_map.pcd`.
-- No automatic map repair.
-- No realtime raycast reconstruction in the main pipeline.
-- No terrain semantic planner fallback.
-- No StairFlight fallback.
-- The only allowed small fallback is path post-processing reverting to the raw
-  A* path on the same reachable surface, and only when that raw path passes
-  `PathValidator`.
-
-## Current Stage
-
-The default node is `tgw_experience_planner_node`. It uses the real N3Mapping
-lightweight nav resource reader. The node fails explicitly
-when the pbstream does not satisfy TGW's native dense trajectory and keyframe
-cloud contract. It does not fall back to PCD input.
-
-`global_map.pcd` is debug-only and no longer a mainline input.
+TGW is not a mapping framework. It does not use PCD fallback, realtime raycast
+global reconstruction, StairFlight semantics, or 3D voxel A* in the default
+mainline.
 
 ## Build
 
@@ -81,7 +61,8 @@ ros2 launch tgw_planner experience_planner_real.launch.py \
 
 The real launch defaults to publishing velocity commands on
 `/tgw_experience/cmd_vel`; override `tracking_cmd_vel_topic:=/cmd_vel` only
-when the robot-side command path is ready.
+when the robot-side command path is ready. Real tracking requires explicit
+arming through `/tgw_experience/set_tracking_armed`.
 
 Optional RViz support remains available through:
 
@@ -92,12 +73,18 @@ Optional RViz support remains available through:
 
 The default build keeps only:
 
-- retained planning core (`clearance`, `risk`, `footprint`, `surface A*`, `PathValidator`)
-- experience planner core (`N3MapReader`, `TrajectoryProjector`,
-  `ReachableExpander`, `ExperienceSurfaceBuilder`)
+- retained planning core (`clearance`, `risk`, `footprint`, `PathValidator`)
+- experience planner core (`N3MapReader`, `ExperienceGeometryIndex`,
+  `TrajectoryProjector`, `ReachableExpander`, `ExperienceSurfaceBuilder`,
+  `ExperienceSurfaceGraph`, `ExperienceBackboneGraph`,
+  `HybridExperiencePlanner`)
+- local tracking core (`RouteProgressTracker`, `LocalPathSmoother`,
+  `RegulatedPurePursuitController`, `RollingLocalMap`)
 - `tgw_experience_planner_node`
 - `tgw_clicked_point_router_node`
 - RViz pose tools
+- core regression tools (`tgw_experience_global_sweep`,
+  `tgw_experience_benchmark`)
 - focused core smoke tests
 
 Legacy PCD-only, realtime raycast, and stair-specific paths have been removed

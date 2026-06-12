@@ -14,3 +14,9 @@ CURRENT_NAVIGATION_ISSUES.md
 # Local large reference maps. Keep ignored; upload externally when needed.
 /test_data/pcd/*.pcd
 /docs/data/*
+
+# Generated regression artifacts. Keep curated docs/exp markdown and selected
+# plots trackable, but do not commit bulk JSONL/replay output directories.
+/docs/exp/**/golden_regression/
+/docs/exp/**/tracking_replay/
+/docs/exp/**/regression_50/

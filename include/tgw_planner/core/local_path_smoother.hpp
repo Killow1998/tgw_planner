@@ -53,6 +53,11 @@ private:
   static double distanceToSegment(const Point3 & point, const Point3 & a, const Point3 & b);
   static double distanceToRoute(const Point3 & point, const std::vector<GlobalPathPoint> & route);
   static LocalTarget selectTarget(const RouteProgressState & route, const LocalPathSmootherOptions & options);
+  static LocalPathResult buildRouteFollowingFallback(
+    const RouteProgressState & route,
+    const RollingLocalMap & local_map,
+    const LocalPathSmootherOptions & options,
+    const std::string & replaced_failure);
   static Point3 bezierPoint(
     const Point3 & p0,
     const Point3 & p1,

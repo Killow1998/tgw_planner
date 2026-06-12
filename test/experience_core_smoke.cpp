@@ -295,6 +295,35 @@ void testLocalPathSmootherDoesNotCutAcrossCorner()
   }
 }
 
+void testLocalPathSmootherFallsBackToRouteWhenBezierLeavesCorridor()
+{
+  RouteProgressTrackerOptions tracker_options;
+  tracker_options.local_route_length_m = 3.0;
+  RouteProgressTracker tracker(tracker_options);
+  std::vector<GlobalPathPoint> path{
+    makeGlobalPathPoint(0.0, 0.0, 0.0, PathPointKind::Surface, 0.0),
+    makeGlobalPathPoint(1.0, 0.0, 0.0, PathPointKind::Surface, 0.0),
+    makeGlobalPathPoint(2.0, 0.0, 0.0, PathPointKind::Surface, 0.0),
+    makeGlobalPathPoint(3.0, 0.0, 0.0, PathPointKind::Surface, 0.0)};
+  require(tracker.setPath(path), "route tracker should accept straight fallback path");
+  const RouteProgressState route = tracker.update({0.0, 0.0, 1.57079632679});
+
+  LocalPathSmootherOptions options;
+  options.max_route_deviation_m = 0.10;
+  options.bezier_handle_ratio = 0.80;
+  LocalPathSmoother smoother(options);
+  const LocalPathResult local_path = smoother.build({0.0, 0.0, 1.57079632679}, route, RollingLocalMap());
+
+  require(local_path.success, "local smoother should fall back instead of stopping tracking");
+  require(
+    local_path.message == "ok_route_following_fallback_after_local_path_outside_global_corridor",
+    "local smoother should expose the route-following fallback reason");
+  require(!local_path.path.empty(), "fallback local path should contain route points");
+  for (const Point3 & point : local_path.path) {
+    require(std::abs(point.y) < 1.0e-6, "fallback should stay on the original route corridor");
+  }
+}
+
 void testRegulatedPurePursuitCruisesOnStraightPath()
 {
   RegulatedPurePursuitOptions options;
@@ -1432,6 +1461,7 @@ int main()
   testRouteProgressTrackerRejectsFarProjection();
   testLocalPathSmootherBuildsShortSmoothPath();
   testLocalPathSmootherDoesNotCutAcrossCorner();
+  testLocalPathSmootherFallsBackToRouteWhenBezierLeavesCorridor();
   testRegulatedPurePursuitCruisesOnStraightPath();
   testRegulatedPurePursuitSlowsForCurvature();
   testRegulatedPurePursuitSlowsNearGoal();

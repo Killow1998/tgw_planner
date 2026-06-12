@@ -83,25 +83,24 @@ LocalPathResult LocalPathSmoother::build(
     std::max(options_.max_route_deviation_m, route.lateral_error_m + 0.20);
   for (const Point3 & point : smoothed) {
     if (distanceToRoute(point, route.local_route) > allowed_route_deviation) {
-      result.message = "local_path_outside_global_corridor";
       result.path = std::move(smoothed);
       result.length_m = pathLength(result.path);
       const auto [smoothness, max_turn] = smoothnessMetrics(result.path);
       result.smoothness_rad_per_m = smoothness;
       result.max_turn_angle_rad = max_turn;
-      return result;
+      return buildRouteFollowingFallback(
+        route, local_map, options_, "local_path_outside_global_corridor");
     }
   }
   const auto [smoothness, max_turn] = smoothnessMetrics(smoothed);
   if (smoothness > options_.max_smoothness_rad_per_m ||
     max_turn > options_.max_turn_angle_rad)
   {
-    result.message = "local_path_too_curvy";
     result.path = std::move(smoothed);
     result.length_m = pathLength(result.path);
     result.smoothness_rad_per_m = smoothness;
     result.max_turn_angle_rad = max_turn;
-    return result;
+    return buildRouteFollowingFallback(route, local_map, options_, "local_path_too_curvy");
   }
 
   if (options_.enable_collision_check) {
@@ -116,6 +115,48 @@ LocalPathResult LocalPathSmoother::build(
   result.message = "ok";
   result.path = std::move(smoothed);
   result.length_m = pathLength(result.path);
+  result.smoothness_rad_per_m = smoothness;
+  result.max_turn_angle_rad = max_turn;
+  return result;
+}
+
+LocalPathResult LocalPathSmoother::buildRouteFollowingFallback(
+  const RouteProgressState & route,
+  const RollingLocalMap & local_map,
+  const LocalPathSmootherOptions & options,
+  const std::string & replaced_failure)
+{
+  LocalPathResult result;
+  if (route.local_route.size() < 2U) {
+    result.message = replaced_failure + "_fallback_route_too_short";
+    return result;
+  }
+
+  std::vector<Point3> fallback;
+  fallback.reserve(route.local_route.size());
+  for (const GlobalPathPoint & point : route.local_route) {
+    fallback.push_back(point.position);
+  }
+  fallback = pruneClosePoints(fallback, options.min_point_spacing_m);
+  fallback = resample(fallback, options.max_point_spacing_m);
+  if (fallback.size() < 2U) {
+    result.message = replaced_failure + "_fallback_route_too_short";
+    return result;
+  }
+
+  if (options.enable_collision_check) {
+    const CollisionCheckResult collision = local_map.checkPath(fallback);
+    if (!collision.collision_free) {
+      result.message = replaced_failure + "_fallback_route_collision";
+      return result;
+    }
+  }
+
+  result.success = true;
+  result.message = "ok_route_following_fallback_after_" + replaced_failure;
+  result.path = std::move(fallback);
+  result.length_m = pathLength(result.path);
+  const auto [smoothness, max_turn] = smoothnessMetrics(result.path);
   result.smoothness_rad_per_m = smoothness;
   result.max_turn_angle_rad = max_turn;
   return result;

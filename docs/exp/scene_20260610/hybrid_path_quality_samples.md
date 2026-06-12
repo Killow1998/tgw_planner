@@ -1,8 +1,11 @@
 # TGW Hybrid Path Quality Samples - Scene 20260610
 
-Source pbstream: `docs/data/tgw_n3map_nav_filtered_20260610.pbstream` (ignored by git).
+Source pbstream: `docs/data/tgw_n3map_nav_filtered_20260610.pbstream`.
 
-Sweep command: `tgw_experience_global_sweep docs/data/tgw_n3map_nav_filtered_20260610.pbstream --export-jsonl /tmp/tgw_sweep_paths_20260610_auto.jsonl`.
+Historical sweep command: `tgw_experience_global_sweep docs/data/tgw_n3map_nav_filtered_20260610.pbstream --export-jsonl /tmp/tgw_sweep_paths_20260610_auto.jsonl`.
+
+For current canonical regression output, use
+`docs/exp/scene_20260610/golden_regression/README.md`.
 
 Legend: gray line = full dense-trajectory backbone, black line = selected path, green points = surface path, blue points = selected backbone path, red points = portal points, green marker = start, red marker = goal.
 
